@@ -3,9 +3,10 @@ import { Canvas, useThree } from '@react-three/fiber'
 import { ContactShadows, Environment, OrbitControls } from '@react-three/drei'
 import { Lab001 } from './scenes/Lab001'
 import { Lab002 } from './scenes/Lab002'
+import { Lab003 } from './scenes/Lab003'
 import { detectHtmlInCanvas } from './lib/htmlInCanvas'
 
-type LabId = '001' | '002'
+type LabId = '001' | '002' | '003'
 
 // Clicking a canvas normally moves focus to <body>, which would blur
 // whatever hidden form field a Surface has focused — killing native typing.
@@ -24,15 +25,23 @@ function KeepDomFocus() {
 
 export default function App() {
   const support = useMemo(detectHtmlInCanvas, [])
-  const [lab, setLab] = useState<LabId>('002')
+  const [lab, setLab] = useState<LabId>('003')
 
   return (
     <div className="app">
-      <Canvas shadows camera={{ position: [0, 2.5, 9], fov: 45 }} dpr={[1, 2]}>
+      <Canvas
+        shadows
+        camera={{ position: [0, 2.5, 9], fov: 45 }}
+        dpr={[1, 2]}
+        onCreated={(state) => {
+          // Dev diagnostics: lets automation inspect the scene graph.
+          ;(window as unknown as { __r3f: unknown }).__r3f = state
+        }}
+      >
         <KeepDomFocus />
         <Suspense fallback={null}>
           <Environment preset="city" />
-          {lab === '001' ? <Lab001 /> : <Lab002 />}
+          {lab === '001' ? <Lab001 /> : lab === '002' ? <Lab002 /> : <Lab003 />}
           <ContactShadows position={[0, -0.15, 0]} opacity={0.5} blur={2.2} scale={20} />
           <OrbitControls
             makeDefault
@@ -49,7 +58,7 @@ export default function App() {
         <h1>three-ui / lab {lab}</h1>
         <p className="sub">a component library made of real materials</p>
         <div className="tabs">
-          {(['001', '002'] as const).map((id) => (
+          {(['001', '002', '003'] as const).map((id) => (
             <button
               key={id}
               data-active={lab === id}
@@ -78,7 +87,9 @@ export default function App() {
       <div className="footer">
         {lab === '001'
           ? 'drag to orbit · press the button · click the hopper to drop chips'
-          : 'click the console fields, then just type · toggle stealth · fling the card'}
+          : lab === '002'
+            ? 'click the console fields, then just type · toggle stealth · fling the card'
+            : 'open the mode picker — the dropdown is its own Surface · __threeUI.stats() for paint counts'}
       </div>
     </div>
   )

@@ -54,6 +54,39 @@ export interface DomTextureSource {
   dispose: () => void
 }
 
+export interface DomTextureSourceOptions {
+  /** Name shown in the paint-stats diagnostics registry. */
+  label?: string
+  onError?: (err: unknown) => void
+}
+
+// Diagnostics: every live source registers here so multi-Surface paint
+// behavior is observable (window.__threeUI.stats() in devtools). The open
+// question this answers: parked source canvases all stack at the same fixed
+// position, occluding each other — do the occluded ones keep painting?
+// A source whose `paints` counter stalls while others advance is starved.
+export interface PaintStats {
+  label: string
+  paints: number
+  errors: number
+  lastError?: string
+}
+
+const registry = new Set<PaintStats>()
+let sourceSeq = 0
+
+declare global {
+  interface Window {
+    __threeUI?: { stats: () => PaintStats[] }
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.__threeUI = {
+    stats: () => Array.from(registry, (s) => ({ ...s })),
+  }
+}
+
 /**
  * Mounts `markup` as a live DOM subtree inside a hidden layout-canvas and
  * rasterizes it on every repaint() via drawElementImage.
@@ -62,8 +95,9 @@ export function createDomTextureSource(
   markup: string,
   width: number,
   height: number,
-  onError?: (err: unknown) => void,
+  options: DomTextureSourceOptions = {},
 ): DomTextureSource {
+  const { label = `source-${sourceSeq++}`, onError } = options
   const canvas = document.createElement('canvas') as TrialCanvas
   canvas.width = width
   canvas.height = height
@@ -83,13 +117,19 @@ export function createDomTextureSource(
   const ctx = canvas.getContext('2d') as TrialContext2D
   let ok = false
 
+  const stats: PaintStats = { label, paints: 0, errors: 0 }
+  registry.add(stats)
+
   canvas.onpaint = () => {
     try {
       ctx.clearRect(0, 0, width, height)
       ctx.drawElementImage(element, 0, 0)
       ok = true
+      stats.paints++
     } catch (err) {
       ok = false
+      stats.errors++
+      stats.lastError = String(err)
       onError?.(err)
     }
   }
@@ -103,6 +143,7 @@ export function createDomTextureSource(
     dispose: () => {
       canvas.onpaint = null
       canvas.remove()
+      registry.delete(stats)
     },
   }
 }

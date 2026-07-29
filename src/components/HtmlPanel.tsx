@@ -45,9 +45,12 @@ function useDomTexture(enabled: boolean) {
 
   useEffect(() => {
     if (!enabled) return
-    const source = createDomTextureSource(formMarkup(), PANEL_W, PANEL_H, (err) => {
-      console.warn('[three-ui] drawElementImage failed:', err)
-      setFailed(true)
+    const source = createDomTextureSource(formMarkup(), PANEL_W, PANEL_H, {
+      label: 'lab001-panel',
+      onError: (err) => {
+        console.warn('[three-ui] drawElementImage failed:', err)
+        setFailed(true)
+      },
     })
     sourceRef.current = source
 

@@ -15,6 +15,8 @@ import { forwardPointer, nudgeSelect } from './forwardEvents'
 
 export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children'> {
   html: string
+  /** Name for this surface in paint-stats diagnostics (window.__threeUI). */
+  label?: string
   /** DOM pixel size of the source subtree (drives texture resolution). */
   width?: number
   height?: number
@@ -32,6 +34,7 @@ export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children'> {
 
 export function Surface({
   html,
+  label,
   width = 640,
   height = 480,
   children,
@@ -48,12 +51,22 @@ export function Surface({
   )
   const [texture, setTexture] = useState<THREE.CanvasTexture | null>(null)
   const sourceRef = useRef<DomTextureSource | null>(null)
+  const materialRef = useRef<THREE.MeshStandardMaterial>(null)
   const pressedRef = useRef(false)
 
+  // A Surface mounted after the scene's first frame compiles its material
+  // BEFORE the texture exists; three.js won't recompile the program when
+  // .map is later assigned (program choice is keyed on material.version).
+  // Without this bump the surface stays blank white forever.
   useEffect(() => {
-    const source = createDomTextureSource(html, width, height, (err) =>
-      console.warn('[three-ui] Surface paint failed:', err),
-    )
+    if (texture && materialRef.current) materialRef.current.needsUpdate = true
+  }, [texture])
+
+  useEffect(() => {
+    const source = createDomTextureSource(html, width, height, {
+      label,
+      onError: (err) => console.warn('[three-ui] Surface paint failed:', err),
+    })
     sourceRef.current = source
 
     const tex = new THREE.CanvasTexture(source.canvas)
@@ -137,6 +150,7 @@ export function Surface({
     >
       {children}
       <meshStandardMaterial
+        ref={materialRef}
         map={texture ?? undefined}
         color={texture ? '#ffffff' : '#1e293b'}
         roughness={roughness}
