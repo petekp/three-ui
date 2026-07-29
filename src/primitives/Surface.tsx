@@ -2,16 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree, type ThreeElements, type ThreeEvent } from '@react-three/fiber'
 import { createDomTextureSource, type DomTextureSource } from '../lib/htmlInCanvas'
-import { forwardPointer, nudgeSelect } from './forwardEvents'
+import { clearPointerState, forwardPointer, nudgeSelect } from './forwardEvents'
 
 // <Surface> — the atom of three-ui: a live DOM subtree as the skin of any
 // geometry. Pass geometry as children; the DOM is rasterized into the
 // material's map every frame, and pointer events on the mesh are forwarded
 // back into the DOM via the intersection's UV coordinates.
 //
-// Because the DOM is real: :hover and :focus styles show up in the texture,
-// form state is real state, the accessibility tree is intact, and once a
-// field is focused the browser types into it natively — no key forwarding.
+// Because the DOM is real: :focus styles show up in the texture, form state
+// is real state, the accessibility tree is intact, and once a field is
+// focused the browser types into it natively — no key forwarding. :hover and
+// :active are the exception — real hit-testing never reaches the parked
+// subtree — so forwardEvents mirrors them as data-hover/data-active
+// attributes; author CSS with both selectors.
 
 export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children'> {
   html: string
@@ -146,6 +149,9 @@ export function Surface({
       onPointerOut={() => {
         pressedRef.current = false
         if (controls) controls.enabled = true
+        // The ray left the mesh — un-hover/un-press the mirrored DOM state.
+        const el = sourceRef.current?.element
+        if (el) clearPointerState(el)
       }}
     >
       {children}

@@ -49,10 +49,11 @@ events on the real subtree (`src/primitives/forwardEvents.ts`).
 Verified on a concave cylinder ("helm console"): clicking a field through
 the curved surface focuses the real `<input>`; **native keyboard then types
 into it with zero key-forwarding code** (we only stop the canvas stealing
-focus — see `KeepDomFocus` in `App.tsx`). `:hover`/`:focus` styles, CSS
-validation states, checkboxes and selects all round-trip. The a11y tree
-stays intact — automation sees a real textbox/combobox/checkbox on the
-cylinder.
+focus — see `KeepDomFocus` in `App.tsx`). `:focus` styles, CSS validation
+states, checkboxes and selects all round-trip. The a11y tree stays intact —
+automation sees a real textbox/combobox/checkbox on the cylinder.
+(`:hover`/`:active` are NOT free — see the pointer-state mirror under
+lab 003.)
 
 Gotchas discovered:
 - Native `<select>` dropdowns can't be opened by synthetic clicks — we cycle
@@ -143,6 +144,29 @@ The bridge is robust; stop probing, start productizing. Priority order:
 
 Deformation is a materials/delight layer, not core. XR stays cheap
 insurance: the same ray→UV→DOM pipeline works with controller rays.
+
+### Post-lab polish (interaction contracts)
+
+**Hover/active must be mirrored, not forwarded.** `:hover`/`:active` are
+set by the browser's real hit-testing, which never reaches the parked
+subtree (it sits behind the canvas with `pointer-events:none`) — and
+synthetic events cannot flip pseudo-classes. `forwardEvents` now owns
+them: it mirrors the chains onto `data-hover`/`data-active` attributes
+(target + ancestors, like the real thing), dispatches
+`pointerover`/`pointerout` on hover change, and `Surface` clears all
+mirrored state when the ray leaves the mesh. Author CSS with both
+selectors: `button:hover, button[data-hover] { … }`. Verified: option
+rows highlight on hover, brighten + scale while held, and clear when the
+cursor leaves the surface.
+
+**Drags must compute from the ray, not the intersection.** r3f's pointer
+capture keeps delivering events after the cursor leaves the mesh, but
+`e.point` is frozen at capture time — angle math based on it stops dead
+at the mesh boundary (the knob-drag bug). Compute from `e.ray` against a
+drag plane instead (`setFromNormalAndCoplanarPoint` on the control's
+face); the ray is live at any cursor position. Verified: a 135° arc at
+~200px radius around a 58px dial tracked exactly (θ moved 3π/4 → 3
+detents) with the cursor never over the mesh.
 
 ### Automation notes (hard-won, this lab)
 - After editing `Surface` internals, hard-reload before judging visuals —

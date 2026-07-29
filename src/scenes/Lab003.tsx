@@ -48,12 +48,13 @@ function panelMarkup() {
         .nav { display:flex; flex-direction:column; gap:16px; }
         .nav input[type=text] { padding:13px 14px; border-radius:8px; border:1px solid #2b3b55;
           background:#16233c; color:#f8fafc; font-size:15px; outline:none; width:100%; box-sizing:border-box; }
-        .nav input[type=text]:hover { border-color:#3b82f6; }
+        .nav input[type=text]:hover, .nav input[type=text][data-hover] { border-color:#3b82f6; }
         .nav input[type=text]:focus { border-color:#38bdf8; box-shadow:0 0 0 3px rgba(56,189,248,.25); }
         .nav .trigger { display:flex; justify-content:space-between; align-items:center;
           padding:13px 14px; border-radius:8px; border:1px solid #2b3b55; background:#16233c;
           color:#f8fafc; font-size:15px; cursor:pointer; width:100%; box-sizing:border-box; text-align:left; }
-        .nav .trigger:hover { border-color:#3b82f6; }
+        .nav .trigger:hover, .nav .trigger[data-hover] { border-color:#3b82f6; background:#1a2a48; }
+        .nav .trigger:active, .nav .trigger[data-active] { background:#0f1c33; }
         .nav .trigger[aria-expanded=true] { border-color:#38bdf8; box-shadow:0 0 0 3px rgba(56,189,248,.25); }
         .nav .trigger .chev { color:#7dd3fc; transition:transform .15s; }
         .nav .trigger[aria-expanded=true] .chev { transform:rotate(180deg); }
@@ -87,7 +88,8 @@ function popoverMarkup(current: string) {
         .pop button { display:flex; justify-content:space-between; align-items:center;
           padding:13px 14px; border-radius:8px; border:0; background:transparent; color:#f8fafc;
           font-size:15px; cursor:pointer; text-align:left; }
-        .pop button:hover { background:#1d2b47; }
+        .pop button:hover, .pop button[data-hover] { background:#1d2b47; }
+        .pop button:active, .pop button[data-active] { background:#294066; transform:scale(0.985); }
         .pop button[aria-selected=true] { background:#16233c; }
       </style>
       <div class="pop">${items}</div>
@@ -249,18 +251,35 @@ function ThrustStation(props: { position: [number, number, number]; rotationY: n
     })
   }
 
-  const angleOf = (e: ThreeEvent<PointerEvent>) => {
-    const p = knobRoot.current!.worldToLocal(e.point.clone())
-    return Math.atan2(p.y, p.x)
+  // Angle from the pointer RAY intersected with the knob's face plane — not
+  // from e.point. r3f pointer capture keeps delivering events off-mesh, but
+  // with the intersection frozen at capture time; the ray is always live, so
+  // the drag tracks no matter how far the cursor strays from the dial.
+  const dragPlane = useRef(new THREE.Plane())
+  const planeHit = useRef(new THREE.Vector3())
+
+  const angleFromRay = (e: ThreeEvent<PointerEvent>) => {
+    const root = knobRoot.current
+    if (!root || !e.ray.intersectPlane(dragPlane.current, planeHit.current)) return null
+    const local = root.worldToLocal(planeHit.current)
+    return Math.atan2(local.y, local.x)
   }
 
   const onDown = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation()
+    const root = knobRoot.current
+    if (!root) return
+    dragPlane.current.setFromNormalAndCoplanarPoint(
+      root.getWorldDirection(new THREE.Vector3()),
+      root.getWorldPosition(new THREE.Vector3()),
+    )
+    const angle = angleFromRay(e)
+    if (angle === null) return
     ;(e.target as Element).setPointerCapture(e.pointerId)
     if (controls) controls.enabled = false
     const d = drag.current
     d.active = true
-    d.offset = wrapAngle(d.theta - angleOf(e))
+    d.offset = wrapAngle(d.theta - angle)
     d.vel = 0
     d.lastT = e.timeStamp
   }
@@ -268,8 +287,10 @@ function ThrustStation(props: { position: [number, number, number]; rotationY: n
   const onMove = (e: ThreeEvent<PointerEvent>) => {
     const d = drag.current
     if (!d.active) return
+    const angle = angleFromRay(e)
+    if (angle === null) return
     const dt = Math.max((e.timeStamp - d.lastT) / 1000, 1e-4)
-    const delta = wrapAngle(angleOf(e) + d.offset - d.theta)
+    const delta = wrapAngle(angle + d.offset - d.theta)
     d.vel = THREE.MathUtils.lerp(d.vel, delta / dt, 0.35)
     d.theta += delta
     d.lastT = e.timeStamp
@@ -334,10 +355,17 @@ function ThrustStation(props: { position: [number, number, number]; rotationY: n
         <planeGeometry args={[READOUT_W3, READOUT_H3]} />
       </Surface>
 
-      <group ref={knobRoot} position={[0, -1.05, 0.25]}>
+      <group
+        ref={knobRoot}
+        position={[0, -1.05, 0.25]}
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={endDrag}
+        onLostPointerCapture={endDrag}
+      >
         {ticks}
         <group ref={rotor}>
-          <mesh rotation={[Math.PI / 2, 0, 0]} castShadow onPointerDown={onDown} onPointerMove={onMove} onPointerUp={endDrag} onLostPointerCapture={endDrag}>
+          <mesh rotation={[Math.PI / 2, 0, 0]} castShadow>
             <cylinderGeometry args={[0.42, 0.46, 0.22, 48]} />
             <meshStandardMaterial color="#1e293b" roughness={0.35} metalness={0.7} />
           </mesh>
@@ -386,7 +414,8 @@ function flagMarkup() {
         .wind .row { display:flex; gap:10px; }
         .wind button { flex:1; padding:13px 0; border-radius:8px; border:1px solid #155e56;
           background:#0b2f2a; color:#a7f3d0; font-size:15px; cursor:pointer; }
-        .wind button:hover { border-color:#2dd4bf; }
+        .wind button:hover, .wind button[data-hover] { border-color:#2dd4bf; background:#0e3a34; }
+        .wind button:active, .wind button[data-active] { background:#0a2622; }
         .wind button[aria-pressed=true] { background:#134e4a; border-color:#2dd4bf; color:#ccfbf1;
           box-shadow:0 0 0 3px rgba(45,212,191,.2); }
         .wind input { padding:13px 14px; border-radius:8px; border:1px solid #155e56;
