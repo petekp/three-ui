@@ -79,9 +79,86 @@ Chrome throttles rAF to 1fps for occluded windows (e.g. display asleep) —
 looks exactly like a code hang. Launch test browsers with
 `--disable-backgrounding-occluded-windows --disable-renderer-backgrounding`.
 
-### Open questions (lab 003+)
-- Popover surfaces: replace native select dropdowns with Surface-rendered popovers.
+## lab 003 — feasibility edges
+
+Four probes to decide where the library should focus. All four edges **held**.
+
+### A. multi-Surface coexistence — HOLDS
+The feared failure mode never happened: every parked source canvas
+(stacked at the same `left:0;top:0;z-index:-1` spot, fully occluding each
+other) keeps receiving paint records. Three live Surfaces painted in
+lockstep at the display rate (verified via per-source paint counters —
+`window.__threeUI.stats()` in devtools), zero errors, clean disposal.
+DOM-over-DOM occlusion does not starve `drawElementImage`; only
+off-screen parking does (lab 001 finding).
+
+### B. popover as a second Surface — HOLDS (retires `nudgeSelect`)
+A custom select trigger on one Surface spawns a listbox rendered as its
+own Surface floating in front of the panel. Option click commits to a
+hidden input on the first Surface, click-away dismisses, focus hand-off
+works, native typing continues to work with several Surfaces mounted.
+The whole floating-UI layer (menus, tooltips, dialogs) is therefore
+buildable — in real 3D space, with real shadows.
+
+Gotcha discovered: a Surface mounted *after* the scene's first frame
+compiles its material before the texture exists, and three.js keys
+program compilation on `material.version` — assigning `.map` later
+leaves the shader mapless (blank white mesh). `Surface` now bumps
+`material.needsUpdate` when the texture arrives.
+
+### C. live DOM on deforming geometry — HOLDS (CPU displacement)
+A flag-waving plane (per-frame CPU vertex displacement, pinned at the
+pole) with working buttons and a text input on it. No forwarding changes
+needed: the raycaster hits the displaced triangles and UVs ride the
+vertices, so UV→DOM mapping stays exact mid-wave. Wind strength is set
+by buttons ON the deforming surface; text was typed into the input while
+it waved at gale.
+
+Edges recorded, not crossed: GPU/shader displacement breaks forwarding
+(the raycaster only sees CPU-side positions — would need a raycast
+proxy); a fast-oscillating target can dodge a single click (press-time
+UV locking is future work).
+
+### D. physics-as-input knob — HOLDS
+A 1-DOF rotary control: dragging couples your hand to θ while gesture
+velocity is tracked; release hands that velocity to a detent torque
+field `-K·sin(N·θ) - c·θ̇` (semi-implicit Euler, substepped). Flicks
+ratchet through detents; settle is machine-exact (off-detent ~1e-16).
+The settled index writes straight into a *different* Surface's DOM —
+physics is the input method, the DOM is the state store.
+
+### Direction decision
+The bridge is robust; stop probing, start productizing. Priority order:
+
+1. **Floating-layer system** — generalize the popover: UV→world
+   anchoring on arbitrary geometry (lab 003 used plane math), a
+   `<SurfaceLayer>` that any Surface can spawn. Every real component
+   (select, menu, tooltip, dialog) needs this.
+2. **Physical control kit** — generalize the knob's 1-DOF integrator +
+   detent field into sliders, switches (over-center springs), dials.
+3. **Focus/keyboard completeness** — tab order across Surfaces,
+   arrow-key listbox nav, ESC dismissal.
+4. **Scale & perf** — 12+ Surfaces, texture memory budget,
+   `texElementImage2D` direct-to-texture upload.
+
+Deformation is a materials/delight layer, not core. XR stays cheap
+insurance: the same ray→UV→DOM pipeline works with controller rays.
+
+### Automation notes (hard-won, this lab)
+- After editing `Surface` internals, hard-reload before judging visuals —
+  r3f HMR can leave materials in a broken state that looks like a bug.
+- `agent-browser`'s daemon relaunches Chrome *without* your `--args` if
+  the window gets closed — origin-trial features silently vanish; check
+  the HUD feature chips before trusting any result.
+- When a human shares the browser with your automation, never click from
+  a stale screenshot: project the target's world position through the
+  camera at action time (`window.__r3f` scene → `getWorldPosition` →
+  `project`) and aim there.
+
+### Open questions (lab 004+)
+- UV→world inversion for anchors on curved/deformed geometry (sample the
+  geometry's UV mapping instead of closed-form plane math).
 - `texElementImage2D` + `THREE.ExternalTexture`: skip the 2D-canvas middleman.
-- DOM on deforming geometry: cloth, paper folds, sphere sections.
-- Multiple Surfaces at once (hidden source canvases must not occlude each other's paint).
-- Focus light that *aims* at the focused field (UV → cylinder point inversion).
+- Press-time UV locking so moving surfaces can't dodge a click.
+- Focus light that *aims* at the focused field (UV → surface point inversion).
+- How many live Surfaces before paint cost bites — 12? 40?
