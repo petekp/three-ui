@@ -33,6 +33,11 @@ The origin trial works, but the real contract is stricter than the blog post sug
 4. **Visibility requirement**: the source canvas must be in-document **and on-screen** to receive paint records. `left: -10000px` parking silently produces a blank canvas. Parking it at `z-index: -1` behind the app works.
 5. **No readback restriction** (same-origin): after paint, `getImageData` returns real pixels, so a plain `THREE.CanvasTexture` over a 2D canvas works — no need to touch `texElementImage2D` for the naive path.
 6. **Full API surface** on `HTMLCanvasElement`: `layoutSubtree`, `onpaint`, `requestPaint()`, `captureElementImage()`, `getElementTransform()`; plus `CanvasRenderingContext2D.drawElementImage` and `WebGL2RenderingContext.texElementImage2D`.
+7. **(lab 005 addendum)** `onpaint` also fires *without* `requestPaint`
+   whenever the subtree's paint record changes — which makes a fully
+   passive upload-on-paint pipeline possible, and compositor-animated
+   properties (opacity/transform keyframes) *never* rasterize. See the
+   scale-probe section.
 
 Verified live: a ticking clock inside the DOM subtree shows up in the 3D texture in real time.
 
@@ -254,13 +259,128 @@ its own coordinates.
 
 ### Open questions (lab 005+)
 - `texElementImage2D` + `THREE.ExternalTexture`: skip the 2D-canvas middleman.
-- Physical control kit: generalize the lab-003 knob integrator + detent
-  fields into sliders, switches (over-center springs), dials.
+- ~~Physical control kit~~ — done, lab 005.
 - Press-time UV locking so moving surfaces can't dodge a click.
 - Focus/keyboard completeness: tab order across Surfaces + layers,
   arrow-key listbox nav, ESC dismissal, `onPointerMissed` dismissal.
 - Focus light that *aims* at the focused field — `UVAnchor` now makes
   this trivial (anchor the spotlight target to the focused element).
-- How many live Surfaces before paint cost bites — 12? 40?
+- ~~How many live Surfaces before paint cost bites~~ — answered by the
+  scale probe below: idle Surfaces are free (upload-on-paint); ~64–96
+  *simultaneously animating* sources at 120Hz.
 - UV-space acceleration structure if anchor counts or mesh sizes grow
   (linear triangle scan is fine at lab scale).
+
+## lab 005 — the physical control kit
+
+Direction item 2. Thesis: every physical control is the **same 1-DOF
+integrator under a different composed force field**. Proven — one
+integrator, three feels, nine unit tests, browser-verified.
+
+### `physics1D` (`src/lib/physics1D.ts`)
+
+A `Body1D {q, v}` stepped by semi-implicit Euler (velocity first, then
+position with the *new* velocity — symplectic, so oscillators don't
+gain energy) at 2 substeps. A control's feel is a `Field(q, v) → accel`
+composed from primitives:
+
+| field | shape | used by |
+|---|---|---|
+| `detentField(n, k)` | `−k·sin(n·q)` — n wells around the circle | Dial |
+| `overCenterField(k, span)` | double-well: stable ±span, unstable 0 | Toggle |
+| `stopsField(stops, k)` | spring to *nearest* stop | Slider |
+| `endStops(min, max, k)` | one-sided stiff springs at travel limits | Toggle, Slider |
+| `damping(c)` | `−c·v` | all |
+
+`flipImpulse(field, span)` bisects the minimum impulse that commits a
+toggle across center — against the *actual integrator*, at mount — so
+tap strength adapts to any tuning automatically.
+
+Tests worth reading (`physics1D.test.ts`): settle-to-machine-epsilon
+uses decay-envelope analysis (e^(−ζωt)) to size the window — 8s for
+detent tuning, or 1e-9 assertions flake; the over-center threshold is
+bisected to 30 iterations and both sides verified to settle on exact
+opposite poles; flick traces are bit-for-bit deterministic.
+
+### `use1DOF` (`src/primitives/controls/use1DOF.ts`)
+
+The shared drag→physics bridge: pointer ray ∩ control plane (from the
+handler object's world orientation at pointer-down), mapped to q by a
+per-control `localToQ`, velocity estimated by lerp-smoothed finite
+difference, handed to the field on release. Settle = |v| < 1e-3 for 15
+frames. Two contracts learned the hard way:
+
+- **Handlers must live on a static object.** Measuring the hand in the
+  moving cap's own frame is a feedback loop (the cap tracks at half
+  speed). `<Slider>` binds on the track and gates drag-*start* to the
+  cap (`startOnCapOnly`).
+- Use `e.ray`, never `e.point` — the intersection point is on the
+  moved geometry; the ray is the ground truth.
+
+### Controls
+
+- `<Dial>` — detents + damping; flicks ratchet through wells with real
+  momentum; `onDetent` fires live mid-ratchet.
+- `<Toggle>` — over-center + end stops; a tap applies `flipImpulse` and
+  *the physics decides* whether it commits or falls home; `onFlip`
+  reports settled state only.
+- `<Slider>` — stops + end stops; throws ride momentum into a stop;
+  `onChange` live, `onStop(index, value)` on settle.
+
+### Verified (Chrome 150, agent-browser)
+
+Lab 005 wall: dial + 3 toggles + slider writing into a reactor-console
+Surface. Dial dragged 4→7 (quarter arc + release momentum ratcheted 3
+wells); toggle taps flipped both directions with lamps following
+settled state only; slider drag settled exactly 0.75; a −70px throw
+from 0.75 carried momentum past 0.5 and settled exactly 0.25. DOM
+readout matched `window.__lab005` hooks at every step.
+
+## scale probe — the ceiling, found and then moved
+
+`?probe=N&live=1&anim=K&w=&h=` mounts N card Surfaces with a
+`window.__probe.run()` harness (rAF frame-time percentiles +
+per-source paint rates). M-series MacBook, 120Hz, dpr 2, Chrome 150.
+
+**The ceiling is per-source fixed cost, not pixels.** With the original
+always-repaint pipeline: N=64 locked at 120fps at *both* 320×200 and
+640×400 (4× the texels — no difference); N=96 → 95.6fps; N=128 →
+72.9fps. Occluded parked canvases never starve (per-source paint rates
+stay uniform); the frame just stretches.
+
+**Static cost the same as animating** (73fps at 128 idle Surfaces) —
+because `Surface` repainted + re-uploaded unconditionally. That led to
+three raw-canvas experiments that rewrote the paint contract:
+
+1. **The compositor fires `onpaint` by itself** whenever the subtree's
+   paint record changes: DOM mutations, transitions (any duration),
+   paint-property CSS animations (measured 119 self-paints/s),
+   caret blink. `requestPaint()` is only needed for the first paint.
+2. **The deferred draw resolves by its own paint pass** — mutate
+   red→blue with zero `requestPaint` and the 2D buffer holds blue
+   after exactly one self-paint.
+3. **Compositor-side properties are invisible.** Animated opacity
+   rasterizes at alpha 255 through a full keyframe cycle even when
+   repainting every frame — a `drawElementImage` platform limit, not a
+   policy choice. Animate paint properties (color/background/
+   box-shadow) instead; mesh transforms already cover motion.
+
+So `<Surface paint="auto">` (default) is now **fully passive**: upload
+iff `paintCount` advanced (+1 trailing frame), zero requested paints,
+no observers. `paint="always"` remains for content that changes
+without paint records (embedded media). A MutationObserver draft cost
+~17% at 128 all-animating sources; the passive design *beats the
+original* there instead (requested paints used to stack on top of
+content self-paints — two paints per source per frame).
+
+| config (320×200) | always-repaint | passive |
+|---|---|---|
+| N=128 static | 73.2 fps | **120.0 fps, 0 paints/s** |
+| N=128, 32 animating | — | **120.0 fps** |
+| N=96 all animating | 95.6 | **100.6** |
+| N=128 all animating | 72.9 | **76.9** |
+
+Real-scene shape: a lab-005 toggle flip is **2 paints total** (mount +
+the coalesced flip mutations), then quiescent. The practical answer to
+"how many Surfaces?": *idle ones are free; budget ~64–96 simultaneously
+animating ones at 120Hz.*
