@@ -4,6 +4,7 @@ import {
   damping,
   detentField,
   endStops,
+  flipImpulse,
   overCenterField,
   step,
   stopsField,
@@ -97,6 +98,18 @@ describe('overCenterField (the toggle)', () => {
     // settle EXACTLY on a pole — never in between.
     expect(Math.abs(settleFrom(threshold - 0.01) - -SPAN)).toBeLessThan(1e-6)
     expect(Math.abs(settleFrom(threshold + 0.01) - SPAN)).toBeLessThan(1e-6)
+  })
+
+  it('flipImpulse finds a tap strength that reliably flips, for any tuning', () => {
+    for (const [k, s, c] of [[120, 0.35, 8], [60, 0.25, 5], [300, 0.5, 12]]) {
+      const f = composeFields(overCenterField(k, s), damping(c))
+      const imp = flipImpulse(f, s)
+      expect(settleFromWith(f, s, imp) > 0).toBe(true) // flips
+      expect(settleFromWith(f, s, imp / 1.5 - 0.05) < 0).toBe(true) // threshold is real
+    }
+    function settleFromWith(f: Field, s: number, impulse: number) {
+      return simulate({ q: -s, v: impulse }, f, 4).q
+    }
   })
 })
 

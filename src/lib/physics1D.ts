@@ -89,3 +89,26 @@ export function step(body: Body1D, field: Field, dt: number, substeps = 2): void
     body.q += body.v * h
   }
 }
+
+/**
+ * The minimum impulse that flips a bistable field from the pole at -span to
+ * the pole at +span, found by bisection against the actual integrator. A
+ * toggle uses this at mount so its tap strength adapts to ANY tuning instead
+ * of hardcoding a magic number. ~30 short simulations; sub-millisecond.
+ */
+export function flipImpulse(field: Field, span: number, margin = 1.5): number {
+  const settlesPositive = (v0: number) => {
+    const body: Body1D = { q: -span, v: v0 }
+    for (let i = 0; i < 4 * 120; i++) step(body, field, 1 / 120, 2)
+    return body.q > 0
+  }
+  let lo = 0
+  let hi = 1
+  while (!settlesPositive(hi) && hi < 1024) hi *= 2 // find an upper bound
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2
+    if (settlesPositive(mid)) hi = mid
+    else lo = mid
+  }
+  return hi * margin
+}
