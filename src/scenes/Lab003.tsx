@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Text } from '@react-three/drei'
-import { useFrame } from '@react-three/fiber'
+import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Surface } from '../primitives/Surface'
 
 // Lab 003 — feasibility edges of the primitive set:
@@ -15,6 +15,10 @@ import { Surface } from '../primitives/Surface'
 //                      vertices, so input forwarding should survive the wave.
 //                      (GPU/shader displacement would NOT — the raycaster
 //                      only sees CPU-side positions.)
+//   D. physics knob    a 1-DOF rotary control: your gesture velocity feeds a
+//                      detent torque field (-K·sin(N·θ) - c·θ̇). The settled
+//                      detent index writes straight into the readout DOM —
+//                      physics is the input method, the DOM is the state.
 //
 // State philosophy: React state only decides what exists in the scene
 // (popover open/closed). Interaction state lives in the DOM itself — the
@@ -202,19 +206,152 @@ export function Lab003() {
       {/* Station B — live DOM on deforming geometry */}
       <WindFlag position={[1.7, 2.35, -1.3]} />
 
-      {/* Station C readout — a coexisting Surface (knob will write here) */}
-      <group position={[2.4, 1.4, 0.6]} rotation={[0, -0.35, 0]}>
-        <Surface
-          label="lab003-readout"
-          html={readoutMarkup()}
-          width={READOUT_W}
-          height={READOUT_H}
-          castShadow
-        >
-          <planeGeometry args={[READOUT_W3, READOUT_H3]} />
-        </Surface>
-      </group>
+      {/* Station C — physics-as-input knob writing into a readout Surface */}
+      <ThrustStation position={[2.4, 1.75, 0.6]} rotationY={-0.35} />
     </>
+  )
+}
+
+const DETENTS = 8
+const STEP = (Math.PI * 2) / DETENTS
+const DETENT_STIFFNESS = 50
+const DETENT_DAMPING = 6
+
+const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a))
+const detentIndex = (theta: number) =>
+  ((Math.round(-theta / STEP) % DETENTS) + DETENTS) % DETENTS
+
+// A rotary control whose feel is an integrated force field, not an easing
+// curve: drag couples your hand to θ kinematically while velocity is
+// tracked; release hands that velocity to -K·sin(N·θ) - c·θ̇, so the knob
+// ratchets through detents and clicks home. The settled index is written
+// straight into the readout Surface's DOM.
+function ThrustStation(props: { position: [number, number, number]; rotationY: number }) {
+  const controls = useThree((s) => s.controls as { enabled?: boolean } | null)
+  const readoutEl = useRef<HTMLElement | null>(null)
+  const knobRoot = useRef<THREE.Group>(null)
+  const rotor = useRef<THREE.Group>(null)
+  const drag = useRef({
+    active: false,
+    offset: 0,
+    vel: 0,
+    lastT: 0,
+    theta: -4 * STEP, // start on detent 4, matching the readout markup
+  })
+
+  const applyDetent = (idx: number) => {
+    const el = readoutEl.current
+    const span = el?.querySelector('[data-detent]')
+    if (!el || !span || span.textContent === String(idx)) return
+    span.textContent = String(idx)
+    el.querySelectorAll('[data-cell]').forEach((c, i) => {
+      ;(c as HTMLElement).style.background = i < idx ? '#38bdf8' : '#1d2b47'
+    })
+  }
+
+  const angleOf = (e: ThreeEvent<PointerEvent>) => {
+    const p = knobRoot.current!.worldToLocal(e.point.clone())
+    return Math.atan2(p.y, p.x)
+  }
+
+  const onDown = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation()
+    ;(e.target as Element).setPointerCapture(e.pointerId)
+    if (controls) controls.enabled = false
+    const d = drag.current
+    d.active = true
+    d.offset = wrapAngle(d.theta - angleOf(e))
+    d.vel = 0
+    d.lastT = e.timeStamp
+  }
+
+  const onMove = (e: ThreeEvent<PointerEvent>) => {
+    const d = drag.current
+    if (!d.active) return
+    const dt = Math.max((e.timeStamp - d.lastT) / 1000, 1e-4)
+    const delta = wrapAngle(angleOf(e) + d.offset - d.theta)
+    d.vel = THREE.MathUtils.lerp(d.vel, delta / dt, 0.35)
+    d.theta += delta
+    d.lastT = e.timeStamp
+  }
+
+  const endDrag = (e: ThreeEvent<PointerEvent>) => {
+    const d = drag.current
+    if (!d.active) return
+    d.active = false
+    ;(e.target as Element).releasePointerCapture?.(e.pointerId)
+    if (controls) controls.enabled = true
+  }
+
+  useFrame((_, delta) => {
+    const d = drag.current
+    if (!d.active) {
+      // Semi-implicit Euler, substepped: near a well the effective stiffness
+      // is K·N ≈ 400 (ω ≈ 20 rad/s), too stiff for a raw 30fps step.
+      const dt = Math.min(delta, 1 / 30)
+      const h = dt / 2
+      for (let s = 0; s < 2; s++) {
+        d.vel += (-DETENT_STIFFNESS * Math.sin(DETENTS * d.theta) - DETENT_DAMPING * d.vel) * h
+        d.theta += d.vel * h
+      }
+    }
+    if (rotor.current) rotor.current.rotation.z = d.theta
+    applyDetent(detentIndex(d.theta))
+    // Dev hook so automation can assert on settle behavior.
+    ;(window as unknown as { __lab003Knob: object }).__lab003Knob = {
+      theta: d.theta,
+      vel: d.vel,
+      detent: detentIndex(d.theta),
+      offDetent: Math.abs(wrapAngle(d.theta + detentIndex(d.theta) * STEP)),
+    }
+  })
+
+  const ticks = Array.from({ length: DETENTS }, (_, k) => {
+    const a = Math.PI / 2 - k * STEP
+    return (
+      <mesh key={k} position={[Math.cos(a) * 0.58, Math.sin(a) * 0.58, 0]} rotation={[0, 0, a]}>
+        <boxGeometry args={[0.09, 0.028, 0.02]} />
+        <meshStandardMaterial color={k === 4 ? '#38bdf8' : '#334155'} />
+      </mesh>
+    )
+  })
+
+  return (
+    <group position={props.position} rotation={[0, props.rotationY, 0]}>
+      <Surface
+        label="lab003-readout"
+        html={readoutMarkup()}
+        width={READOUT_W}
+        height={READOUT_H}
+        onSource={(el) => {
+          readoutEl.current = el
+          return () => {
+            readoutEl.current = null
+          }
+        }}
+        castShadow
+      >
+        <planeGeometry args={[READOUT_W3, READOUT_H3]} />
+      </Surface>
+
+      <group ref={knobRoot} position={[0, -1.05, 0.25]}>
+        {ticks}
+        <group ref={rotor}>
+          <mesh rotation={[Math.PI / 2, 0, 0]} castShadow onPointerDown={onDown} onPointerMove={onMove} onPointerUp={endDrag} onLostPointerCapture={endDrag}>
+            <cylinderGeometry args={[0.42, 0.46, 0.22, 48]} />
+            <meshStandardMaterial color="#1e293b" roughness={0.35} metalness={0.7} />
+          </mesh>
+          <mesh position={[0, 0.3, 0.12]}>
+            <boxGeometry args={[0.05, 0.17, 0.035]} />
+            <meshStandardMaterial color="#7dd3fc" emissive="#38bdf8" emissiveIntensity={1.6} />
+          </mesh>
+        </group>
+      </group>
+
+      <Text position={[0, -1.95, 0]} fontSize={0.12} color="#94a3b8" anchorX="center">
+        flick it — detents are a torque field, the number is real DOM
+      </Text>
+    </group>
   )
 }
 
