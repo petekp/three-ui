@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree, type ThreeElements, type ThreeEvent } from '@react-three/fiber'
 import { createDomTextureSource, type DomTextureSource } from '../lib/htmlInCanvas'
 import { clearPointerState, forwardPointer, nudgeSelect } from './forwardEvents'
+import { SurfaceContext, type SurfaceContextValue } from './SurfaceContext'
 
 // <Surface> — the atom of three-ui: a live DOM subtree as the skin of any
 // geometry. Pass geometry as children; the DOM is rasterized into the
@@ -53,9 +54,16 @@ export function Surface({
     (s) => s.controls as { enabled?: boolean } | null,
   )
   const [texture, setTexture] = useState<THREE.CanvasTexture | null>(null)
+  const [sourceEl, setSourceEl] = useState<HTMLElement | null>(null)
   const sourceRef = useRef<DomTextureSource | null>(null)
+  const meshRef = useRef<THREE.Mesh>(null)
   const materialRef = useRef<THREE.MeshStandardMaterial>(null)
   const pressedRef = useRef(false)
+
+  const context = useMemo<SurfaceContextValue>(
+    () => ({ mesh: meshRef, source: sourceEl, width, height, mirrorU }),
+    [sourceEl, width, height, mirrorU],
+  )
 
   // A Surface mounted after the scene's first frame compiles its material
   // BEFORE the texture exists; three.js won't recompile the program when
@@ -71,6 +79,7 @@ export function Surface({
       onError: (err) => console.warn('[three-ui] Surface paint failed:', err),
     })
     sourceRef.current = source
+    setSourceEl(source.element)
 
     const tex = new THREE.CanvasTexture(source.canvas)
     tex.colorSpace = THREE.SRGBColorSpace
@@ -94,6 +103,7 @@ export function Surface({
       tex.dispose()
       source.dispose()
       sourceRef.current = null
+      setSourceEl(null)
       setTexture(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -134,6 +144,10 @@ export function Surface({
   }
 
   const handleMove = (e: ThreeEvent<PointerEvent>) => {
+    // Topmost Surface under the pointer owns it (DOM semantics). Also keeps
+    // bubbled child-layer events — which carry the CHILD's UV — from being
+    // misread as coordinates on this surface.
+    e.stopPropagation()
     const uv = uvOf(e)
     const source = sourceRef.current
     if (!uv || !source) return
@@ -142,6 +156,7 @@ export function Surface({
 
   return (
     <mesh
+      ref={meshRef}
       {...meshProps}
       onPointerDown={handleDown}
       onPointerUp={handleUp}
@@ -154,7 +169,7 @@ export function Surface({
         if (el) clearPointerState(el)
       }}
     >
-      {children}
+      <SurfaceContext value={context}>{children}</SurfaceContext>
       <meshStandardMaterial
         ref={materialRef}
         map={texture ?? undefined}

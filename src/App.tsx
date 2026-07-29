@@ -4,9 +4,10 @@ import { ContactShadows, Environment, OrbitControls } from '@react-three/drei'
 import { Lab001 } from './scenes/Lab001'
 import { Lab002 } from './scenes/Lab002'
 import { Lab003 } from './scenes/Lab003'
+import { Lab004 } from './scenes/Lab004'
 import { detectHtmlInCanvas } from './lib/htmlInCanvas'
 
-type LabId = '001' | '002' | '003'
+type LabId = '001' | '002' | '003' | '004'
 
 // Clicking a canvas normally moves focus to <body>, which would blur
 // whatever hidden form field a Surface has focused — killing native typing.
@@ -25,7 +26,7 @@ function KeepDomFocus() {
 
 export default function App() {
   const support = useMemo(detectHtmlInCanvas, [])
-  const [lab, setLab] = useState<LabId>('003')
+  const [lab, setLab] = useState<LabId>('004')
 
   return (
     <div className="app">
@@ -41,7 +42,15 @@ export default function App() {
         <KeepDomFocus />
         <Suspense fallback={null}>
           <Environment preset="city" />
-          {lab === '001' ? <Lab001 /> : lab === '002' ? <Lab002 /> : <Lab003 />}
+          {lab === '001' ? (
+            <Lab001 />
+          ) : lab === '002' ? (
+            <Lab002 />
+          ) : lab === '003' ? (
+            <Lab003 />
+          ) : (
+            <Lab004 />
+          )}
           <ContactShadows position={[0, -0.15, 0]} opacity={0.5} blur={2.2} scale={20} />
           <OrbitControls
             makeDefault
@@ -58,7 +67,7 @@ export default function App() {
         <h1>three-ui / lab {lab}</h1>
         <p className="sub">a component library made of real materials</p>
         <div className="tabs">
-          {(['001', '002', '003'] as const).map((id) => (
+          {(['001', '002', '003', '004'] as const).map((id) => (
             <button
               key={id}
               data-active={lab === id}
@@ -89,7 +98,9 @@ export default function App() {
           ? 'drag to orbit · press the button · click the hopper to drop chips'
           : lab === '002'
             ? 'click the console fields, then just type · toggle stealth · fling the card'
-            : 'open the mode picker — the dropdown is its own Surface · __threeUI.stats() for paint counts'}
+            : lab === '003'
+              ? 'open the mode picker — the dropdown is its own Surface · __threeUI.stats() for paint counts'
+              : 'open both pickers — same anchor code on flat and curved skin · the flag tag rides the wave'}
       </div>
     </div>
   )
