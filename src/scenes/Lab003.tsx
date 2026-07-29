@@ -1,5 +1,7 @@
 import { useRef, useState } from 'react'
+import * as THREE from 'three'
 import { Text } from '@react-three/drei'
+import { useFrame } from '@react-three/fiber'
 import { Surface } from '../primitives/Surface'
 
 // Lab 003 — feasibility edges of the primitive set:
@@ -8,6 +10,11 @@ import { Surface } from '../primitives/Surface'
 //                      Evidence: window.__threeUI.stats() paint counters.
 //   B. popover Surface a custom select whose dropdown is a SECOND Surface
 //                      floating in front of the panel — retires nudgeSelect.
+//   C. deformable      live DOM on CPU vertex-displaced geometry. Raycasting
+//                      hits the displaced triangles and UVs ride the
+//                      vertices, so input forwarding should survive the wave.
+//                      (GPU/shader displacement would NOT — the raycaster
+//                      only sees CPU-side positions.)
 //
 // State philosophy: React state only decides what exists in the scene
 // (popover open/closed). Interaction state lives in the DOM itself — the
@@ -192,6 +199,9 @@ export function Lab003() {
         </Text>
       </group>
 
+      {/* Station B — live DOM on deforming geometry */}
+      <WindFlag position={[1.7, 2.35, -1.3]} />
+
       {/* Station C readout — a coexisting Surface (knob will write here) */}
       <group position={[2.4, 1.4, 0.6]} rotation={[0, -0.35, 0]}>
         <Surface
@@ -212,6 +222,122 @@ const READOUT_W = 320
 const READOUT_H = 180
 const READOUT_W3 = READOUT_W / PX_PER_UNIT
 const READOUT_H3 = READOUT_H / PX_PER_UNIT
+
+const FLAG_W = 560
+const FLAG_H = 360
+const FLAG_W3 = FLAG_W / PX_PER_UNIT
+const FLAG_H3 = FLAG_H / PX_PER_UNIT
+
+function flagMarkup() {
+  const winds: Array<[string, string, boolean]> = [
+    ['calm', '0.02', false],
+    ['breeze', '0.16', true],
+    ['gale', '0.34', false],
+  ]
+  const buttons = winds
+    .map(
+      ([name, amp, on]) => `
+        <button type="button" data-wind="${amp}" aria-pressed="${on}">${name}</button>`,
+    )
+    .join('')
+  return `
+    <div style="width:${FLAG_W}px;height:${FLAG_H}px;box-sizing:border-box;padding:28px 32px;
+                font-family:system-ui,sans-serif;background:linear-gradient(150deg,#062821,#0a1f2e);
+                color:#f8fafc;border:1px solid #134e4a;">
+      <style>
+        .wind { display:flex; flex-direction:column; gap:16px; }
+        .wind .row { display:flex; gap:10px; }
+        .wind button { flex:1; padding:13px 0; border-radius:8px; border:1px solid #155e56;
+          background:#0b2f2a; color:#a7f3d0; font-size:15px; cursor:pointer; }
+        .wind button:hover { border-color:#2dd4bf; }
+        .wind button[aria-pressed=true] { background:#134e4a; border-color:#2dd4bf; color:#ccfbf1;
+          box-shadow:0 0 0 3px rgba(45,212,191,.2); }
+        .wind input { padding:13px 14px; border-radius:8px; border:1px solid #155e56;
+          background:#0b2f2a; color:#f8fafc; font-size:15px; outline:none; width:100%; box-sizing:border-box; }
+        .wind input:focus { border-color:#2dd4bf; box-shadow:0 0 0 3px rgba(45,212,191,.25); }
+      </style>
+      <div class="wind">
+        <strong style="font-size:24px;letter-spacing:-0.02em">Wind tunnel</strong>
+        <span style="font-size:13px;color:#5eead4">this surface is deforming right now — its controls still work</span>
+        <div class="row">${buttons}</div>
+        <input type="text" name="log" placeholder="log entry — type while it waves" autocomplete="off" />
+      </div>
+    </div>`
+}
+
+// Live DOM on geometry that never stops moving. The displacement runs on the
+// CPU so the raycaster and the render agree about where the triangles are.
+function WindFlag(props: { position: [number, number, number] }) {
+  const geoRef = useRef<THREE.PlaneGeometry>(null)
+  const base = useRef<Float32Array | null>(null)
+  const windTarget = useRef(0.16)
+  const amp = useRef(0.02)
+
+  const wireFlag = (el: HTMLElement) => {
+    const onClick = (ev: Event) => {
+      const btn = (ev.target as Element).closest('[data-wind]') as HTMLElement | null
+      if (!btn) return
+      windTarget.current = Number(btn.dataset.wind)
+      el.querySelectorAll('[data-wind]').forEach((b) =>
+        b.setAttribute('aria-pressed', String(b === btn)),
+      )
+    }
+    el.addEventListener('click', onClick)
+    return () => el.removeEventListener('click', onClick)
+  }
+
+  useFrame(({ clock }, delta) => {
+    const geo = geoRef.current
+    if (!geo) return
+    const pos = geo.attributes.position as THREE.BufferAttribute
+    if (!base.current) {
+      base.current = new Float32Array(pos.array as Float32Array)
+      // Padded once so per-frame displacement never outruns raycast culling.
+      geo.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(0, 0, 0),
+        Math.hypot(FLAG_W3, FLAG_H3) / 2 + 0.6,
+      )
+    }
+    amp.current = THREE.MathUtils.damp(amp.current, windTarget.current, 3, delta)
+    const t = clock.elapsedTime
+    const arr = pos.array as Float32Array
+    const b = base.current
+    for (let i = 0; i < arr.length; i += 3) {
+      const x = b[i]
+      const y = b[i + 1]
+      // Pinned at the pole (left edge), free at the right — like a real flag.
+      const pin = (x + FLAG_W3 / 2) / FLAG_W3
+      arr[i + 2] =
+        amp.current * pin * Math.sin(x * 2.4 + t * 3.1 + y * 0.9) +
+        amp.current * 0.35 * pin * Math.sin(x * 5.1 + t * 5.7)
+    }
+    pos.needsUpdate = true
+    geo.computeVertexNormals()
+  })
+
+  return (
+    <group position={props.position} rotation={[0, -0.1, 0]}>
+      <mesh position={[-FLAG_W3 / 2 - 0.09, -0.45, 0]} castShadow>
+        <cylinderGeometry args={[0.035, 0.035, FLAG_H3 + 1.9, 16]} />
+        <meshStandardMaterial color="#475569" roughness={0.4} metalness={0.8} />
+      </mesh>
+      <Surface
+        label="lab003-flag"
+        html={flagMarkup()}
+        width={FLAG_W}
+        height={FLAG_H}
+        side={THREE.DoubleSide}
+        onSource={wireFlag}
+        castShadow
+      >
+        <planeGeometry ref={geoRef} args={[FLAG_W3, FLAG_H3, 48, 32]} />
+      </Surface>
+      <Text position={[0, -1.25, 0]} fontSize={0.13} color="#94a3b8" anchorX="center">
+        CPU-deformed geometry · raycast still lands on the real triangles
+      </Text>
+    </group>
+  )
+}
 
 function readoutMarkup() {
   const cells = Array.from(
