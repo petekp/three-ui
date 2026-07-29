@@ -21,6 +21,7 @@ function probeParams() {
   return {
     n,
     live: params.get('live') === '1',
+    anim: Math.max(0, parseInt(params.get('anim') ?? '', 10) || 0),
     cardW: Math.max(64, Math.min(1024, parseInt(params.get('w') ?? '', 10) || 320)),
     cardH: Math.max(64, Math.min(1024, parseInt(params.get('h') ?? '', 10) || 200)),
   }

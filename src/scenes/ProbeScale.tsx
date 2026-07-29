@@ -7,6 +7,7 @@ import { Surface } from '../primitives/Surface'
 //
 // Mount via URL:  ?probe=N          N static Surfaces (no DOM mutations)
 //                 ?probe=N&live=1   every source mutated every frame
+//                 &anim=K           only the first K sources mutate
 //                 &w=640&h=400      per-card DOM/texture size (default 320×200)
 //
 // Note the current Surface contract makes "static" a pipeline measurement,
@@ -41,6 +42,7 @@ function cardMarkup(i: number, w: number, h: number) {
 interface ProbeResult {
   n: number
   live: boolean
+  anim: number
   cardW: number
   cardH: number
   seconds: number
@@ -68,11 +70,13 @@ function usePercentiles() {
 export interface ProbeConfig {
   n: number
   live: boolean
+  anim: number
   cardW: number
   cardH: number
 }
 
-export function ProbeScaleApp({ n, live, cardW, cardH }: ProbeConfig) {
+export function ProbeScaleApp({ n, live, anim, cardW, cardH }: ProbeConfig) {
+  const animCount = live ? n : Math.min(anim, n)
   const cards = useRef<Map<number, CardRefs>>(new Map())
   const pct = usePercentiles()
 
@@ -103,13 +107,14 @@ export function ProbeScaleApp({ n, live, cardW, cardH }: ProbeConfig) {
   // lookups are cached at onSource time so the mutation itself stays cheap
   // and uniform — we're measuring the paint pipeline, not querySelector.
   useEffect(() => {
-    if (!live) return
+    if (animCount === 0) return
     let raf = 0
     let t0 = -1
     const loop = (now: number) => {
       if (t0 < 0) t0 = now
       const t = Math.floor(now - t0)
       cards.current.forEach(({ tick, bar }, i) => {
+        if (i >= animCount) return
         tick.textContent = String(t)
         bar.style.width = `${((t / 12 + i * 7) % 100).toFixed(1)}%`
       })
@@ -117,7 +122,7 @@ export function ProbeScaleApp({ n, live, cardW, cardH }: ProbeConfig) {
     }
     raf = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(raf)
-  }, [live])
+  }, [animCount])
 
   useEffect(() => {
     const probeStats = () =>
@@ -126,6 +131,7 @@ export function ProbeScaleApp({ n, live, cardW, cardH }: ProbeConfig) {
     const harness = {
       n,
       live,
+      anim: animCount,
       cardW,
       cardH,
       ready: () => {
@@ -154,6 +160,7 @@ export function ProbeScaleApp({ n, live, cardW, cardH }: ProbeConfig) {
             resolve({
               n,
               live,
+              anim: animCount,
               cardW,
               cardH,
               seconds: elapsed,
@@ -182,7 +189,7 @@ export function ProbeScaleApp({ n, live, cardW, cardH }: ProbeConfig) {
     return () => {
       delete (window as unknown as { __probe?: typeof harness }).__probe
     }
-  }, [n, live, cardW, cardH, pct])
+  }, [n, live, animCount, cardW, cardH, pct])
 
   return (
     <div className="app">
@@ -213,7 +220,7 @@ export function ProbeScaleApp({ n, live, cardW, cardH }: ProbeConfig) {
       <div className="hud">
         <h1>three-ui / scale probe</h1>
         <p className="sub">
-          {n} Surfaces · {live ? 'live (mutating every frame)' : 'static'} ·{' '}
+          {n} Surfaces · {animCount === 0 ? 'static' : `${animCount} mutating every frame`} ·{' '}
           {cardW}×{cardH}px each
         </p>
       </div>

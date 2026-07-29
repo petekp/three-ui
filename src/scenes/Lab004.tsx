@@ -336,8 +336,14 @@ function tipMarkup() {
                 font-family:system-ui,sans-serif;background:#042f2e;border:1px solid #2dd4bf;
                 border-radius:14px;color:#ccfbf1;display:flex;flex-direction:column;gap:4px;">
       <style>
-        @keyframes tip-pulse { 0%,100% { opacity:1 } 50% { opacity:.25 } }
-        .dot { display:inline-block;width:8px;height:8px;border-radius:50%;background:#2dd4bf;
+        /* Pulse via PAINT properties (background/box-shadow), not opacity:
+           compositor-animated properties never reach drawElementImage, and
+           paint-property animations self-paint — no paint="always" needed. */
+        @keyframes tip-pulse {
+          0%,100% { background:#2dd4bf; box-shadow:0 0 8px #2dd4bf }
+          50%     { background:#0f3d3a; box-shadow:none }
+        }
+        .dot { display:inline-block;width:8px;height:8px;border-radius:50%;
           margin-right:8px;animation:tip-pulse 1.2s ease-in-out infinite; }
       </style>
       <strong style="font-size:15px"><span class="dot"></span>UV-anchored</strong>

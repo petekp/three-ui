@@ -29,6 +29,19 @@ export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children'> {
   onFocusWithin?: (focused: boolean) => void
   /** Access the live DOM root (attach listeners, mutate). May return cleanup. */
   onSource?: (el: HTMLElement) => void | (() => void)
+  /**
+   * Texture upload policy. 'auto' (default) uploads only when the canvas
+   * reports a real paint: the compositor fires onpaint by itself whenever
+   * the subtree's paint record changes (mutations, transitions of any
+   * duration, paint-property CSS animations, caret blink), so idle
+   * Surfaces cost nothing and no observer or heuristic is involved.
+   * 'always' requests + uploads every frame — escape hatch for content
+   * that changes without paint-record updates (e.g. embedded media).
+   * Platform limit either way: compositor-animated properties (opacity/
+   * transform keyframes) never reach drawElementImage — animate paint
+   * properties (color, background, box-shadow) instead.
+   */
+  paint?: 'auto' | 'always'
   /** Flip the texture horizontally (for concave/back-face geometries). */
   mirrorU?: boolean
   side?: THREE.Side
@@ -44,6 +57,7 @@ export function Surface({
   children,
   onFocusWithin,
   onSource,
+  paint = 'auto',
   mirrorU = false,
   side = THREE.FrontSide,
   roughness = 0.35,
@@ -59,6 +73,8 @@ export function Surface({
   const meshRef = useRef<THREE.Mesh>(null)
   const materialRef = useRef<THREE.MeshStandardMaterial>(null)
   const pressedRef = useRef(false)
+  const lastUploadRef = useRef(-1)
+  const extraUploadsRef = useRef(0)
 
   const context = useMemo<SurfaceContextValue>(
     () => ({ mesh: meshRef, source: sourceEl, width, height, mirrorU }),
@@ -90,6 +106,9 @@ export function Surface({
     }
     setTexture(tex)
 
+    lastUploadRef.current = -1
+    extraUploadsRef.current = 0
+
     const focusIn = () => onFocusWithin?.(true)
     const focusOut = () => onFocusWithin?.(false)
     source.element.addEventListener('focusin', focusIn)
@@ -107,13 +126,32 @@ export function Surface({
       setTexture(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [html, width, height, mirrorU])
+  }, [html, width, height, mirrorU, paint])
 
   useFrame(() => {
     const source = sourceRef.current
     if (!source || !texture) return
-    source.repaint()
-    if (source.painted()) texture.needsUpdate = true
+    if (paint === 'always') {
+      source.repaint()
+      if (source.painted()) texture.needsUpdate = true
+      lastUploadRef.current = source.paintCount()
+      return
+    }
+    // Upload-on-paint: the compositor already tells us exactly when the
+    // subtree's pixels changed (paintCount advances on its own — no
+    // requestPaint loop, no MutationObserver). Idle Surfaces cost nothing;
+    // the probe showed unconditional repainting caps an app at ~64 sources.
+    // One extra upload after the counter stops covers the draw's deferred
+    // resolve trailing the paint by up to a frame.
+    const count = source.paintCount()
+    if (count !== lastUploadRef.current) {
+      lastUploadRef.current = count
+      extraUploadsRef.current = 1
+      if (source.painted()) texture.needsUpdate = true
+    } else if (extraUploadsRef.current > 0) {
+      extraUploadsRef.current -= 1
+      if (source.painted()) texture.needsUpdate = true
+    }
   })
 
   const uvOf = (e: ThreeEvent<PointerEvent>) => {

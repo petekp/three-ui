@@ -47,10 +47,20 @@ export interface DomTextureSource {
   canvas: HTMLCanvasElement
   /** The live DOM element being rasterized. Mutate it; changes show up. */
   element: HTMLElement
-  /** Schedule a repaint (call once per frame for live content). */
+  /** Force a repaint request (rarely needed — see paintCount). */
   repaint: () => void
   /** True once at least one paint has succeeded. */
   painted: () => boolean
+  /**
+   * Number of paints that have hit the canvas. The compositor fires onpaint
+   * BY ITSELF whenever the subtree's paint record changes — DOM mutations,
+   * transitions, paint-property CSS animations, caret blink — so this
+   * counter advancing IS the "content changed" signal, and while it's
+   * still, the subtree is visually quiescent. (Compositor-side properties
+   * — animated opacity/transform — never enter the paint record and are
+   * invisible here AND to drawElementImage itself.)
+   */
+  paintCount: () => number
   dispose: () => void
 }
 
@@ -140,6 +150,7 @@ export function createDomTextureSource(
     element,
     repaint: () => canvas.requestPaint(),
     painted: () => ok,
+    paintCount: () => stats.paints,
     dispose: () => {
       canvas.onpaint = null
       canvas.remove()
