@@ -179,10 +179,88 @@ detents) with the cursor never over the mesh.
   camera at action time (`window.__r3f` scene → `getWorldPosition` →
   `project`) and aim there.
 
-### Open questions (lab 004+)
-- UV→world inversion for anchors on curved/deformed geometry (sample the
-  geometry's UV mapping instead of closed-form plane math).
+## lab 004 — the floating-layer system
+
+First productization step (per the lab-003 direction decision): generalize
+the popover into `<SurfaceLayer>`, a Surface anchored to a **point on
+another Surface's skin** — any geometry, including deforming.
+
+### `UVAnchor` (`src/lib/uvAnchor.ts`) — UV→surface inversion
+The raycaster answers "hit → UV"; anchors need the inverse, "UV →
+position + normal". Implementation insight that makes it cheap: the
+*search* (which triangle contains (u,v), and the barycentric weights
+inside it) depends only on the UV attribute, which stays static even
+when vertices move. So an anchor resolves its triangle **once**, then
+every `sample()` is three reads against the LIVE position/normal
+buffers — O(1) per frame, and CPU deformation carries the anchor for
+free. 12 vitest cases (`npm test`): plane closed-form, cylinder
+shell/seam/antipodes, exact linear-displacement tracking, recomputed and
+face-normal fallback normals.
+
+### `<SurfaceLayer>` (`src/primitives/SurfaceLayer.tsx`)
+```tsx
+<Surface html={panel} …>
+  <planeGeometry … />   {/* or a cylinder, or a waving flag */}
+  {open && (
+    <SurfaceLayer
+      anchor="[data-trigger]"      // CSS selector into the parent's live DOM
+      align={{ x: 0.5, y: 1 }}     // point on that element's rect
+      lift={0.3}                   // float distance along the surface normal
+      offset={[0, -popH / 2, 0]}   // nudge in the layer's oriented frame
+      orient="normal"              // or "billboard" (face the camera)
+      html={popover} …>
+      <planeGeometry … />
+    </SurfaceLayer>
+  )}
+</Surface>
+```
+`Surface` now provides a context (mesh + live DOM root + dims); the
+layer resolves the selector to a rect, converts rect → UV, inverts UV
+through the parent's geometry, and re-samples **every frame**. Layers
+nest (a layer is a Surface, so it can host layers).
+
+### Verified (Chrome 150, agent-browser, human-in-loop)
+- **Flat parity**: the lab-003 picker rebuilt with zero anchor math in
+  the scene. Popover spawned at panel-local error **0.00000**,
+  orientation parallel to **0.00000 rad**; hover mirroring works through
+  the layer; option click commits to the hidden input and disposes the
+  layer's paint source; click-away dismisses (and the same click focused
+  the field under it).
+- **Curved skin**: the SAME `usePicker` hook on a cylinder drum. Popover
+  mounted at radial distance **2.8200** (R 2.4 + lift 0.42, exact) with
+  forward axis · outward radial = **1.0000** — it floats off the curve
+  along the true local normal. Committed "thermal" through the tilted
+  popover.
+- **Deforming skin**: a tooltip anchored to a button on the waving flag
+  rode the wave (0.18 units of world motion per 350ms at breeze,
+  **0.35 at gale** — amplitude follows the wind) while tilting with the
+  recomputed local normal. Clicking "gale" on the moving flag worked.
+
+### Interaction contract added
+`Surface` now calls `stopPropagation` on pointer **moves** as well:
+the topmost Surface under the pointer owns it (DOM semantics). Required
+for nesting — r3f bubbles a child layer's events to the parent mesh
+with the *child's* UV attached, which the parent must not misread as
+its own coordinates.
+
+### Caveats (v0, recorded not solved)
+- Rect→UV happens once at layer mount; a parent-subtree reflow after
+  mount won't re-anchor (future: ResizeObserver/MutationObserver).
+- Overlapping UV islands: first containing triangle wins.
+- Parent meshes assumed unscaled; GPU displacement invisible (same
+  contract as raycast forwarding).
+- Clicking empty space doesn't dismiss popovers (needs scene-level
+  `onPointerMissed`; panel-click-away works).
+
+### Open questions (lab 005+)
 - `texElementImage2D` + `THREE.ExternalTexture`: skip the 2D-canvas middleman.
+- Physical control kit: generalize the lab-003 knob integrator + detent
+  fields into sliders, switches (over-center springs), dials.
 - Press-time UV locking so moving surfaces can't dodge a click.
-- Focus light that *aims* at the focused field (UV → surface point inversion).
+- Focus/keyboard completeness: tab order across Surfaces + layers,
+  arrow-key listbox nav, ESC dismissal, `onPointerMissed` dismissal.
+- Focus light that *aims* at the focused field — `UVAnchor` now makes
+  this trivial (anchor the spotlight target to the focused element).
 - How many live Surfaces before paint cost bites — 12? 40?
+- UV-space acceleration structure if anchor counts or mesh sizes grow
+  (linear triangle scan is fine at lab scale).
