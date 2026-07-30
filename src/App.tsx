@@ -8,6 +8,7 @@ import { Lab004 } from './scenes/Lab004'
 import { Lab005 } from './scenes/Lab005'
 import { Lab006, Lab006Hud } from './scenes/Lab006'
 import { ProbeScaleApp } from './scenes/ProbeScale'
+import { ProbeFocusApp } from './scenes/ProbeFocus'
 import { detectHtmlInCanvas } from './lib/htmlInCanvas'
 
 type LabId = '001' | '002' | '003' | '004' | '005' | '006'
@@ -46,8 +47,13 @@ function KeepDomFocus() {
 export default function App() {
   const support = useMemo(detectHtmlInCanvas, [])
   const probe = useMemo(probeParams, [])
+  const focusProbe = useMemo(
+    () => new URLSearchParams(window.location.search).get('focusprobe') === '1',
+    [],
+  )
   const [lab, setLab] = useState<LabId>('006')
 
+  if (focusProbe) return <ProbeFocusApp />
   if (probe) return <ProbeScaleApp {...probe} />
 
   return (

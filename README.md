@@ -615,3 +615,33 @@ thrash-free by construction. `tiersInRange` is pure and tested
 (46/46); mount now seeds at the in-range tier nearest 1×, which as a
 side effect stops oversize Surfaces from transiently allocating a
 >4096px canvas on their first raster.
+
+## lab 007 — focus: routing the browser's focus model through 3D space (in progress)
+
+The last open item from the post-lab-003 roadmap: keyboard
+completeness. Kicked off with a four-source prior-art deep-read
+(react-three-a11y source, Flutter's focus_traversal.dart, the CSS
+spatial-navigation spec + TAG review, ARIA APG + tabbable) — findings
+distilled into `docs/focus.md`, the design contract. The headline
+reversal: flow-through Tab died in review. APG's composite convention
+(one tab stop per unit, Enter/F2 descends, Escape ascends) replaces
+it — eight screens must be eight Tab stops, not forty-eight. Two
+mechanisms adopted wholesale from Flutter: focus memory as a lazily
+validated stack per group, and the directional-history stack that
+makes arrow navigation reciprocal — load-bearing here, because focus
+moves our camera, so the geometry that chose a target is gone by the
+next keypress. Distance scoring adapts css-spatial-nav's structure
+with its known defects corrected (symmetric weights; overlap handled
+as a separate regime ranked by depth, never fed to the formula).
+
+Then the platform got a vote: `?focusprobe=1` (ProbeFocus.tsx) ran
+seven probes through real CDP keys on Chrome 150. All seven passed —
+real Tab walks into parked source subtrees in document order; focus
+rings self-paint into the record; a capture-phase keydown can eat Tab
+at a boundary and re-route with preventScroll cleanly; :focus-visible
+survives programmatic routing inside a key handler; opacity:0 ARIA
+proxies are fully tabbable and receive arrows; aria mutations on
+proxies are paint-isolated from every source; and fixed positioning
+means focus can never scroll-jump the page. Every load-bearing
+assumption of the design is now measured, not argued. Next: the focus
+tree + boundary interception, then spatial ordering.
