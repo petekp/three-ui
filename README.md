@@ -496,3 +496,25 @@ pinned-CSS resize never touches the subtree; resize needs an explicit
 requestPaint; one paint per rescale) and decision #8 records the
 rejected alternatives (fixed retina everywhere, continuous matching,
 CSS zoom).
+
+### Follow-up, same day: "still very fuzzy up close"
+
+Pete falsified "sharp." The re-raster was never the problem — an
+edge-width probe put the CTM-scaled draw at 1.0px mean edge, pixel-
+equal to natively-3x-authored content (bitmap upscale: 2.0px) — and
+the full-res textures were bound. `magFilter=Nearest` showed crisp
+single-texel stairs on screen: the resolution was being thrown away
+by the *filter*. Three's default trilinear mipmapping blends in the
+box-filtered half-res mip the moment the footprint tips past 1:1 —
+exactly at reading range. The classic reason game engines ship UI
+atlases mip-free, rediscovered the measured way.
+
+Fix (decision #9): reading tiers use plain linear filtering — the
+tier ladder already is the mip chain, CPU-side and vector-sourced —
+while far tiers (<=0.5) keep mips + anisotropy for oblique-panel
+shimmer. Ladder extended to 0.25-6x for retina demand (approach ~4,
+grab-pull ~7). Verified: approach view crisp at 1:1; tier 6 commits
+in one paint with the ladder jumping 1.5->6 directly; extreme 0.7-
+unit close-ups saturate softly at the near edge by design. Probe
+lesson: verify camera arrival in the same eval as the screenshot — a
+damped OrbitControls ease faked one data point.

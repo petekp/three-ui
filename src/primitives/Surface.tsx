@@ -70,6 +70,23 @@ const _camPos = new THREE.Vector3()
 const _surfPos = new THREE.Vector3()
 const _surfScale = new THREE.Vector3()
 
+// GPU mipmaps sabotage text at reading range: trilinear blends in the
+// box-filtered half-res mip whenever the footprint tips past 1:1, softening
+// glyphs that the vector re-raster just paid to sharpen (measured: the
+// no-mips A/B at true 1:1 density). The tier ladder already IS the mip
+// chain — CPU-side, distance-driven — so mipmaps are redundant at reading
+// tiers. Far tiers (≤0.5) keep them: there a panel is small/oblique, and
+// trilinear + anisotropy tame minification shimmer the ladder can't
+// (anisotropy is directional; the ladder isn't).
+function applyFilterPolicy(tex: THREE.Texture, tier: number) {
+  const mips = tier <= 0.5
+  if (tex.generateMipmaps !== mips) {
+    tex.generateMipmaps = mips
+    tex.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter
+    tex.needsUpdate = true
+  }
+}
+
 export function Surface({
   html,
   label,
@@ -133,6 +150,7 @@ export function Surface({
     const tex = new THREE.CanvasTexture(source.canvas)
     tex.colorSpace = THREE.SRGBColorSpace
     tex.anisotropy = 8
+    applyFilterPolicy(tex, source.scale())
     if (mirrorU) {
       tex.wrapS = THREE.RepeatWrapping
       tex.repeat.x = -1
@@ -164,8 +182,12 @@ export function Surface({
   // Fixed-resolution changes re-raster in place — never recreate the source
   // (that would destroy live DOM state: focus, form values, selection).
   useEffect(() => {
-    if (typeof resolution === 'number') sourceRef.current?.setScale(resolution)
-  }, [resolution])
+    if (typeof resolution === 'number' && sourceRef.current) {
+      sourceRef.current.setScale(resolution)
+      if (texture) applyFilterPolicy(texture, sourceRef.current.scale())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolution, texture])
 
   useFrame(() => {
     const source = sourceRef.current
@@ -200,6 +222,7 @@ export function Surface({
                 lod.tier = proposal
                 lod.agree = 0
                 source.setScale(proposal)
+                applyFilterPolicy(texture, proposal)
               }
             } else {
               lod.proposed = proposal

@@ -127,3 +127,31 @@ invariant that keeps focus alive. **Consequence.** Glyph sharpness
 tracks proximity automatically; idle cost unchanged (two integer reads +
 a dozen flops every 10th frame). The ladder's 3× cap is the memory
 guard — extreme close-ups soften rather than allocate unboundedly.
+*(Amended same day by #9: cap raised to 6×, mipmap policy added.)*
+
+## 9. Reading tiers are mip-free; the ladder is the mip chain (2026-07-29, LOD follow-up)
+
+**Context.** Pete: "still very fuzzy up close" after #8 shipped.
+Diagnosis chain, each link measured: edge-width probe showed the
+CTM-scaled re-raster is pixel-equal to natively-3×-authored content
+(mean edge 1.0px vs 1.0px; explicit bitmap upscale: 2.0px) — source
+crisp; texture registry showed full-res uploads bound (1260×900) —
+upload crisp; `magFilter=Nearest` showed single-texel stair-steps on
+screen — texels delivered. The softener was three's default
+`LinearMipmapLinearFilter`: trilinear blends in the box-filtered
+half-res mip whenever the footprint tips past 1:1 — i.e. exactly at
+reading range, throwing away the resolution the vector re-raster just
+paid for. (Also: ladder capped at 3× while a dpr-2 approach demands ~4
+and a grab-pull ~7.) **Decision.** `applyFilterPolicy`: tiers ≤0.5 keep
+`generateMipmaps` + trilinear + anisotropy (far/oblique panels need
+directional minification control the ladder can't provide — anisotropy
+is per-axis, the ladder isn't); reading tiers (≥1) use plain
+`LinearFilter`, no mips. Ladder extended to 0.25–6 (0.25 quarters
+far-panel memory; 6 covers retina close-ups). **Rejected.** Trilinear
+everywhere — measured soft at true 1:1. Nearest — jaggies. A negative
+mip bias — not exposed on MeshStandardMaterial without shader surgery.
+**Consequence.** Crisp at every reading distance on retina; past ~6×
+demand the near edge of a nose-against-glass panel softens instead of
+allocating >30MB — deliberate saturation. Probe lesson worth keeping:
+verify camera *arrival* in the same eval as the screenshot — a damped
+OrbitControls ease faked one "1:1 is soft" data point.

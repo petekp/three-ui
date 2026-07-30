@@ -19,7 +19,10 @@
 // below would still oversupply by `band`) are separated by a dead zone, so
 // a camera parked on a boundary cannot thrash resize→re-raster→re-upload.
 
-export const DEFAULT_TIERS = [0.5, 1, 1.5, 2, 3]
+// 0.25 quarters far-panel memory; 4/6 cover retina close-ups (an approached
+// panel on a dpr-2 display demands ~4; a grab-pulled one ~6). clampTiers'
+// 4096 long-edge guard still bounds the top for large Surfaces.
+export const DEFAULT_TIERS = [0.25, 0.5, 1, 1.5, 2, 3, 4, 6]
 
 /** Hysteresis fraction: tolerated under/over-supply before switching. */
 const BAND = 0.15

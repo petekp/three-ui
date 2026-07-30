@@ -16,6 +16,8 @@ describe('selectLodTier', () => {
 
   it('jumps multiple tiers up in one step (approach should sharpen once, not ratchet)', () => {
     expect(selectLodTier(2.6, 0.5, TIERS)).toBe(3)
+    // Retina close-up on the default ladder: demand ~4.3 lands on 6.
+    expect(selectLodTier(4.3, 1.5, DEFAULT_TIERS)).toBe(6)
   })
 
   it('clamps to the max tier when density exceeds the ladder', () => {
@@ -66,6 +68,12 @@ describe('clampTiers', () => {
   })
 
   it('defaults leave typical panel sizes untouched', () => {
+    // 420 css wide at 6x = 2520 — inside the 4096 guard.
     expect(clampTiers(DEFAULT_TIERS, 420, 300)).toEqual(DEFAULT_TIERS)
+  })
+
+  it('default ladder spans 0.25–6 (far-memory return to retina close-up)', () => {
+    expect(DEFAULT_TIERS[0]).toBe(0.25)
+    expect(DEFAULT_TIERS[DEFAULT_TIERS.length - 1]).toBe(6)
   })
 })
