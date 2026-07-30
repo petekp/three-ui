@@ -5,6 +5,37 @@ seven probes pass — table at bottom). Informed by a four-source
 prior-art deep-read (citations at bottom). Pieces graduate to
 decisions.md as they ship and get paid for.
 
+**Implementation status (increment 1, shipped 2026-07-30):** the tree
+core (`src/lib/focusTree.ts` — registry, memory stacks, Flutter band
+reading-order; vitest-pinned including the one-removal-per-pick band
+re-anchoring semantics), `src/lib/tabbables.ts` (tabbable-subset rules,
+pure halves tested), and `<FocusScene>`/`<FocusGroup>`
+(`src/primitives/FocusScene.tsx`) with Surface auto-registration via
+`FocusGroupContext`. Browser-verified in lab 006 with real CDP keys:
+ring walk, descend/typing, boundary exit at last-element identity,
+memory restore + clear-on-Escape, ascend-from-first, Escape ladder to
+camera home. Implementation decisions layered on this contract:
+
+- **Scene ring is a closed loop for now.** Native edge handoff exists
+  (probe 1) but parked subtrees still sit in the page's tab order, so a
+  "hand back to browser" exit would immediately re-enter panel DOM.
+  Real page-embed handoff needs the proxy layer to own page-side stops
+  — next increment.
+- **Unit element = the Surface source root** with `tabindex="-1"` —
+  focusing it makes unit selection real document focus, and the
+  `[data-focus="unit"|"interior"]` attribute the manager stamps lets
+  authored CSS paint the state into the texture (paint properties
+  only).
+- **Scene-level Tab advances FROM the cursor, never re-enters it.**
+  After Escape-from-unit, Tab means "move on" — re-entry is Enter's
+  job. Avoids both Flutter memory bugs without clearing the cursor.
+- **Descend intent always fires.** Enter on a group with no interior
+  tabbables keeps unit focus but still emits `cause: 'descend'` —
+  read-only panels are zoomed into to *read*; camera reactions key on
+  the commitment, not on whether the DOM had an input.
+- **Arrows, ARIA proxies for leaves, and the announcer are NOT in yet**
+  — next increment, per the sections below.
+
 **Thesis tie-in.** The library's claim is that the DOM is load-bearing,
 not a texture. Until focus works, that claim is mouse-only. The goal is
 keyboard-complete operation of a 3D workspace with the browser's real

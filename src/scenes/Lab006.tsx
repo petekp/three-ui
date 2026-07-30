@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
 import { Surface } from '../primitives/Surface'
+import { FocusGroup, useFocusSceneEvents, type GroupFocusState } from '../primitives/FocusScene'
 import { arcLayout, type ArcSlot } from '../lib/arcLayout'
 import {
   buildPanels,
@@ -166,14 +167,19 @@ function WorkPanel({
   const controls = useThree((s) => s.controls as unknown as OrbitLike | null)
   const drag = useRef({ active: false, lastX: 0, lastY: 0, angle: 0, radius: 0 })
   const [hover, setHover] = useState(false)
+  const [focus, setFocus] = useState<GroupFocusState>('none')
 
-  const approach = (e: ThreeEvent<MouseEvent>) => {
-    e.stopPropagation()
+  const approachNow = () => {
     const g = group.current
     if (!g || !rig.current) return
     const center = g.getWorldPosition(new THREE.Vector3())
     const facing = g.getWorldDirection(new THREE.Vector3()) // +z = panel front
     rig.current.approach(center, facing)
+  }
+
+  const approach = (e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation()
+    approachNow()
   }
 
   // Drag is a parametric polar mapping from pointer DELTAS, not a plane
@@ -230,41 +236,45 @@ function WorkPanel({
         if (g) g.lookAt(LOOK_TARGET.x, LOOK_TARGET.y, LOOK_TARGET.z)
       }}
     >
-      <Surface
-        label={`lab006-${spec.id}`}
-        name={`lab006-${spec.id}`}
-        html={spec.html}
-        width={PANEL_W}
-        height={PANEL_H}
-        onSource={spec.feed}
-        onDoubleClick={approach}
-        castShadow
-      >
-        <planeGeometry args={[W3, H3]} />
-      </Surface>
-      {/* Grab handle: the one part of a panel that is matter, not screen. */}
-      <mesh
-        position={[0, H3 / 2 + 0.09, 0]}
-        onPointerDown={onHandleDown}
-        onPointerMove={onHandleMove}
-        onPointerUp={onHandleUp}
-        onPointerOver={() => {
-          setHover(true)
-          document.body.style.cursor = 'grab'
-        }}
-        onPointerOut={() => {
-          setHover(false)
-          document.body.style.cursor = 'auto'
-        }}
-      >
-        <boxGeometry args={[W3 * 0.42, 0.09, 0.045]} />
-        <meshStandardMaterial
-          color={hover ? '#38bdf8' : '#22314f'}
-          emissive={hover ? '#0ea5e9' : '#000000'}
-          emissiveIntensity={hover ? 0.6 : 0}
-          roughness={0.4}
-        />
-      </mesh>
+      <FocusGroup id={spec.id} objectRef={group} onStateChange={setFocus}>
+        <Surface
+          label={`lab006-${spec.id}`}
+          name={`lab006-${spec.id}`}
+          html={spec.html}
+          width={PANEL_W}
+          height={PANEL_H}
+          onSource={spec.feed}
+          onDoubleClick={approach}
+          castShadow
+        >
+          <planeGeometry args={[W3, H3]} />
+        </Surface>
+        {/* Grab handle: the one part of a panel that is matter, not screen.
+            Doubles as the focus lamp — unit selection glows it steady,
+            interior engagement brightens it. */}
+        <mesh
+          position={[0, H3 / 2 + 0.09, 0]}
+          onPointerDown={onHandleDown}
+          onPointerMove={onHandleMove}
+          onPointerUp={onHandleUp}
+          onPointerOver={() => {
+            setHover(true)
+            document.body.style.cursor = 'grab'
+          }}
+          onPointerOut={() => {
+            setHover(false)
+            document.body.style.cursor = 'auto'
+          }}
+        >
+          <boxGeometry args={[W3 * 0.42, 0.09, 0.045]} />
+          <meshStandardMaterial
+            color={hover || focus !== 'none' ? '#38bdf8' : '#22314f'}
+            emissive={focus === 'interior' ? '#22d3ee' : hover || focus === 'unit' ? '#0ea5e9' : '#000000'}
+            emissiveIntensity={focus === 'interior' ? 1.15 : hover || focus === 'unit' ? 0.6 : 0}
+            roughness={0.4}
+          />
+        </mesh>
+      </FocusGroup>
     </group>
   )
 }
@@ -281,6 +291,27 @@ export function Lab006() {
   )
 
   useEffect(() => injectLab006Styles(), [])
+
+  // Keyboard grammar (docs/focus.md × this lab): Tab SELECTS a panel (glow
+  // only — the ring is for surveying, not travel). Enter is the commitment
+  // gesture: descend fires whether or not the panel's DOM has focusables
+  // (most are read-only — you zoom in to READ), and that's the zoom-in
+  // moment. Escape's last rung (interior → unit → scene → here) steps the
+  // camera home. Mouse keeps its own grammar: double-click approaches, and
+  // 'pointer'-caused focus never moves the camera.
+  useFocusSceneEvents((e) => {
+    if (e.cause === 'descend' && e.groupId) {
+      const g = groups.current.get(e.groupId)
+      if (g && rig.current) {
+        rig.current.approach(
+          g.getWorldPosition(new THREE.Vector3()),
+          g.getWorldDirection(new THREE.Vector3()),
+        )
+      }
+    } else if (e.level === 'scene' && e.cause === 'escape') {
+      rig.current?.home()
+    }
+  })
 
   // Automation hooks: deterministic camera moves for agent-browser runs.
   useEffect(() => {

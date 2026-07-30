@@ -9,6 +9,7 @@ import { Lab005 } from './scenes/Lab005'
 import { Lab006, Lab006Hud } from './scenes/Lab006'
 import { ProbeScaleApp } from './scenes/ProbeScale'
 import { ProbeFocusApp } from './scenes/ProbeFocus'
+import { FocusScene } from './primitives/FocusScene'
 import { detectHtmlInCanvas } from './lib/htmlInCanvas'
 
 type LabId = '001' | '002' | '003' | '004' | '005' | '006'
@@ -68,31 +69,33 @@ export default function App() {
         }}
       >
         <KeepDomFocus />
-        <Suspense fallback={null}>
-          <Environment preset="city" />
-          {lab === '001' ? (
-            <Lab001 />
-          ) : lab === '002' ? (
-            <Lab002 />
-          ) : lab === '003' ? (
-            <Lab003 />
-          ) : lab === '004' ? (
-            <Lab004 />
-          ) : lab === '005' ? (
-            <Lab005 />
-          ) : (
-            <Lab006 />
-          )}
-          <ContactShadows position={[0, -0.15, 0]} opacity={0.5} blur={2.2} scale={20} />
-          <OrbitControls
-            makeDefault
-            enableDamping
-            target={[0, 1.4, 0]}
-            maxPolarAngle={Math.PI / 2.05}
-            minDistance={3}
-            maxDistance={16}
-          />
-        </Suspense>
+        <FocusScene>
+          <Suspense fallback={null}>
+            <Environment preset="city" />
+            {lab === '001' ? (
+              <Lab001 />
+            ) : lab === '002' ? (
+              <Lab002 />
+            ) : lab === '003' ? (
+              <Lab003 />
+            ) : lab === '004' ? (
+              <Lab004 />
+            ) : lab === '005' ? (
+              <Lab005 />
+            ) : (
+              <Lab006 />
+            )}
+            <ContactShadows position={[0, -0.15, 0]} opacity={0.5} blur={2.2} scale={20} />
+            <OrbitControls
+              makeDefault
+              enableDamping
+              target={[0, 1.4, 0]}
+              maxPolarAngle={Math.PI / 2.05}
+              minDistance={3}
+              maxDistance={16}
+            />
+          </Suspense>
+        </FocusScene>
       </Canvas>
 
       <div className="hud">

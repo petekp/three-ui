@@ -1,0 +1,220 @@
+import { describe, expect, it } from 'vitest'
+import {
+  createFocusTree,
+  createMemoryStack,
+  readingOrder,
+  type MemberInfo,
+  type OrderRect,
+} from './focusTree'
+
+const member = (id: string, order?: number): MemberInfo<null> => ({
+  id,
+  kind: 'composite',
+  order,
+  data: null,
+})
+
+describe('focusTree member ordering', () => {
+  it('returns members in registration order when no explicit orders', () => {
+    const t = createFocusTree<null>()
+    t.registerGroup('g')
+    t.registerMember('g', member('b'))
+    t.registerMember('g', member('a'))
+    t.registerMember('g', member('c'))
+    expect(t.members('g').map((m) => m.id)).toEqual(['b', 'a', 'c'])
+  })
+
+  it('sorts explicitly ordered members first, unordered after (Flutter OrderedTraversalPolicy)', () => {
+    const t = createFocusTree<null>()
+    t.registerGroup('g')
+    t.registerMember('g', member('late'))
+    t.registerMember('g', member('second', 2))
+    t.registerMember('g', member('first', 1))
+    t.registerMember('g', member('unordered'))
+    expect(t.members('g').map((m) => m.id)).toEqual(['first', 'second', 'late', 'unordered'])
+  })
+
+  it('breaks order ties by registration sequence (stable)', () => {
+    const t = createFocusTree<null>()
+    t.registerGroup('g')
+    t.registerMember('g', member('x', 5))
+    t.registerMember('g', member('y', 5))
+    t.registerMember('g', member('z', 5))
+    expect(t.members('g').map((m) => m.id)).toEqual(['x', 'y', 'z'])
+  })
+
+  it('re-registering a member updates in place without duplicating', () => {
+    const t = createFocusTree<null>()
+    t.registerGroup('g')
+    t.registerMember('g', member('a'))
+    t.registerMember('g', member('a', 1))
+    expect(t.members('g')).toHaveLength(1)
+    expect(t.members('g')[0].order).toBe(1)
+  })
+
+  it('lists groups in registration order', () => {
+    const t = createFocusTree<null>()
+    t.registerGroup('two')
+    t.registerGroup('one')
+    expect(t.groups().map((g) => g.id)).toEqual(['two', 'one'])
+  })
+})
+
+describe('focusTree memory stack', () => {
+  const build = () => {
+    const t = createFocusTree<null>()
+    t.registerGroup('g')
+    for (const id of ['a', 'b', 'c']) t.registerMember('g', member(id))
+    return t
+  }
+
+  it('recalls the most recently remembered member', () => {
+    const t = build()
+    t.remember('g', 'a')
+    t.remember('g', 'c')
+    expect(t.recall('g', () => true)?.id).toBe('c')
+  })
+
+  it('dedupes on remember — re-focusing moves to top instead of stacking', () => {
+    const t = build()
+    t.remember('g', 'a')
+    t.remember('g', 'b')
+    t.remember('g', 'a')
+    // a is top; popping it must land on b (not a second stale a)
+    expect(t.recall('g', (m) => m.id !== 'a')?.id).toBe('b')
+  })
+
+  it('lazily pops invalid entries and lands on next-most-recent (Flutter cleanout)', () => {
+    const t = build()
+    t.remember('g', 'a')
+    t.remember('g', 'b')
+    t.remember('g', 'c')
+    // c and b have become unfocusable since they were remembered
+    const valid = (m: MemberInfo<null>) => m.id === 'a'
+    expect(t.recall('g', valid)?.id).toBe('a')
+    // the pops are destructive: even with a permissive validator, b/c are gone
+    expect(t.recall('g', () => true)?.id).toBe('a')
+  })
+
+  it('returns null when the stack exhausts — caller falls back to first-in-order', () => {
+    const t = build()
+    t.remember('g', 'a')
+    expect(t.recall('g', () => false)).toBeNull()
+    expect(t.recall('g', () => true)).toBeNull()
+  })
+
+  it('clearMemory forgets everything (Escape-ascend contract)', () => {
+    const t = build()
+    t.remember('g', 'b')
+    t.clearMemory('g')
+    expect(t.recall('g', () => true)).toBeNull()
+  })
+
+  it('unregisterMember scrubs the memory stack eagerly', () => {
+    const t = build()
+    t.remember('g', 'a')
+    t.remember('g', 'b')
+    t.unregisterMember('g', 'b')
+    expect(t.recall('g', () => true)?.id).toBe('a')
+  })
+
+  it('ignores remember() for unknown members', () => {
+    const t = build()
+    t.remember('g', 'ghost')
+    expect(t.recall('g', () => true)).toBeNull()
+  })
+})
+
+describe('createMemoryStack — the shared discipline', () => {
+  it('dedupes by identity, not equality', () => {
+    const s = createMemoryStack<{ v: number }>()
+    const a = { v: 1 }
+    const twin = { v: 1 }
+    s.remember(a)
+    s.remember(twin)
+    s.remember(a) // a moves to top; twin must remain beneath it
+    expect(s.recall((x) => x !== a)).toBe(twin)
+  })
+
+  it('recall pops rejects destructively', () => {
+    const s = createMemoryStack<string>()
+    s.remember('x')
+    s.remember('y')
+    expect(s.recall((v) => v === 'x')).toBe('x') // y popped on the way down
+    expect(s.recall(() => true)).toBe('x')
+  })
+
+  it('forget removes mid-stack entries', () => {
+    const s = createMemoryStack<string>()
+    s.remember('a')
+    s.remember('b')
+    s.remember('c')
+    s.forget('b')
+    expect(s.recall((v) => v !== 'c')).toBe('a')
+  })
+
+  it('clear empties, recall returns null', () => {
+    const s = createMemoryStack<string>()
+    s.remember('a')
+    s.clear()
+    expect(s.recall(() => true)).toBeNull()
+  })
+})
+
+describe('readingOrder — Flutter band algorithm', () => {
+  const r = (id: string, x: number, y: number, w = 100, h = 100): OrderRect => ({ id, x, y, w, h })
+
+  it('orders a single row left to right regardless of input order', () => {
+    expect(readingOrder([r('c', 200, 0), r('a', 0, 0), r('b', 100, 0)])).toEqual(['a', 'b', 'c'])
+  })
+
+  it('orders rows top to bottom, each row left to right', () => {
+    expect(
+      readingOrder([r('d', 100, 200), r('b', 100, 0), r('c', 0, 200), r('a', 0, 0)]),
+    ).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('within a vertically-overlapping band the left rect wins even when slightly lower', () => {
+    // b is HIGHER than c but c is left of b, and they overlap vertically →
+    // same band → c first. A naive y-sort would emit a, b, c.
+    const rects = [r('a', 0, 0), r('b', 200, 20), r('c', 0, 40)]
+    expect(readingOrder(rects)).toEqual(['a', 'c', 'b'])
+  })
+
+  it('re-anchors the band after each pick (one removal per iteration)', () => {
+    // Flutter's loop removes ONE node per pick and re-derives the band from
+    // the new topmost ("removing the previously picked node will expose a
+    // new band"). After a1 is placed, b1 (top 60) anchors band [60,160);
+    // a2 (top 150) overlaps that band and sits further left → precedes b1.
+    // A whole-band-emission model would give a1, b1, a2 — that is NOT the
+    // reference semantics.
+    const rects = [r('a1', 0, 0, 100, 100), r('b1', 200, 60, 100, 100), r('a2', 0, 150, 100, 100)]
+    expect(readingOrder(rects)).toEqual(['a1', 'a2', 'b1'])
+  })
+
+  it('band membership requires actual overlap, not touching edges', () => {
+    // b starts exactly where a ends vertically — separate bands.
+    expect(readingOrder([r('b', 0, 100), r('a', 200, 0)])).toEqual(['a', 'b'])
+  })
+
+  it('is stable: identical rects keep input order', () => {
+    const rects = [r('first', 50, 50), r('second', 50, 50), r('third', 50, 50)]
+    expect(readingOrder(rects)).toEqual(['first', 'second', 'third'])
+  })
+
+  it('handles empty input', () => {
+    expect(readingOrder([])).toEqual([])
+  })
+
+  it('a tall rect anchors a band only while it is topmost', () => {
+    // tall spans y 0..300 and wins its band by x. Once removed, the band
+    // re-derives from short1's extent [0,100) which no longer reaches
+    // short2 — so short1 precedes short2 despite short2 being further left.
+    const rects = [
+      r('short1', 300, 0, 100, 100),
+      r('tall', 0, 0, 100, 300),
+      r('short2', 150, 200, 100, 100),
+    ]
+    expect(readingOrder(rects)).toEqual(['tall', 'short1', 'short2'])
+  })
+})

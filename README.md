@@ -645,3 +645,39 @@ proxies are paint-isolated from every source; and fixed positioning
 means focus can never scroll-jump the page. Every load-bearing
 assumption of the design is now measured, not argued. Next: the focus
 tree + boundary interception, then spatial ordering.
+
+**Increment 1 shipped — the Tab/Enter/Escape spine.** Pure core first:
+`focusTree.ts` (group registry, focus-memory stacks, Flutter's band
+reading-order — where writing the tests caught my own mental model
+being wrong: the reference algorithm removes ONE rect per pick and
+re-derives the band from the new topmost, it never emits whole bands;
+the suite now pins the traced semantics) and `tabbables.ts` (the
+tabbable-library subset that can occur in Surface markup; radio
+collapse, `:disabled` propagation, `getClientRects` visibility — the
+sort and radio rules unit-tested pure). On top: `<FocusScene>` routes
+Tab/Enter/F2/Escape at the document level with zero shadow state —
+every decision starts from `document.activeElement` — and
+`<FocusGroup>` + Surface auto-registration (via `FocusGroupContext`)
+make a lab-006 panel a focus group with one line. The unit element is
+the Surface source root itself at `tabindex="-1"`: selecting a panel
+IS document focus, and a `[data-focus]` stamp lets the shared
+stylesheet paint selection into the texture (border/box-shadow — paint
+properties, so it just repaints like any content change).
+
+Browser-verified with real CDP keys on the live arc: canvas is the
+page's entry stop; Tab walks units in camera-derived reading order;
+Enter descends into the deploy form (and approaches — the camera ride
+is keyed to `cause: 'descend'`, the commitment gesture, so Tab surveys
+without travel and mouse grammar is untouched); typing lands natively;
+Tab exits at the last-element identity to the next unit; Shift+Tab
+from the first interior element ascends to its own unit; re-Enter
+restores the remembered element; Escape clears that memory
+(Flutter's rule), then unit → scene → camera home down the ladder.
+One design find during verification: most panels (29 of 33) have no
+focusables at all, so "descend" now fires its intent regardless —
+you zoom into a read-only dashboard to read it. Idle contract held
+throughout: 33 surfaces at ~2 paints/s with the focus system live.
+Not in yet, deliberately: arrows/spatial nav, ARIA proxies for the
+physical controls, the announcer — and the scene ring closes into a
+loop rather than handing off to the page (that needs the proxy layer
+to own the page-side stops first).

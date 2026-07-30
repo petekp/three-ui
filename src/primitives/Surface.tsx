@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { use, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree, type ThreeElements, type ThreeEvent } from '@react-three/fiber'
 import { createDomTextureSource, type DomTextureSource } from '../lib/htmlInCanvas'
 import { DEFAULT_TIERS, clampTiers, selectLodTier, tiersInRange } from '../lib/lodTier'
 import { clearPointerState, forwardPointer, nudgeSelect } from './forwardEvents'
+import { FocusGroupContext } from './FocusScene'
 import { SurfaceContext, type SurfaceContextValue } from './SurfaceContext'
 
 // <Surface> — the atom of three-ui: a live DOM subtree as the skin of any
@@ -165,6 +166,19 @@ export function Surface({
     () => ({ mesh: meshRef, source: sourceEl, width, height, mirrorU }),
     [sourceEl, width, height, mirrorU],
   )
+
+  // Inside a FocusGroup, this Surface is a composite focus member: its
+  // source root becomes the group's unit element and its interior is
+  // browser-traversed DOM (docs/focus.md). Outside one, nothing changes.
+  const focusGroup = use(FocusGroupContext)
+  useEffect(() => {
+    if (!focusGroup || !sourceEl) return
+    return focusGroup.registerComposite({
+      root: sourceEl,
+      object: meshRef.current,
+      label,
+    })
+  }, [focusGroup, sourceEl, label])
 
   // A Surface mounted after the scene's first frame compiles its material
   // BEFORE the texture exists; three.js won't recompile the program when

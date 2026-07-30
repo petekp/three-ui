@@ -83,6 +83,13 @@ const CSS = `
   display:flex;flex-direction:column;gap:6px;font-size:10.5px;color:#475569}
 .p6 .kcard{background:#152036;border:1px solid #223354;border-radius:6px;padding:6px 8px;
   font-size:11px;color:#cbd5e1;line-height:1.35}
+/* Scene focus, painted into the texture. FocusScene stamps [data-focus] on
+   the source root (unit = selected in the ring, interior = descended into).
+   Paint properties only — border/box-shadow transitions are compositor-safe
+   and self-repaint (docs/authoring.md). */
+[data-focus] .p6{border-color:#38bdf8}
+[data-focus="unit"] .p6{box-shadow:inset 0 0 0 2px rgba(56,189,248,.38)}
+[data-focus="interior"] .p6{box-shadow:inset 0 0 0 2px rgba(125,211,252,.6)}
 `
 
 export function injectLab006Styles(): () => void {
