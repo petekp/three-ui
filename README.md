@@ -2,6 +2,19 @@
 
 An experimental, futuristic UI component library made of **real materials, real physics, and real depth** — three.js/WebGL underneath, shadcn-like ergonomics on top (eventually).
 
+This README is the **lab journal** — chronological, evidence-first. The
+durable knowledge is distilled in `docs/`:
+
+- [`docs/platform.md`](docs/platform.md) — what Chrome's HTML-in-canvas
+  actually does (dated observations + the experiments behind them, and a
+  re-verification checklist for new Chrome versions)
+- [`docs/authoring.md`](docs/authoring.md) — the Surface dialect: what
+  CSS belongs in a texture vs. on the mesh, and the paint budget
+- [`docs/decisions.md`](docs/decisions.md) — architecture decisions with
+  the measured alternatives we rejected
+- [`CLAUDE.md`](CLAUDE.md) — hard rules for anyone (human or agent)
+  coding here
+
 ## lab 001 — feasibility
 
 ```bash
@@ -36,8 +49,9 @@ The origin trial works, but the real contract is stricter than the blog post sug
 7. **(lab 005 addendum)** `onpaint` also fires *without* `requestPaint`
    whenever the subtree's paint record changes — which makes a fully
    passive upload-on-paint pipeline possible, and compositor-animated
-   properties (opacity/transform keyframes) *never* rasterize. See the
-   scale-probe section.
+   properties (opacity/transform keyframes *and transitions*) never
+   rasterize. Full contract + experiments now live in
+   [`docs/platform.md`](docs/platform.md).
 
 Verified live: a ticking clock inside the DOM subtree shows up in the 3D texture in real time.
 
