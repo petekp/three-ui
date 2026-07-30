@@ -134,13 +134,26 @@ LOD possible at all; a screenshot API could never do it.
 
 | # | Claim | Evidence |
 |---|---|---|
-| 8 | `drawElementImage` honors the 2D context transform: `setTransform(k,0,0,k,0,0)` replays the record at k× with crisp re-rasterized text (verified k = 0.5, 1.5, 3) | lab 006 close-up screenshots, before/after |
+| 8 | **(corrected 2026-07-30)** The replay auto-scales by the canvas's **backing/CSS ratio**, and the CTM multiplies **on top**: effective scale = ratio × CTM. Resize the backing and draw under an **identity** CTM; a CTM of k on a k×-resized canvas double-applies (k² — content crops to the top-left 1/k of the face) | position-marker dots at known CSS coords: ratio 3 + CTM 1 → 3×; ratio 1 + CTM 3 → 3×; ratio 3 + CTM 3 → 9×; ratio 0.5 + CTM 1 → 0.5× |
 | 9 | Resizing the backing store while the canvas's **CSS size is pinned** never relayouts the subtree: focus, caret, selection, and form state survive | contenteditable held focus + caret through 1.5→0.5→1.5 swaps mid-edit |
 | 10 | A backing-store resize does **not** self-fire `onpaint` (the element's record didn't change) — an explicit `requestPaint()` is required after resize | `setScale` in htmlInCanvas.ts |
 | 11 | A rescale costs exactly one paint + one upload | doc-0 lifetime: 3 paints total across mount → 1.5× → 3×; 41 tier changes during a full orbit sweep at a held 120fps |
 
-Context state resets on resize, so the transform is reapplied inside
-every `onpaint` (cheap), not set once.
+Context state resets on resize, so the (identity) transform is asserted
+inside every `onpaint` (cheap), not set once.
+
+**How claim 8's original version survived falsified for a day.** The
+first form — "the CTM scales the replay, verified k = 0.5/1.5/3" — was
+established with crispness screenshots and an edge-width probe. Both are
+**scale-blind**: a vector re-raster is crisp at *any* effective scale,
+and alpha-coverage scans can't tell "full doc at k×" from "top-left crop
+at k²×" (both fill the canvas with opaque pixels). The k² error shipped
+invisibly because a *second* bug (three.js immutable texture storage,
+decisions #10) ate every high-tier upload; fixing that unmasked this.
+Only **position-aware** probes discriminate: marker dots at known CSS
+coordinates (measure centroid and size in the canvas), or a full-element
+dye read against expected bounds. Any future claim about *where* the
+replay lands must be established that way.
 
 ## Re-verification checklist (when Chrome updates)
 
@@ -153,3 +166,8 @@ every `onpaint` (cheap), not set once.
 6. Rescale: dolly inside 1.5 world units of a lab-006 panel → tier 3
    commits with one paint, glyphs sharpen; a focused field keeps its
    caret through the swap.
+7. Replay scale (position-aware — crispness alone cannot verify this):
+   inject a 6px marker dot at a known CSS position, resize backing to
+   k× with identity CTM → dot centroid at k× its CSS position, k× its
+   size, at k = 0.5 and 3. If the auto-ratio behavior changed, the
+   identity-CTM contract in `htmlInCanvas.ts` must change with it.

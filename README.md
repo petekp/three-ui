@@ -562,3 +562,39 @@ minutes earlier manufactured a phantom contradiction — camera easing
 and re-renders drift the scene between captures. The probe that
 settled it read the source canvas (`getImageData`) and the bound GL
 texture (scratch-FBO `readPixels`) in a single step.
+
+### Follow-up, next morning: the dye was right
+
+Pete woke to the inverse artifact: zoom in and panels showed a
+magnified top-left crop — "the larger textures exceed the size of the
+surface." Reproduced at dpr 1 by forcing retina density
+(`setPixelRatio(2)` → tiers 3+ commit), then measured with the probe
+this saga finally taught us to write: **position-marker dots** at known
+CSS coordinates, read back from the canvas by centroid and size.
+
+Verdict: `drawElementImage` scales the replay by the canvas's
+**backing/CSS ratio** all by itself, and the CTM multiplies on top.
+Our onpaint did both — resize to k× *and* CTM k× — so every tier
+rendered at **k²**: tier 3 drew at 9× (a third of the doc visible),
+tier 0.5 at 0.25× (far panels quietly showing quarter-size content in
+a corner — the "murky far panel" look we'd been accepting as normal).
+Yesterday's realloc fix (#10) didn't cause it; it **unmasked** it —
+before #10, every high-tier upload died at the GL layer, so faces kept
+stale-but-complete 1× content instead of the mis-scaled raster.
+
+The fix deletes a line: onpaint draws under an identity transform; the
+backing resize *is* the scale (decision #11). Dot-verified through the
+real pipeline (tier 3 → exactly 3×, tier 1 → exactly 1×), storm-tested
+with zero GL errors, and the rest state is full-bleed legible on every
+panel for the first time since the LOD stack shipped.
+
+Two reckonings for the record. Platform claim 8 — "the CTM scales the
+replay, verified 0.5/1.5/3" — stood for a day on evidence that could
+not falsify it: crispness screenshots and edge-width probes are
+scale-blind (vectors are crisp at *every* wrong scale), and alpha
+coverage can't tell a full doc from a magnified crop. And last night's
+magenta-dye quadrant, written off as a confounded probe, was a correct
+measurement of this exact bug at tier 0.5. The probe wasn't flawed;
+the model it contradicted was. Claim 8 is rewritten, the checklist
+gains a position-aware step, and the standing rule is now: probes that
+claim *where* content lands must mark positions, not vibes.

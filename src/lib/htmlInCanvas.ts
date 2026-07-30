@@ -152,12 +152,14 @@ export function createDomTextureSource(
 
   canvas.onpaint = () => {
     try {
-      // Resizing the canvas resets context state, so the transform is
-      // (re)applied per paint. drawElementImage honors the CTM: the paint
-      // record replays scaled, re-rasterizing text at the new density.
+      // The replay is auto-scaled by the canvas's backing/CSS ratio, and any
+      // CTM multiplies ON TOP of that (measured with position-marker dots:
+      // effective = ratio × CTM at every k — platform.md #8). setScale sets
+      // the ratio, so the CTM must stay identity here or the scale applies
+      // twice (k² — the crop-to-top-left bug). Identity is still asserted
+      // per paint because a resize resets context state.
       ctx.setTransform(1, 0, 0, 1, 0, 0)
       ctx.clearRect(0, 0, canvas.width, canvas.height)
-      ctx.setTransform(scale, 0, 0, scale, 0, 0)
       ctx.drawElementImage(element, 0, 0)
       ok = true
       stats.paints++

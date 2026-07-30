@@ -199,3 +199,35 @@ contradiction for an hour while camera easing and React re-renders
 drifted the scene between captures; the settling probe read the source
 canvas (`getImageData`) and the bound GL texture (scratch-FBO
 `readPixels`) in a single step.
+
+## 11. onpaint draws under an identity CTM; the backing ratio IS the scale (2026-07-30)
+
+**Context.** The morning after #10 shipped, Pete reported the inverse
+artifact: at high tiers the face showed a magnified **top-left crop** of
+the document ("the larger textures exceed the size of the surface").
+Reproduced at dpr 1 by forcing retina density (`setPixelRatio(2)`).
+**Diagnosis, measured.** Position-marker dots at known CSS coordinates
+pinned the replay transform exactly: `drawElementImage` auto-scales by
+the canvas's **backing/CSS ratio**, and the CTM multiplies on top —
+ratio 3 + CTM 1 → 3×; ratio 1 + CTM 3 → 3×; ratio 3 + CTM 3 → 9×. Our
+onpaint resized the backing to k× *and* set a k× CTM: effective k² at
+every tier (tier 3 → 9×, showing 1/3 of the doc; tier 0.5 → 0.25×, the
+doc huddled in the top-left quarter of every far panel). #10's realloc
+fix *unmasked* it — before #10, high-tier uploads died at the GL layer
+and faces kept stale-but-complete 1× content. **Decision.** `onpaint`
+asserts an **identity** transform and just draws; `setScale`'s backing
+resize alone supplies the scale. **Rejected.** (a) *CTM-based scaling*
+(the original design) — double-applies, measured k². (b) *Compensating
+CTM* (`k/ratio`) — identity is that expression's fixed point for exact
+backings, and non-integer CSS sizes make ratio ≠ k by rounding; carrying
+a second scale source invites re-divergence. **Consequence.** Faces are
+correct at every tier; rest-state far panels — quietly quarter-content
+since the LOD stack shipped — are full-bleed for the first time.
+platform.md claim 8 rewritten with the corrected contract and a
+position-aware re-verification step. Probe lesson, the real one this
+time: #10 dismissed the magenta-dye quadrant as a confounded probe — it
+was a **correct measurement of this bug** at tier 0.5. Crispness and
+alpha-coverage are scale-blind; only position-aware probes (dots, dye
+against expected bounds) can verify *where* a replay lands. When a
+probe's result contradicts the model, instrument the probe before
+indicting it.
