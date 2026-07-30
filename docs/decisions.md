@@ -127,7 +127,8 @@ invariant that keeps focus alive. **Consequence.** Glyph sharpness
 tracks proximity automatically; idle cost unchanged (two integer reads +
 a dozen flops every 10th frame). The ladder's 3× cap is the memory
 guard — extreme close-ups soften rather than allocate unboundedly.
-*(Amended same day by #9: cap raised to 6×, mipmap policy added.)*
+*(Amended same day by #9: cap raised to 6×, mipmap policy added; #10:
+tier swaps must realloc GL storage.)*
 
 ## 9. Reading tiers are mip-free; the ladder is the mip chain (2026-07-29, LOD follow-up)
 
@@ -155,3 +156,46 @@ demand the near edge of a nose-against-glass panel softens instead of
 allocating >30MB — deliberate saturation. Probe lesson worth keeping:
 verify camera *arrival* in the same eval as the screenshot — a damped
 OrbitControls ease faked one "1:1 is soft" data point.
+
+## 10. Tier swaps realloc GL storage on the post-resize paint (2026-07-29, LOD ghost hunt)
+
+**Context.** After #8/#9 shipped, tier swaps left artifacts: a shrunken
+ghost of the panel composited in one corner over stale content
+(downshift), and "fuzzy despite upshifting" residue (upshift) — uneven
+across panels, erratic while zooming. The handoff suspected platform
+timing (deferred paint records resolving into resized canvases). All
+platform hypotheses were moot — Chrome did everything right.
+**Diagnosis, measured.** three.js allocates non-video `CanvasTexture`
+storage **immutably** (`texStorage2D`) at first-upload dimensions and
+issues `texSubImage2D` at the canvas's *current* size forever after.
+`setScale` resizes the backing store, so a shrink sub-blits the whole
+re-raster into a corner of the stale storage (the ghost), and a grow
+throws `GL_INVALID_VALUE: glCopySubTextureCHROMIUM: Offset overflows
+texture dimensions` — every upshift, silently keeping old texels.
+Per-panel unevenness was just per-panel swap history. **Decision.**
+`Surface` records `paintCount` when a `setScale` commits; on the first
+frame the counter moves **strictly past** that mark (⟺ the post-resize
+paint itself has landed — onpaint can't interleave mid-rAF),
+`texture.dispose()` + re-apply filter policy. three then reallocates at
+the new dimensions with a full upload. The mip policy must ride the
+same moment: level count bakes into the allocation (`getMipLevels` at
+alloc time). **Rejected.** (a) *Dispose at the commit frame* — the
+just-resized backing store is cleared and unpainted; the realloc's
+first upload would flash a blank panel every swap. (b) *Double-buffer
+old texture through the swap* — extra state and a duplicate texture's
+memory per swap, to reproduce a signal (`paintCount`) the platform
+already gives us; same lesson as #3. (c) *Waiting for three to handle
+it* — it can't: immutable storage is by design, and allocation is
+keyed on `__version === undefined`, not on image dimensions.
+**Consequence.** A tier swap costs paint + realloc + full upload —
+measured invisible (71 reallocs across an approach/home storm, both
+directions, 120fps held; 33/33 panels canvas-dims == storage-dims
+after). Regression tripwire: `GL_INVALID_VALUE …
+glCopySubTextureCHROMIUM` in the console means canvas and storage
+dimensions have diverged again. Probe lesson, paid for twice now (#9):
+sample **all** facts of a claim in one atomic eval — a dye screenshot
+compared against GL logs captured minutes apart chased a phantom
+contradiction for an hour while camera easing and React re-renders
+drifted the scene between captures; the settling probe read the source
+canvas (`getImageData`) and the bound GL texture (scratch-FBO
+`readPixels`) in a single step.

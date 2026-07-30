@@ -518,3 +518,47 @@ in one paint with the ladder jumping 1.5->6 directly; extreme 0.7-
 unit close-ups saturate softly at the near edge by design. Probe
 lesson: verify camera arrival in the same eval as the screenshot — a
 damped OrbitControls ease faked one data point.
+
+### Follow-up, same night: the tier-swap ghost
+
+One more falsification: tier swaps were leaving a shrunken ghost of
+the panel composited in one corner over stale content, panels behaved
+unevenly, and zooming popped erratically. The handoff suspected exotic
+platform timing — deferred paint records resolving into resized
+canvases. Wrong neighborhood entirely: **Chrome was doing everything
+right. three.js was the culprit.**
+
+three allocates non-video `CanvasTexture` storage *immutably*
+(`texStorage2D`) at first-upload dimensions, then `texSubImage2D`s the
+canvas's current size forever after. `setScale` resizes the backing
+store — so a downshift sub-blitted the whole re-raster into a corner
+of the stale storage (the ghost), and an upshift threw
+`GL_INVALID_VALUE` (offset overflows texture dimensions) on every
+frame, silently keeping the old texels — the real source of "fuzzy
+despite upshifting." Per-panel unevenness was nothing but per-panel
+swap history.
+
+Fix (decision #10): `Surface` marks `paintCount` when a `setScale`
+commits, and `dispose()`s the texture on the first frame the counter
+moves strictly *past* the mark — i.e. the post-resize paint itself has
+landed. three reallocates at the new dimensions with a full upload;
+the mip policy rides the same moment because level count bakes in at
+allocation. Never from the commit frame — the just-resized backing
+store is a cleared, unpainted buffer that would flash blank.
+
+Verified with GL-call instrumentation (every `createTexture` /
+`texStorage2D` / `texSubImage2D` tagged): **33/33 panels report
+canvas dims == storage dims** at rest and through an approach/home
+storm that forced **71 reallocs in both directions** — console clean
+of GL errors (pre-fix: every upshift errored), no ghosts, idle back
+to 0 paints/s with only the authored periphery pulses bursting,
+120fps held. Caveat for morning eyes: automation Chrome runs dpr 1;
+the mechanism is proven at the GL level, but the retina judgement
+call on residual pop is Pete's.
+
+Probe lesson, paid for twice now: sample every fact of a claim in one
+atomic eval. A magenta-dye screenshot compared against GL logs from
+minutes earlier manufactured a phantom contradiction — camera easing
+and re-renders drift the scene between captures. The probe that
+settled it read the source canvas (`getImageData`) and the bound GL
+texture (scratch-FBO `readPixels`) in a single step.

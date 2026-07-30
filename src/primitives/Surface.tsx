@@ -116,6 +116,11 @@ export function Surface({
   const pressedRef = useRef(false)
   const lastUploadRef = useRef(-1)
   const extraUploadsRef = useRef(0)
+  // paintCount at the moment setScale resized the canvas; -1 = none pending.
+  // The GL realloc below waits for the counter to move strictly PAST this
+  // (onpaint can't interleave mid-rAF, so count > mark ⟺ the post-resize
+  // paint itself has landed — not some same-frame unrelated self-paint).
+  const reallocAfterRef = useRef(-1)
   const resolutionRef = useRef(resolution)
   resolutionRef.current = resolution
   const tiers = useMemo(() => clampTiers(DEFAULT_TIERS, width, height), [width, height])
@@ -159,6 +164,7 @@ export function Surface({
 
     lastUploadRef.current = -1
     extraUploadsRef.current = 0
+    reallocAfterRef.current = -1
 
     const focusIn = () => onFocusWithin?.(true)
     const focusOut = () => onFocusWithin?.(false)
@@ -182,9 +188,11 @@ export function Surface({
   // Fixed-resolution changes re-raster in place — never recreate the source
   // (that would destroy live DOM state: focus, form values, selection).
   useEffect(() => {
-    if (typeof resolution === 'number' && sourceRef.current) {
-      sourceRef.current.setScale(resolution)
-      if (texture) applyFilterPolicy(texture, sourceRef.current.scale())
+    const source = sourceRef.current
+    if (typeof resolution === 'number' && source) {
+      const prev = source.scale()
+      source.setScale(resolution)
+      if (source.scale() !== prev) reallocAfterRef.current = source.paintCount()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolution, texture])
@@ -222,7 +230,7 @@ export function Surface({
                 lod.tier = proposal
                 lod.agree = 0
                 source.setScale(proposal)
-                applyFilterPolicy(texture, proposal)
+                reallocAfterRef.current = source.paintCount()
               }
             } else {
               lod.proposed = proposal
@@ -232,10 +240,26 @@ export function Surface({
         }
       }
     }
+    // A committed setScale resized the canvas backing store. three allocates
+    // GL texture storage immutably (texStorage2D) at FIRST-upload dimensions
+    // and texSubImage2Ds every upload after — against a resized canvas, a
+    // shrink lands the whole re-raster in one corner of the stale texture
+    // (the LOD ghost) and a grow fails GL_INVALID_VALUE, silently keeping
+    // the old texels. dispose() exactly once, on the first upload after the
+    // post-resize paint has landed, so three reallocates at the new size —
+    // never from the swap frame itself, where the canvas is still a cleared,
+    // unpainted backing store. The filter policy rides the same moment: the
+    // realloc picks its mip-level count from generateMipmaps at alloc time.
+    const count = source.paintCount()
+    if (reallocAfterRef.current >= 0 && count > reallocAfterRef.current && source.painted()) {
+      texture.dispose()
+      applyFilterPolicy(texture, source.scale())
+      reallocAfterRef.current = -1
+    }
     if (paint === 'always') {
       source.repaint()
       if (source.painted()) texture.needsUpdate = true
-      lastUploadRef.current = source.paintCount()
+      lastUploadRef.current = count
       return
     }
     // Upload-on-paint: the compositor already tells us exactly when the
@@ -244,7 +268,6 @@ export function Surface({
     // the probe showed unconditional repainting caps an app at ~64 sources.
     // One extra upload after the counter stops covers the draw's deferred
     // resolve trailing the paint by up to a frame.
-    const count = source.paintCount()
     if (count !== lastUploadRef.current) {
       lastUploadRef.current = count
       extraUploadsRef.current = 1
