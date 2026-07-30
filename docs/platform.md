@@ -124,6 +124,24 @@ at 60Hz — the ceiling is refresh-relative). Weaker hardware unmeasured.
 A real interaction for scale: one lab-005 toggle flip = **2 paints
 total** (mount + the coalesced flip mutations), then quiescent.
 
+## Rescale — the record replays as vectors (2026-07-29, lab 006 addendum)
+
+The display-list model has an upside as load-bearing as its limits:
+paint records are **resolution-independent draw commands**. Replaying
+one under a scaled CTM is a true re-render — glyphs re-rasterize at the
+new density — not a bitmap upscale. This is what makes dynamic texture
+LOD possible at all; a screenshot API could never do it.
+
+| # | Claim | Evidence |
+|---|---|---|
+| 8 | `drawElementImage` honors the 2D context transform: `setTransform(k,0,0,k,0,0)` replays the record at k× with crisp re-rasterized text (verified k = 0.5, 1.5, 3) | lab 006 close-up screenshots, before/after |
+| 9 | Resizing the backing store while the canvas's **CSS size is pinned** never relayouts the subtree: focus, caret, selection, and form state survive | contenteditable held focus + caret through 1.5→0.5→1.5 swaps mid-edit |
+| 10 | A backing-store resize does **not** self-fire `onpaint` (the element's record didn't change) — an explicit `requestPaint()` is required after resize | `setScale` in htmlInCanvas.ts |
+| 11 | A rescale costs exactly one paint + one upload | doc-0 lifetime: 3 paints total across mount → 1.5× → 3×; 41 tier changes during a full orbit sweep at a held 120fps |
+
+Context state resets on resize, so the transform is reapplied inside
+every `onpaint` (cheap), not set once.
+
 ## Re-verification checklist (when Chrome updates)
 
 1. HUD chips: `drawElementImage ✓ / texElementImage2D ✓` on load.
@@ -132,3 +150,6 @@ total** (mount + the coalesced flip mutations), then quiescent.
 4. Compositor: animated-opacity experiment — alpha still frozen? (If this
    *starts working*, the authoring rules in authoring.md can be relaxed.)
 5. Probe: `?probe=128` → 120fps at 0 paints/s; `?probe=96&live=1` ceiling.
+6. Rescale: dolly inside 1.5 world units of a lab-006 panel → tier 3
+   commits with one paint, glyphs sharpen; a focused field keeps its
+   caret through the swap.

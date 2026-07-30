@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree, type ThreeElements, type ThreeEvent } from '@react-three/fiber'
 import { createDomTextureSource, type DomTextureSource } from '../lib/htmlInCanvas'
+import { DEFAULT_TIERS, clampTiers, selectLodTier } from '../lib/lodTier'
 import { clearPointerState, forwardPointer, nudgeSelect } from './forwardEvents'
 import { SurfaceContext, type SurfaceContextValue } from './SurfaceContext'
 
@@ -44,10 +45,30 @@ export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children'> {
   paint?: 'auto' | 'always'
   /** Flip the texture horizontally (for concave/back-face geometries). */
   mirrorU?: boolean
+  /**
+   * Texture density policy. 'auto' (default) is dynamic LOD: the texture is
+   * re-rasterized (a true vector replay, not an upscale) whenever the
+   * surface's projected screen size crosses a tier boundary — approach a
+   * panel and its glyphs sharpen; back away and memory is returned. Tier
+   * selection has hysteresis and a two-evaluation debounce, so an orbiting
+   * camera can't thrash resizes. A number pins texels-per-CSS-px (1 =
+   * legacy behavior, 2 = fixed retina).
+   */
+  resolution?: 'auto' | number
   side?: THREE.Side
   roughness?: number
   metalness?: number
 }
+
+// LOD evaluations run every Nth frame, phase-offset per Surface so a scene
+// of many panels spreads the (tiny) projection math and never re-rasters a
+// cohort on the same frame.
+const LOD_EVERY = 10
+const LOD_AGREE = 2
+let lodSeq = 0
+const _camPos = new THREE.Vector3()
+const _surfPos = new THREE.Vector3()
+const _surfScale = new THREE.Vector3()
 
 export function Surface({
   html,
@@ -59,6 +80,7 @@ export function Surface({
   onSource,
   paint = 'auto',
   mirrorU = false,
+  resolution = 'auto',
   side = THREE.FrontSide,
   roughness = 0.35,
   metalness = 0.05,
@@ -67,6 +89,8 @@ export function Surface({
   const controls = useThree(
     (s) => s.controls as { enabled?: boolean } | null,
   )
+  const camera = useThree((s) => s.camera)
+  const gl = useThree((s) => s.gl)
   const [texture, setTexture] = useState<THREE.CanvasTexture | null>(null)
   const [sourceEl, setSourceEl] = useState<HTMLElement | null>(null)
   const sourceRef = useRef<DomTextureSource | null>(null)
@@ -75,6 +99,11 @@ export function Surface({
   const pressedRef = useRef(false)
   const lastUploadRef = useRef(-1)
   const extraUploadsRef = useRef(0)
+  const resolutionRef = useRef(resolution)
+  resolutionRef.current = resolution
+  const tiers = useMemo(() => clampTiers(DEFAULT_TIERS, width, height), [width, height])
+  const lodRef = useRef({ tier: 1, proposed: 1, agree: 0, frame: 0 })
+  const lodPhase = useMemo(() => lodSeq++ % LOD_EVERY, [])
 
   const context = useMemo<SurfaceContextValue>(
     () => ({ mesh: meshRef, source: sourceEl, width, height, mirrorU }),
@@ -92,10 +121,14 @@ export function Surface({
   useEffect(() => {
     const source = createDomTextureSource(html, width, height, {
       label,
+      // Fixed resolution starts at its final scale; auto starts at 1 and
+      // lets the first LOD evaluations settle it (~2 cheap re-rasters max).
+      scale: typeof resolutionRef.current === 'number' ? resolutionRef.current : 1,
       onError: (err) => console.warn('[three-ui] Surface paint failed:', err),
     })
     sourceRef.current = source
     setSourceEl(source.element)
+    lodRef.current = { tier: source.scale(), proposed: source.scale(), agree: 0, frame: 0 }
 
     const tex = new THREE.CanvasTexture(source.canvas)
     tex.colorSpace = THREE.SRGBColorSpace
@@ -128,9 +161,54 @@ export function Surface({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [html, width, height, mirrorU, paint])
 
+  // Fixed-resolution changes re-raster in place — never recreate the source
+  // (that would destroy live DOM state: focus, form values, selection).
+  useEffect(() => {
+    if (typeof resolution === 'number') sourceRef.current?.setScale(resolution)
+  }, [resolution])
+
   useFrame(() => {
     const source = sourceRef.current
     if (!source || !texture) return
+    // Dynamic LOD: every LOD_EVERY-th frame (phase-offset per instance),
+    // compare projected screen density — device px per CSS px — against the
+    // current tier; setScale re-rasters through the normal onpaint path, so
+    // the upload below picks it up like any other content change.
+    if (resolution === 'auto' && meshRef.current) {
+      const lod = lodRef.current
+      if (lod.frame++ % LOD_EVERY === lodPhase) {
+        const cam = camera as THREE.PerspectiveCamera
+        const geom = meshRef.current.geometry
+        if (cam.isPerspectiveCamera && geom) {
+          if (!geom.boundingSphere) geom.computeBoundingSphere()
+          const sphere = geom.boundingSphere
+          if (sphere) {
+            meshRef.current.getWorldPosition(_surfPos)
+            meshRef.current.getWorldScale(_surfScale)
+            cam.getWorldPosition(_camPos)
+            const dist = Math.max(_camPos.distanceTo(_surfPos), 1e-3)
+            const worldDiag =
+              2 * sphere.radius * Math.max(_surfScale.x, _surfScale.y, _surfScale.z)
+            const pxPerWorld =
+              gl.domElement.height / (2 * dist * Math.tan((cam.fov * Math.PI) / 360))
+            const density = (pxPerWorld * worldDiag) / Math.hypot(width, height)
+            const proposal = selectLodTier(density, lod.tier, tiers)
+            if (proposal === lod.tier) {
+              lod.agree = 0
+            } else if (proposal === lod.proposed) {
+              if (++lod.agree >= LOD_AGREE) {
+                lod.tier = proposal
+                lod.agree = 0
+                source.setScale(proposal)
+              }
+            } else {
+              lod.proposed = proposal
+              lod.agree = 1
+            }
+          }
+        }
+      }
+    }
     if (paint === 'always') {
       source.repaint()
       if (source.painted()) texture.needsUpdate = true

@@ -72,6 +72,16 @@ DOM writes where the feel allows; a layout transition makes that Surface
 free-idle contract — reserve it for content that changes without paint
 records, and expect it to spend budget continuously.
 
+## Resolution
+
+Authors do nothing: `resolution="auto"` (the default) re-rasterizes the
+texture when the Surface's projected screen size crosses a tier
+boundary — walk up to a panel and its type sharpens; back away and the
+memory returns. Each committed tier costs one paint, debounced and
+hysteresis-guarded, so it never competes with the animation budget. Pin
+`resolution={n}` only when density must not change (e.g. a texture
+consumed by a shader that assumes fixed texel coordinates).
+
 ## Interaction caveats (current)
 
 - Fast-**moving** interactive Surfaces can dodge a click (press-time UV

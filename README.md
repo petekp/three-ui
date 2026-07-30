@@ -452,3 +452,47 @@ curvature, and anchoring all earn their keep and same-origin doesn't
 bite. Next lab points there; the workspace framing goes in the drawer
 marked "reopen in a headset." The scene stays in-tree as the best
 scale/focus/typing harness we have.
+
+## lab 006 addendum — dynamic LOD: the DOM as a procedural texture
+
+Pete called out that every DOM render to date has been low-res and
+hard to read. Root cause was two missing pieces: the source canvas was
+sized in CSS pixels (devicePixelRatio never consulted), and nothing
+answered *magnification* — mipmaps + anisotropy only help far away;
+walk up to a 420-texel panel filling 1200 screen px and you get
+bilinear soup. The fix fell out of the platform mental model: paint
+records are vector draw commands, so replaying one under a scaled CTM
+is a **true re-render** — crisper glyphs, like a PDF, not an upscaled
+screenshot. We are generating the mip level the GPU wishes it had,
+on demand, from the live source.
+
+What shipped (`resolution="auto"`, the new Surface default):
+
+- **A tier ladder, not a dial.** Projected density (device px per CSS
+  px, from camera distance / fov / drawing-buffer height / bounding
+  sphere) picks from quantized tiers 0.5–3×. Selection is a Schmitt
+  trigger (±15% hysteresis band) plus a two-evaluation debounce,
+  evaluated every 10th frame, phase-offset per Surface — a camera
+  parked on a boundary cannot thrash. Pure + unit-tested
+  (`src/lib/lodTier.ts`).
+- **Re-raster rides the normal paint path.** `setScale` resizes the
+  backing store (CSS size pinned — the subtree never relayouts) and
+  requests one paint; upload-on-paint consumes it like any content
+  change. No new observers, no new loops.
+
+Verified in the lab-006 arc (33 panels, headed Chrome 150):
+
+- doc-0 lifetime across mount → approach → 1.15-unit close-up:
+  **3 paints total** (one per committed tier), text sharp at 3×.
+- Full orbit sweep: 41 tier changes, **≤2 per source, zero
+  oscillators**, 120fps held. At rest: 9 far panels downshifted to
+  0.5× (memory returned), all else quiet.
+- A contenteditable held **focus, caret, and content through
+  1.5→0.5→1.5 swaps mid-edit** — typing lands while the panel
+  renders at any tier.
+
+Platform contract grew claims #8–11 (CTM-scaled replay is vector;
+pinned-CSS resize never touches the subtree; resize needs an explicit
+requestPaint; one paint per rescale) and decision #8 records the
+rejected alternatives (fixed retina everywhere, continuous matching,
+CSS zoom).

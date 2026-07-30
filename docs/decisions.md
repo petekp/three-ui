@@ -101,3 +101,29 @@ there: static reference, never `e.point`). **Rejected.** A fixed
 below-eye "board" plane — dead whenever the grab-time ray points above
 the horizon. **Consequence.** The reference frame stays static
 (clientX/Y), capture-safe, and behaves identically at every row height.
+
+## 8. Texture density is dynamic LOD, quantized with hysteresis (2026-07-29, lab 006 addendum)
+
+**Context.** Every Surface rasterized at CSS-pixel size — 2× blurry on
+retina at rest, mush on approach. Mipmaps only solve *minification*;
+magnification has no GPU answer. But paint records replay as vectors
+(platform.md #8), so re-rastering at k× yields genuinely sharper glyphs.
+**Decision.** `resolution="auto"` (default): compare each Surface's
+projected screen density (device px per CSS px) against a quantized tier
+ladder (0.5–3×); switch through a Schmitt trigger (±15% band) plus a
+two-evaluation debounce, evaluated every 10th frame, phase-offset per
+instance. `setScale` re-rasters through the normal onpaint path — one
+paint + one upload per committed tier — and the canvas's pinned CSS size
+keeps the subtree un-relayouted, so focus/caret survive swaps.
+Downshifting below 1× returns memory on far panels. **Rejected.**
+(a) *Fixed retina everywhere* — pays dpr² memory on every panel
+including far ones, and still blurs on approach. (b) *Continuous
+per-frame matching* — spends the scarce paint budget on camera motion;
+quantized+debounced spends ~1 paint per settled boundary crossing
+(measured: 41 tier changes across a full orbit sweep, ≤2 per source,
+zero oscillators, 120fps held). (c) *CSS `zoom` on the element* — a real
+relayout per tier, destroying the resize-never-touches-the-subtree
+invariant that keeps focus alive. **Consequence.** Glyph sharpness
+tracks proximity automatically; idle cost unchanged (two integer reads +
+a dozen flops every 10th frame). The ladder's 3× cap is the memory
+guard — extreme close-ups soften rather than allocate unboundedly.

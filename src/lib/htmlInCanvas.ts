@@ -49,6 +49,18 @@ export interface DomTextureSource {
   element: HTMLElement
   /** Force a repaint request (rarely needed — see paintCount). */
   repaint: () => void
+  /** Current texture scale (backing-store px per CSS px). */
+  scale: () => number
+  /**
+   * Re-rasterize the subtree at `width×k`/`height×k` backing-store pixels.
+   * drawElementImage replays paint records — vector draw commands — so this
+   * is a true re-render (sharper glyphs), not an upscale. The canvas's CSS
+   * size stays pinned, so the subtree never relayouts and DOM state (focus,
+   * caret, selection) is untouched. The repaint rides the normal onpaint
+   * path: paintCount advances, so upload-on-paint consumers need no extra
+   * plumbing.
+   */
+  setScale: (k: number) => void
   /** True once at least one paint has succeeded. */
   painted: () => boolean
   /**
@@ -67,6 +79,8 @@ export interface DomTextureSource {
 export interface DomTextureSourceOptions {
   /** Name shown in the paint-stats diagnostics registry. */
   label?: string
+  /** Initial texture scale (backing-store px per CSS px). Default 1. */
+  scale?: number
   onError?: (err: unknown) => void
 }
 
@@ -79,6 +93,8 @@ export interface PaintStats {
   label: string
   paints: number
   errors: number
+  /** Current LOD texture scale (backing-store px per CSS px). */
+  scale: number
   lastError?: string
 }
 
@@ -108,15 +124,19 @@ export function createDomTextureSource(
   options: DomTextureSourceOptions = {},
 ): DomTextureSource {
   const { label = `source-${sourceSeq++}`, onError } = options
+  let scale = clampScale(options.scale ?? 1)
   const canvas = document.createElement('canvas') as TrialCanvas
-  canvas.width = width
-  canvas.height = height
+  canvas.width = Math.max(1, Math.round(width * scale))
+  canvas.height = Math.max(1, Math.round(height * scale))
   canvas.layoutSubtree = true
   // Must stay in-document AND on-screen to get paint records — off-screen
   // (left:-10000px) canvases are skipped by the compositor and never paint.
   // Parking it behind the page (z-index:-1) keeps it painted but unseen.
+  // CSS size is pinned to the layout size so backing-store changes
+  // (setScale) never relayout the subtree — focus/caret/selection survive.
   canvas.style.cssText =
-    'position:fixed;left:0;top:0;z-index:-1;pointer-events:none;'
+    `position:fixed;left:0;top:0;z-index:-1;pointer-events:none;` +
+    `width:${width}px;height:${height}px;`
 
   const host = document.createElement('div')
   host.innerHTML = markup
@@ -127,12 +147,17 @@ export function createDomTextureSource(
   const ctx = canvas.getContext('2d') as TrialContext2D
   let ok = false
 
-  const stats: PaintStats = { label, paints: 0, errors: 0 }
+  const stats: PaintStats = { label, paints: 0, errors: 0, scale }
   registry.add(stats)
 
   canvas.onpaint = () => {
     try {
-      ctx.clearRect(0, 0, width, height)
+      // Resizing the canvas resets context state, so the transform is
+      // (re)applied per paint. drawElementImage honors the CTM: the paint
+      // record replays scaled, re-rasterizing text at the new density.
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.setTransform(scale, 0, 0, scale, 0, 0)
       ctx.drawElementImage(element, 0, 0)
       ok = true
       stats.paints++
@@ -149,6 +174,19 @@ export function createDomTextureSource(
     canvas,
     element,
     repaint: () => canvas.requestPaint(),
+    scale: () => scale,
+    setScale: (k: number) => {
+      const next = clampScale(k)
+      if (next === scale) return
+      scale = next
+      stats.scale = next
+      // Resizing clears the backing store, but nothing uploads the blank:
+      // consumers only upload after paintCount advances, which happens when
+      // the requested paint below completes with the fresh raster.
+      canvas.width = Math.max(1, Math.round(width * next))
+      canvas.height = Math.max(1, Math.round(height * next))
+      canvas.requestPaint()
+    },
     painted: () => ok,
     paintCount: () => stats.paints,
     dispose: () => {
@@ -157,4 +195,8 @@ export function createDomTextureSource(
       registry.delete(stats)
     },
   }
+}
+
+function clampScale(k: number): number {
+  return Number.isFinite(k) ? Math.min(8, Math.max(0.1, k)) : 1
 }
