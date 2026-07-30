@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree, type ThreeElements, type ThreeEvent } from '@react-three/fiber'
 import { createDomTextureSource, type DomTextureSource } from '../lib/htmlInCanvas'
-import { DEFAULT_TIERS, clampTiers, selectLodTier } from '../lib/lodTier'
+import { DEFAULT_TIERS, clampTiers, selectLodTier, tiersInRange } from '../lib/lodTier'
 import { clearPointerState, forwardPointer, nudgeSelect } from './forwardEvents'
 import { SurfaceContext, type SurfaceContextValue } from './SurfaceContext'
 
@@ -46,15 +46,26 @@ export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children'> {
   /** Flip the texture horizontally (for concave/back-face geometries). */
   mirrorU?: boolean
   /**
-   * Texture density policy. 'auto' (default) is dynamic LOD: the texture is
-   * re-rasterized (a true vector replay, not an upscale) whenever the
-   * surface's projected screen size crosses a tier boundary — approach a
-   * panel and its glyphs sharpen; back away and memory is returned. Tier
-   * selection has hysteresis and a two-evaluation debounce, so an orbiting
-   * camera can't thrash resizes. A number pins texels-per-CSS-px (1 =
-   * legacy behavior, 2 = fixed retina).
+   * Texture density policy, shaped like r3f's `dpr`:
+   *
+   * - `'auto'` (default) — dynamic LOD over the full tier ladder
+   *   (0.25–6×): the texture is re-rasterized (a true vector replay, not
+   *   an upscale) whenever the surface's projected screen size crosses a
+   *   tier boundary — approach a panel and its glyphs sharpen; back away
+   *   and memory is returned. Tier selection has hysteresis and a
+   *   two-evaluation debounce, so an orbiting camera can't thrash
+   *   resizes. Idle cost is ~zero; a committed swap costs one paint +
+   *   one GL realloc + one upload.
+   * - `[min, max]` — dynamic LOD constrained to the inclusive range:
+   *   `[1, 6]` never lets text drop below 1:1 (kiosk/hero panels),
+   *   `[0.25, 2]` caps memory in panel-heavy scenes, `[1, Infinity]`
+   *   sets a floor with no ceiling. Same machinery, sliced ladder.
+   * - `number` — pins texels-per-CSS-px (1 = legacy behavior, 2 = fixed
+   *   retina). No LOD evaluations run.
+   *
+   * Every form still respects the 4096px long-edge texture guard.
    */
-  resolution?: 'auto' | number
+  resolution?: 'auto' | number | [min: number, max: number]
   side?: THREE.Side
   roughness?: number
   metalness?: number
@@ -85,6 +96,16 @@ function applyFilterPolicy(tex: THREE.Texture, tier: number) {
     tex.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter
     tex.needsUpdate = true
   }
+}
+
+// Mount seed for dynamic LOD: the ladder tier nearest 1×. Normally exactly
+// 1, but a range like [2, 4] seeds at 2 so the very first raster is already
+// in-range, and a Surface so wide the 4096 guard removed tier 1 seeds at
+// its clamped floor instead of transiently allocating an oversize canvas.
+function seedTier(ladder: readonly number[]): number {
+  let best = ladder[0]
+  for (const t of ladder) if (Math.abs(t - 1) < Math.abs(best - 1)) best = t
+  return best
 }
 
 export function Surface({
@@ -123,7 +144,20 @@ export function Surface({
   const reallocAfterRef = useRef(-1)
   const resolutionRef = useRef(resolution)
   resolutionRef.current = resolution
-  const tiers = useMemo(() => clampTiers(DEFAULT_TIERS, width, height), [width, height])
+  // Destructure the tuple into primitives so an inline `resolution={[1, 2]}`
+  // (fresh array identity every render) can't defeat the memo.
+  const [rangeMin, rangeMax] = Array.isArray(resolution)
+    ? resolution
+    : ([null, null] as const)
+  const tiers = useMemo(() => {
+    const ladder =
+      rangeMin !== null && rangeMax !== null
+        ? tiersInRange(DEFAULT_TIERS, rangeMin, rangeMax)
+        : DEFAULT_TIERS
+    return clampTiers(ladder, width, height)
+  }, [width, height, rangeMin, rangeMax])
+  const tiersRef = useRef(tiers)
+  tiersRef.current = tiers
   const lodRef = useRef({ tier: 1, proposed: 1, agree: 0, frame: 0 })
   const lodPhase = useMemo(() => lodSeq++ % LOD_EVERY, [])
 
@@ -143,9 +177,13 @@ export function Surface({
   useEffect(() => {
     const source = createDomTextureSource(html, width, height, {
       label,
-      // Fixed resolution starts at its final scale; auto starts at 1 and
-      // lets the first LOD evaluations settle it (~2 cheap re-rasters max).
-      scale: typeof resolutionRef.current === 'number' ? resolutionRef.current : 1,
+      // Fixed resolution starts at its final scale; auto/range starts at
+      // the ladder tier nearest 1× and lets the first LOD evaluations
+      // settle it (~2 cheap re-rasters max).
+      scale:
+        typeof resolutionRef.current === 'number'
+          ? resolutionRef.current
+          : seedTier(tiersRef.current),
       onError: (err) => console.warn('[three-ui] Surface paint failed:', err),
     })
     sourceRef.current = source
@@ -204,7 +242,7 @@ export function Surface({
     // compare projected screen density — device px per CSS px — against the
     // current tier; setScale re-rasters through the normal onpaint path, so
     // the upload below picks it up like any other content change.
-    if (resolution === 'auto' && meshRef.current) {
+    if ((resolution === 'auto' || Array.isArray(resolution)) && meshRef.current) {
       const lod = lodRef.current
       if (lod.frame++ % LOD_EVERY === lodPhase) {
         const cam = camera as THREE.PerspectiveCamera

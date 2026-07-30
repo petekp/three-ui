@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_TIERS, clampTiers, selectLodTier } from './lodTier'
+import { DEFAULT_TIERS, clampTiers, selectLodTier, tiersInRange } from './lodTier'
 
 // density = desired texels per CSS px (projected device px per css px).
 // selectLodTier is a Schmitt trigger over a quantized tier ladder: the
@@ -54,6 +54,55 @@ describe('selectLodTier', () => {
 
   it('adopts the nearest tier when current is not on the ladder', () => {
     expect(selectLodTier(1.0, 1.1, TIERS)).toBe(1)
+  })
+})
+
+describe('tiersInRange', () => {
+  it('slices the ladder to the inclusive range', () => {
+    expect(tiersInRange(DEFAULT_TIERS, 0.5, 3)).toEqual([0.5, 1, 1.5, 2, 3])
+    expect(tiersInRange(TIERS, 1, 2)).toEqual([1, 1.5, 2])
+  })
+
+  it('normalizes swapped bounds', () => {
+    expect(tiersInRange(TIERS, 2, 1)).toEqual([1, 1.5, 2])
+  })
+
+  it('treats an infinite bound as open-ended', () => {
+    // resolution={[1, Infinity]} = "never below 1:1, no ceiling".
+    expect(tiersInRange(DEFAULT_TIERS, 1, Number.POSITIVE_INFINITY)).toEqual([
+      1, 1.5, 2, 3, 4, 6,
+    ])
+  })
+
+  it('a degenerate [k, k] on a tier pins to that tier', () => {
+    expect(tiersInRange(TIERS, 1.5, 1.5)).toEqual([1.5])
+  })
+
+  it('a range landing between tiers pins to the nearest tier (tie → lower)', () => {
+    // 1 and 1.5 both miss [1.1, 1.4] by 0.1 → the cheaper tier wins.
+    expect(tiersInRange(DEFAULT_TIERS, 1.1, 1.4)).toEqual([1])
+    expect(tiersInRange(DEFAULT_TIERS, 7, 9)).toEqual([6])
+    expect(tiersInRange(DEFAULT_TIERS, 0.05, 0.1)).toEqual([0.25])
+  })
+
+  it('NaN bounds disable the range (full ladder, not a floor pin)', () => {
+    expect(tiersInRange(TIERS, Number.NaN, 2)).toEqual(TIERS)
+    expect(tiersInRange(TIERS, 1, Number.NaN)).toEqual(TIERS)
+  })
+
+  it('composes with clampTiers: intent range first, physical guard second', () => {
+    // [2, 6] on a 1600-css-wide panel: the range keeps [2, 3, 4, 6], then
+    // the 4096 long-edge guard drops 3/4/6 (3×1600 = 4800) — the user's
+    // floor survives as the sole tier.
+    expect(clampTiers(tiersInRange(DEFAULT_TIERS, 2, 6), 1600, 900, 4096)).toEqual([2])
+  })
+
+  it('selectLodTier over a sliced ladder saturates at the range ceiling', () => {
+    // Close-up demanding 4× under resolution={[0.5, 2]}: covers with the
+    // max in-range tier and stays there (no covering tier exists → last).
+    const sliced = tiersInRange(DEFAULT_TIERS, 0.5, 2)
+    expect(selectLodTier(4, 1, sliced)).toBe(2)
+    expect(selectLodTier(4, 2, sliced)).toBe(2)
   })
 })
 

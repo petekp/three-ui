@@ -62,6 +62,44 @@ export function selectLodTier(
 }
 
 /**
+ * Slice a ladder to an inclusive [min, max] density range — the tuple form
+ * of Surface's `resolution` prop (shaped like r3f's `dpr`). The range
+ * expresses *intent* (a floor/ceiling on texture density); the ladder's
+ * *structure* stays ours — tier spacing is coupled to the hysteresis band,
+ * and any contiguous slice of a valid ladder is still thrash-free by
+ * construction, which a user-authored ladder would not be.
+ *
+ * Swapped bounds are normalized. ±Infinity are legitimate open bounds
+ * ([1, Infinity] = "never below 1:1"); NaN disables the range. A range
+ * landing between tiers (e.g. [1.1, 1.4]) degrades to the single nearest
+ * tier — a graceful pin, never an empty ladder.
+ */
+export function tiersInRange(
+  tiers: readonly number[],
+  min: number,
+  max: number,
+): number[] {
+  if (tiers.length === 0) return []
+  if (Number.isNaN(min) || Number.isNaN(max)) return [...tiers]
+  const lo = Math.min(min, max)
+  const hi = Math.max(min, max)
+  const within = tiers.filter((t) => t >= lo && t <= hi)
+  if (within.length > 0) return within
+  // Nothing inside: pin to the tier nearest the *interval* (ties take the
+  // lower tier — cheaper memory for the same miss distance).
+  let best = tiers[0]
+  let bestDist = Number.POSITIVE_INFINITY
+  for (const t of tiers) {
+    const d = t < lo ? lo - t : t - hi
+    if (d < bestDist) {
+      best = t
+      bestDist = d
+    }
+  }
+  return [best]
+}
+
+/**
  * Restrict a tier ladder so no tier would allocate a canvas larger than
  * `maxDim` on its long edge (GPU texture ceilings, memory sanity). Always
  * keeps the smallest tier so every Surface has a valid floor.

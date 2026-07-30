@@ -231,3 +231,33 @@ alpha-coverage are scale-blind; only position-aware probes (dots, dye
 against expected bounds) can verify *where* a replay lands. When a
 probe's result contradicts the model, instrument the probe before
 indicting it.
+
+## 12. `resolution` exposes intent (bounds), not structure (the ladder) (2026-07-30)
+
+**Context.** With the LOD stack stable, the question became its public
+face. The internals carry paid-for invariants (#8–#11): tier spacing
+must exceed the hysteresis band or a parked camera oscillates; the
+upshift-jump/downshift-step asymmetry assumes roughly geometric
+spacing; the mip policy and realloc contract key off tier values.
+**Decision.** One prop, three forms, shaped like r3f's `dpr` (the
+vocabulary the audience already knows): `resolution="auto"` (full
+ladder), `resolution={2}` (pinned), `resolution={[min, max]}` (auto
+over the inclusive slice — `[1, 6]` "never sub-legible", `[0.25, 2]`
+memory cap, `[1, Infinity]` open ceiling). The slice is computed by
+`tiersInRange` (pure, tested): any contiguous slice of a valid ladder
+is still thrash-free by construction, so bounds grant the useful 90%
+of control without ever handing out an invalid ladder. An empty
+intersection degrades to the nearest tier (a graceful pin); dynamic
+LOD now seeds at the ladder tier nearest 1× so the first raster is
+already in-range (side fix: oversize Surfaces no longer transiently
+allocate a >4096px canvas at mount). **Rejected.** (a) *A raw
+`tiers={[...]}` prop* — `tiers={[1, 1.05, 1.1]}` is a thrash generator
+that would present as our bug; users express floor/ceiling intent,
+not spacing theory. (b) *`onTierChange` callback* — debugging is
+already served by `__threeUI.stats()`; add it the day something must
+*react* to commits (e.g. a video layer switching stream quality), not
+before. (c) *Renaming to `dpr`* — borrows the shape but would imply
+display-tracking; the value is projected density, camera-driven.
+**Consequence.** `LOD_EVERY`/`LOD_AGREE`/`BAND` and the ladder stay
+internal and freely tunable; the public contract is only "density
+between min and max, chosen sensibly."

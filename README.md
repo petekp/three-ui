@@ -598,3 +598,20 @@ measurement of this exact bug at tier 0.5. The probe wasn't flawed;
 the model it contradicted was. Claim 8 is rewritten, the checklist
 gains a position-aware step, and the standing rule is now: probes that
 claim *where* content lands must mark positions, not vibes.
+
+### Follow-up, same day: the dev API — `resolution` learns the dpr shape
+
+With the stack stable, LOD got its public face (decision #12). One
+prop, three forms, borrowed from the `dpr` vocabulary every r3f user
+already knows: `resolution="auto"` (default, full 0.25–6× ladder),
+`resolution={2}` (pinned), and new — `resolution={[min, max]}`, dynamic
+LOD constrained to a slice: `[1, 6]` never lets a hero panel go
+sub-legible, `[0.25, 2]` caps memory in panel-heavy scenes,
+`[1, Infinity]` is a floor with no ceiling. The deliberate omission is
+the ladder itself: tier spacing is coupled to the hysteresis band, so a
+user-authored ladder is a thrash generator waiting to present as our
+bug — bounds expose the intent while any contiguous slice stays
+thrash-free by construction. `tiersInRange` is pure and tested
+(46/46); mount now seeds at the in-range tier nearest 1×, which as a
+side effect stops oversize Surfaces from transiently allocating a
+>4096px canvas on their first raster.
