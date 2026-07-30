@@ -84,3 +84,20 @@ triangle search (O(tris) × anchors), or world-space anchoring (breaks
 under deformation). **Consequence.** Same limit as raycast forwarding:
 GPU-side displacement is invisible (CPU buffers are the truth). Overlap
 caveat: first containing UV triangle wins.
+
+## 7. Conceptual DOFs map pointer deltas; only literal planes get ray ∩ plane (2026-07-29, lab 006)
+
+**Context.** Lab 006 panels reposition on a cylindrical arc (angle +
+radius). First implementation followed #4's letter: ray ∩ a horizontal
+plane seated at the grab point. **Failure, measured.** Upper-row handles
+sit above eye level; a downward-pointing ray meets an overhead plane
+receding toward infinity — "pull toward me" read as "fly away" (radius
+7 → 8.6, straight to the clamp). **Decision.** When the drag's degree of
+freedom is *conceptual* (arc angle, radius, a list index), map pointer
+**deltas** to the parameters (screen-x → Δangle, screen-y → Δradius) —
+the same shape as `use1DOF`'s pointer→q mapping. Reserve `e.ray` ∩ plane
+for DOFs that literally are a world-space plane or axis (#4 unchanged
+there: static reference, never `e.point`). **Rejected.** A fixed
+below-eye "board" plane — dead whenever the grab-time ray points above
+the horizon. **Consequence.** The reference frame stays static
+(clientX/Y), capture-safe, and behaves identically at every row height.

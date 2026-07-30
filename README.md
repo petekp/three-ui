@@ -398,3 +398,57 @@ Real-scene shape: a lab-005 toggle flip is **2 paints total** (mount +
 the coalesced flip mutations), then quiescent. The practical answer to
 "how many Surfaces?": *idle ones are free; budget ~64–96 simultaneously
 animating ones at 120Hz.*
+
+## lab 006 — the spatial workspace (falsified, usefully)
+
+Concept under test: **attention is a place** — ~33 real DOM panels
+(live feeds, editable notes, working forms) on a 210° arc around the
+viewer; periphery stays ambient via paint pulses, approach makes panels
+fully real, drag repositions them. One day on the existing kit:
+`arcLayout` (pure, 5 tests) + `Lab006.tsx` + a content module authored
+in the dialect. The *plumbing* held completely; the *framing* did not.
+
+### What held (Chrome 150, agent-browser, flags chip-checked)
+
+- 33 Surfaces at **0 paints/s idle, 120fps**; each feed pulse is one
+  background transition (~120 paints/s for <1s), then silence — the
+  corner HUD narrates the upload-on-paint contract live.
+- Canvas click → UV → focus landed in a `contenteditable`; 12 native
+  keypresses put "typing is real" in the DOM (16 paints, caret blinks
+  included). Hover mirrored onto a 3D-angled button; the deploy form
+  ran its full arc ("deploying v1.4.2 → staging…" → "live ✓").
+- Grab-and-pull: a panel dragged off the arc, radius 7.0 → 3.9.
+
+### What falsified the framing
+
+1. **On a monitor, "periphery" is not peripheral vision.** All 33
+   panels land in the same foveal rectangle; oblique ones are just
+   smaller, hazier text, and panels past the viewport edge are worse
+   than a tab (no badge). The paradigm's sensory claim only transfers
+   to displays that wrap you. XR concept, demoed prematurely on a desk.
+2. **The navigation tax loses to cmd-tab.** Double-click + 0.9s dolly
+   round-trips slower than a 200ms window switch. Space-as-container
+   adds travel cost to content 2D serves instantly — the same reason
+   Data Mountain and Task Gallery never shipped.
+3. **Same-origin quietly guts "your tools in one room."** Sources must
+   be same-origin children of the canvas: no Gmail, no Linear. Panels
+   can only be *this app's own DOM* — a real product would have to be
+   the whole workspace, not aggregate existing ones.
+4. **The API wasn't load-bearing.** Occlusion incidental, lighting
+   decorative, physics unused: as built, CSS perspective transforms
+   could fake ~90% of it. Fails the demo bar's first criterion.
+
+Drag yielded a real contract refinement — ray ∩ horizontal-plane drags
+die for handles above eye level; conceptual DOFs want pointer-delta
+mapping instead ([decisions.md #7](docs/decisions.md)).
+
+### Verdict
+
+**Container vs referent.** This scene made 3D a *container* for flat
+work. Every commercially real use of the bridge makes 3D the
+*referent* — configurator, twin, CAD, game world — with DOM attached
+to the thing that is already legitimately 3D. There, occlusion,
+curvature, and anchoring all earn their keep and same-origin doesn't
+bite. Next lab points there; the workspace framing goes in the drawer
+marked "reopen in a headset." The scene stays in-tree as the best
+scale/focus/typing harness we have.

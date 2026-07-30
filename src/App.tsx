@@ -6,10 +6,11 @@ import { Lab002 } from './scenes/Lab002'
 import { Lab003 } from './scenes/Lab003'
 import { Lab004 } from './scenes/Lab004'
 import { Lab005 } from './scenes/Lab005'
+import { Lab006, Lab006Hud } from './scenes/Lab006'
 import { ProbeScaleApp } from './scenes/ProbeScale'
 import { detectHtmlInCanvas } from './lib/htmlInCanvas'
 
-type LabId = '001' | '002' | '003' | '004' | '005'
+type LabId = '001' | '002' | '003' | '004' | '005' | '006'
 
 // ?probe=N mounts the scale probe instead of the labs (see ProbeScale.tsx).
 function probeParams() {
@@ -45,7 +46,7 @@ function KeepDomFocus() {
 export default function App() {
   const support = useMemo(detectHtmlInCanvas, [])
   const probe = useMemo(probeParams, [])
-  const [lab, setLab] = useState<LabId>('005')
+  const [lab, setLab] = useState<LabId>('006')
 
   if (probe) return <ProbeScaleApp {...probe} />
 
@@ -71,8 +72,10 @@ export default function App() {
             <Lab003 />
           ) : lab === '004' ? (
             <Lab004 />
-          ) : (
+          ) : lab === '005' ? (
             <Lab005 />
+          ) : (
+            <Lab006 />
           )}
           <ContactShadows position={[0, -0.15, 0]} opacity={0.5} blur={2.2} scale={20} />
           <OrbitControls
@@ -90,7 +93,7 @@ export default function App() {
         <h1>three-ui / lab {lab}</h1>
         <p className="sub">a component library made of real materials</p>
         <div className="tabs">
-          {(['001', '002', '003', '004', '005'] as const).map((id) => (
+          {(['001', '002', '003', '004', '005', '006'] as const).map((id) => (
             <button
               key={id}
               data-active={lab === id}
@@ -125,8 +128,11 @@ export default function App() {
               ? 'open the mode picker — the dropdown is its own Surface · __threeUI.stats() for paint counts'
               : lab === '004'
                 ? 'open both pickers — same anchor code on flat and curved skin · the flag tag rides the wave'
-                : 'flick the dial · tap the toggles · throw the slider — one integrator, three force fields'}
+                : lab === '005'
+                  ? 'flick the dial · tap the toggles · throw the slider — one integrator, three force fields'
+                  : 'double-click a panel to approach · double-click the floor to step back · drag a title bar · click into text and type'}
       </div>
+      {lab === '006' && <Lab006Hud />}
     </div>
   )
 }
