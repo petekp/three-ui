@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { useFrame, useThree, type ThreeElements, type ThreeEvent } from '@react-three/fiber'
 import { createDomTextureSource, type DomTextureSource } from '../lib/htmlInCanvas'
 import { DEFAULT_TIERS, clampTiers, selectLodTier, tiersInRange } from '../lib/lodTier'
-import { clearPointerState, forwardPointer, nudgeSelect } from './forwardEvents'
+import { clearPointerState, deepestElementAt, forwardPointer, nudgeSelect } from './forwardEvents'
 import { FocusGroupContext } from './FocusScene'
 import { SurfaceContext, type SurfaceContextValue } from './SurfaceContext'
 
@@ -77,6 +77,26 @@ export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children'> {
    * the slab shows the scene through everywhere the DOM drew nothing.
    */
   transparent?: boolean
+  /**
+   * What the raycaster is allowed to hit.
+   *
+   * - `'plane'` (default) — the whole quad. A panel is a solid slab.
+   * - `'content'` — only where the source DOM accepts the pointer. The slab
+   *   becomes glass: rays pass through the clear parts and reach whatever
+   *   stands behind it, and the surface never reports a hover it did not get.
+   *
+   * `'content'` is what makes a floating layer possible. Its slab is full
+   * panel size and stands in front of the panel it belongs to, so with
+   * `'plane'` the moment a popover opened the layer caught every ray, the
+   * panel behind went dead, and — hearing `pointerOut` — dismissed the very
+   * thing that had just opened.
+   *
+   * The declaration lives in CSS, where it already does on a 2D page: the
+   * portal container sets `pointer-events: none` and its content sets `auto`.
+   * `'content'` also makes the surface's own root transparent, since a bare
+   * full-size container is scaffolding, not a thing to touch.
+   */
+  hitTest?: 'plane' | 'content'
 }
 
 // LOD evaluations run every Nth frame, phase-offset per Surface so a scene
@@ -131,6 +151,7 @@ export function Surface({
   roughness = 0.35,
   metalness = 0.05,
   transparent = false,
+  hitTest = 'plane',
   ...meshProps
 }: SurfaceProps) {
   const controls = useThree(
@@ -153,6 +174,48 @@ export function Surface({
   const reallocAfterRef = useRef(-1)
   const resolutionRef = useRef(resolution)
   resolutionRef.current = resolution
+  const hitTestRef = useRef(hitTest)
+  hitTestRef.current = hitTest
+  const mirrorURef = useRef(mirrorU)
+  mirrorURef.current = mirrorU
+
+  /**
+   * The hit region. With `hitTest="content"` the quad is only intersected
+   * where the source DOM accepts the pointer — a ray through the clear part of
+   * a floating layer carries on to the panel behind, exactly as it would pass
+   * through a `pointer-events: none` container on a 2D page.
+   *
+   * Declining here rather than inside the handlers is the whole point: an
+   * intersection r3f never sees is one it never counts as a hover, so the
+   * surface behind keeps the pointer instead of being told it lost it.
+   *
+   * Installed unconditionally and branching on a ref, never swapped out for
+   * `undefined`: r3f assigns props onto the instance, and handing back
+   * undefined does not restore the class default, it leaves the last function
+   * attached — the mesh would stay permanently un-hittable.
+   */
+  const raycast = useMemo<THREE.Object3D['raycast']>(
+    () =>
+      function (this: THREE.Mesh, raycaster, intersects) {
+        if (hitTestRef.current !== 'content') {
+          THREE.Mesh.prototype.raycast.call(this, raycaster, intersects)
+          return
+        }
+        const el = sourceRef.current?.element
+        if (!el) return
+        const hits: THREE.Intersection[] = []
+        THREE.Mesh.prototype.raycast.call(this, raycaster, hits)
+        const rect = el.getBoundingClientRect()
+        for (const hit of hits) {
+          if (!hit.uv) continue
+          const u = mirrorURef.current ? 1 - hit.uv.x : hit.uv.x
+          const x = rect.left + u * rect.width
+          const y = rect.top + (1 - hit.uv.y) * rect.height
+          if (deepestElementAt(el, x, y)) intersects.push(hit)
+        }
+      },
+    [],
+  )
   // Destructure the tuple into primitives so an inline `resolution={[1, 2]}`
   // (fresh array identity every render) can't defeat the memo.
   const [rangeMin, rangeMax] = Array.isArray(resolution)
@@ -225,6 +288,13 @@ export function Surface({
     lastUploadRef.current = -1
     extraUploadsRef.current = 0
     reallocAfterRef.current = -1
+
+    // A content-hit-tested surface is clear glass by default: the root is a
+    // bare container the scene put content into, not a thing to touch. What is
+    // inside declares its own. (createDomTextureSource sets 'auto' here to
+    // re-root the cascade out of the parking canvas — this is the override,
+    // and it lands before onSource so a scene can still have the last word.)
+    if (hitTestRef.current === 'content') source.element.style.pointerEvents = 'none'
 
     const focusIn = () => onFocusWithin?.(true)
     const focusOut = () => onFocusWithin?.(false)
@@ -379,8 +449,8 @@ export function Surface({
     if (controls) controls.enabled = true
     if (!uv || !source || !pressedRef.current) return
     pressedRef.current = false
-    const { target } = forwardPointer(source.element, uv.u, uv.v, 'up')
-    if (target instanceof HTMLSelectElement) nudgeSelect(target)
+    const hit = forwardPointer(source.element, uv.u, uv.v, 'up')
+    if (hit?.target instanceof HTMLSelectElement) nudgeSelect(hit.target)
   }
 
   const handleMove = (e: ThreeEvent<PointerEvent>) => {
@@ -397,6 +467,7 @@ export function Surface({
   return (
     <mesh
       ref={meshRef}
+      raycast={raycast}
       {...meshProps}
       onPointerDown={handleDown}
       onPointerUp={handleUp}

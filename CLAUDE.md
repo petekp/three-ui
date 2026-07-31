@@ -29,6 +29,16 @@ in `docs/` — **read `docs/platform.md` before touching
   arms its close listener; sent synchronously, the move lands before that
   listener exists. A real pointer keeps moving after it leaves — ours has
   to as well (decisions.md #19).
+- **A Surface that floats in front of another one must be
+  `hitTest="content"`.** A full-panel transparent slab is the front-most
+  mesh from the frame it goes live, so it catches every ray and the panel
+  behind hears `onPointerOut` — which fires the departure burst above and
+  dismisses whatever just opened. Content-gating makes the ray pass through
+  wherever the DOM painted nothing, and subsumes liveness gating entirely
+  (an empty layer is inert by construction). Its container needs
+  `pointer-events: none` with `auto` on its children — `.ui-layer > *` in
+  `ui.css` — and note `createDomTextureSource` re-roots the cascade to
+  `auto`, because the parking canvas's `none` inherits (decisions.md #20).
 - **Don't add repaint loops, MutationObservers, or dirty-flag heuristics
   to `Surface`.** `paint="auto"` is passive on purpose: the compositor's
   self-firing `onpaint` is the change signal (`paintCount`). Measured

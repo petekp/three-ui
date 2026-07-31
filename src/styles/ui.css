@@ -117,6 +117,16 @@
   .ui-layer {
     @apply font-sans text-foreground antialiased;
   }
+  /* The portal-container idiom, unchanged from a 2D page: the container is
+   * clear to the pointer, what it holds is not. On a Surface this is also
+   * what the RAYCASTER reads (Surface `hitTest="content"`), so a ray through
+   * the clear part of the slab carries on to the panel behind it instead of
+   * stopping at glass. Without it, opening a tooltip put a full-panel slab in
+   * front of its own trigger — and the panel, hearing the ray leave,
+   * dismissed the tooltip it had just opened. */
+  .ui-layer > * {
+    pointer-events: auto;
+  }
 }
 
 /* three-ui dialect: FocusScene stamps data-focus on the unit root (the

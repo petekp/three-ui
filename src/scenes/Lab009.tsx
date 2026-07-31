@@ -8,8 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { Mesh } from 'three'
-import type { Group, Object3D } from 'three'
+import type { Group, Mesh } from 'three'
 import { FocusGroup, Surface } from '../index'
 import { useAnimationConductor } from '../primitives/useAnimationConductor'
 import { Badge } from '@/components/ui/badge'
@@ -72,22 +71,6 @@ const H3 = PANEL_H / PX
 // separate slab (its own shadow, its own specular) without breaking the
 // illusion that it belongs to the card.
 const LAYER_LIFT = 0.13
-
-/**
- * Raycast only while `live()` says so.
- *
- * The obvious spelling — `raycast={live ? undefined : noop}` — silently
- * fails: r3f applies props onto the instance, and handing back `undefined`
- * does not restore the class default, it leaves the last function attached.
- * The slab stayed permanently un-hittable and every click fell through to
- * the card behind it. One stable function that reads a ref instead.
- */
-function gatedRaycast(live: () => boolean): Object3D['raycast'] {
-  return function (this: Object3D, raycaster, intersects) {
-    if (!live()) return
-    Mesh.prototype.raycast.call(this, raycaster, intersects)
-  }
-}
 
 interface FlightSample {
   t: number
@@ -353,10 +336,6 @@ function FloatingPanel({ position, rotation }: {
     [layerHost],
   )
 
-  const liveRef = useRef(layerLive)
-  liveRef.current = layerLive
-  const raycast = useMemo(() => gatedRaycast(() => liveRef.current), [])
-
   // Occupancy watch. The content is mounted by a DIFFERENT React root (the
   // card's, portaling in), so no effect in this tree ever re-runs when a
   // popover opens — there is nothing passive to observe. childList on the
@@ -440,8 +419,10 @@ function FloatingPanel({ position, rotation }: {
 
       {/* The floating layer. Same size and origin as the panel, standing
           off it along the normal. Transparent everywhere the DOM painted
-          nothing — and when nothing is open, inert to the raycaster so it
-          does not swallow clicks meant for the card behind it. */}
+          nothing — to the eye AND to the raycaster, so rays through the
+          clear part reach the card behind instead of stopping at glass.
+          `hitTest="content"` subsumes the old liveness gate: an empty layer
+          accepts the pointer nowhere, so it is inert by construction. */}
       <group ref={layerGroup} name="l9-layer" position={[0, 0, LAYER_LIFT]} visible={layerLive}>
         <Surface
           label="lab009-layer"
@@ -451,7 +432,7 @@ function FloatingPanel({ position, rotation }: {
           onSource={mountLayer}
           transparent
           castShadow
-          raycast={raycast}
+          hitTest="content"
         >
           <planeGeometry args={[W3, H3]} />
         </Surface>

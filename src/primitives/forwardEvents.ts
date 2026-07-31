@@ -13,14 +13,34 @@
 
 const FOCUSABLE = 'input, textarea, select, button, [tabindex], [contenteditable]'
 
-/** Deepest descendant of `root` whose client rect contains (x, y). */
-export function deepestElementAt(root: Element, x: number, y: number): Element {
-  let best: Element = root
+/**
+ * Deepest descendant of `root` that accepts the pointer at (x, y) — or null,
+ * when nothing there does.
+ *
+ * `pointer-events` is honoured for the same reason the browser honours it: a
+ * Surface is a slab of glass, and it is clear everywhere its DOM declined to
+ * paint. A floating layer is the worked example — a full-size container
+ * standing in front of its panel, `pointer-events: none`, holding a popover
+ * that sets `auto`. Without this, the slab caught every ray the moment it went
+ * live and the panel behind it went dead (see Surface's `hitTest="content"`).
+ *
+ * `none` is not a wall: a descendant may set `auto` and be hittable inside a
+ * transparent ancestor — that is precisely the portal-container idiom. So the
+ * walk descends through transparent elements and only refuses to *land* on
+ * them.
+ *
+ * Note this reads the *computed* value, which is inherited. The parking canvas
+ * is `pointer-events: none`, so createDomTextureSource re-roots the cascade on
+ * the source element; without that every element here would read as clear.
+ */
+export function deepestElementAt(root: Element, x: number, y: number): Element | null {
+  let best: Element | null = null
   const walk = (node: Element) => {
     const r = node.getBoundingClientRect()
     if (r.width === 0 || r.height === 0) return
     if (x < r.left || x > r.right || y < r.top || y > r.bottom) return
-    best = node
+    // Later siblings win ties, as in paint order; depth wins over breadth.
+    if (getComputedStyle(node).pointerEvents !== 'none') best = node
     for (const child of Array.from(node.children)) walk(child)
   }
   walk(root)
@@ -181,6 +201,27 @@ const AWAY_MARGIN_PX = 16
  */
 const AWAY_FRAMES = 3
 
+/**
+ * Where the pointer is, across every surface at once.
+ *
+ * No single surface can answer this: each one only knows the ray arrived or
+ * left. But a departure needs to say where the pointer *went*, and when it
+ * went to a neighbouring surface, "off-page" is a lie with consequences —
+ * Radix spans its grace polygon across trigger ∪ content precisely so the
+ * pointer may cross from one to the other, and a tooltip you reach for
+ * dismisses itself if we report that crossing as an exit to nowhere.
+ *
+ * The coordinates need no conversion. Every parked source is fixed at page
+ * (0,0) (decisions.md #16), so a point forwarded to any surface is already a
+ * page point in the same document Radix measured its hull in.
+ *
+ * One record is enough, and staleness cannot arise: a surface only announces a
+ * departure when the pointer was on it, so if the newest forward anywhere went
+ * somewhere else, the pointer crossed there. Same root means it left for
+ * nothing at all.
+ */
+let lastForward: { root: HTMLElement; x: number; y: number } | null = null
+
 /** Drop all mirrored state (call when the pointer leaves the surface). */
 export function clearPointerState(root: HTMLElement) {
   const m = mirrors.get(root)
@@ -224,17 +265,25 @@ export function clearPointerState(root: HTMLElement) {
     // Cancelled if the pointer comes back (see forwardPointer), so returning
     // to the surface never eats its own dismissal.
     const rect = root.getBoundingClientRect()
-    const away: PointerEventInit & MouseEventInit = {
-      ...init,
-      clientX: rect.left - AWAY_MARGIN_PX,
-      clientY: rect.top - AWAY_MARGIN_PX,
-    }
     let frames = AWAY_FRAMES
     const step = () => {
       m.away = 0
       // A surface torn down mid-departure has nothing to dismiss, and events
       // from a detached tree never reach document anyway.
       if (!root.isConnected) return
+
+      // Where did it go? If a neighbouring surface has taken the pointer since
+      // this departure began, there — a real destination, which a grace area
+      // may well decide to tolerate. Otherwise off the source entirely, which
+      // is provably outside any hull Radix can build (AWAY_MARGIN_PX). Asked
+      // per frame, not once, because the destination can arrive a frame late
+      // and because the pointer may leave everything after all.
+      const to = lastForward && lastForward.root !== root ? lastForward : null
+      const away: PointerEventInit & MouseEventInit = {
+        ...init,
+        clientX: to ? to.x : rect.left - AWAY_MARGIN_PX,
+        clientY: to ? to.y : rect.top - AWAY_MARGIN_PX,
+      }
       root.dispatchEvent(new PointerEvent('pointermove', away))
       root.dispatchEvent(new MouseEvent('mousemove', away))
       if (--frames > 0) m.away = requestAnimationFrame(step)
@@ -262,13 +311,20 @@ export function forwardPointer(
   u: number,
   v: number,
   kind: 'down' | 'up' | 'move',
-): ForwardResult {
+): ForwardResult | null {
   const rect = root.getBoundingClientRect()
   const x = rect.left + u * rect.width
   const y = rect.top + (1 - v) * rect.height
   const target = deepestElementAt(root, x, y)
+  // Nothing here accepts the pointer — the ray passed through clear glass.
+  // Whatever this surface was hovering, it is not hovering it now.
+  if (!target) {
+    clearPointerState(root)
+    return null
+  }
   const mirror = mirrorOf(root)
   mirror.at = { x, y }
+  lastForward = { root, x, y }
   // The pointer is back before the departure finished sending — call it off,
   // or we would announce the pointer is gone while it is demonstrably here.
   if (mirror.away) {

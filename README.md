@@ -1290,3 +1290,88 @@ The through-line with the pointerdown finding (#18) is that both live
 at the same seam. The forwarder is the only thing in the system that
 knows the pointer's real story. Whatever it declines to say, no
 component downstream can reconstruct.
+
+### Increment 2b — clear glass is not a wall
+
+Pete, on the freshly-fixed tooltip: *"it appears and then instantly
+exits, even leaving the mouse stationary over the trigger."*
+
+Which is a better bug report than it looks, because *stationary* is the
+whole clue. A held-still mouse is not a still mouse — a hand tremors, a
+sensor resamples, and the browser keeps emitting moves at a pixel or
+two. My verification in 2a had used one CDP move and then measured. The
+real pointer kept talking, and the scene kept answering.
+
+Here is what it was answering. A floating-layer Surface is a full-panel
+transparent quad standing a few millimetres off the panel it serves. The
+instant the tooltip mounts, that layer goes live — and from that frame
+it is the front-most mesh, so it catches every ray. The panel behind it
+stops being hovered. It fires `onPointerOut`. That runs the departure
+burst I had just built in 2a, faithfully, into a tooltip that was one
+frame old. The fix from the previous increment was the murder weapon.
+
+The correct read is that the slab was lying. It is transparent —
+everywhere except the small popover rectangle, the DOM painted nothing
+at all — and we were treating it as solid. A pane of glass you cannot
+see through *and* cannot reach through is not glass; it is a wall.
+
+So `pointer-events` became the raycaster's business. `Surface` grew
+`hitTest="content"`: intersect the quad, convert the UV to a page point,
+and keep the hit only if some element there actually accepts the
+pointer. Rays through the clear part carry on and land on the card
+behind, exactly as they did before the layer existed. The CSS side is
+the portal idiom every 2D app already writes — container clear, contents
+opaque, `.ui-layer > * { pointer-events: auto }` — which is satisfying:
+the rule was already true on a page, and it turns out to be true in
+three dimensions once the raycaster is told to read it.
+
+Two things about the shape of this fix are worth keeping.
+
+**It has to happen at raycast level, not in a handler.** An intersection
+r3f never sees is one it never counts as a hover — so the Surface behind
+simply *keeps* the pointer, uninterrupted. Declining inside a handler
+would already be too late: by then the front mesh is the recorded hit
+and the one behind has had its `onPointerOut` fired. The bug is not
+"the layer responded wrongly", it is "the layer was asked at all".
+
+**It deleted code.** The layer used to carry a liveness gate — a custom
+`raycast` that refused everything while the slab was empty. Content
+gating subsumes it completely: an empty layer accepts the pointer
+nowhere, so it is inert *by construction*, not by bookkeeping. The gate
+went in the bin. A special case that dissolves into a general rule is
+usually the sign the general rule was the right one.
+
+One inherited trap surfaced on the way. The parking canvas is
+`pointer-events: none` so that real hit-testing can never wander into a
+parked subtree — and that value **inherits**, so every element in every
+Surface computed as `none`, and the first version of the content hit
+test found nothing hittable anywhere. `createDomTextureSource` now
+re-roots the cascade to `auto` on the source root, and `hitTest="content"`
+sets it back to `none` for layers specifically. Pleasant side effect:
+shadcn's `[&_svg]:pointer-events-none` is now honored through a Surface
+for the first time, which it never has been.
+
+While the hit test was being taught to tell the truth, the departure got
+the same treatment. It used to always park the pointer sixteen pixels
+off the source rect — a deliberate lie, guaranteed outside any grace
+hull. Now, if a neighbouring Surface has taken the pointer since the
+exit began, the burst reports *that* point instead. This costs nothing
+in coordinate math, and the reason is the overlay-plane decision from
+increment 2 paying rent: every parked source sits at page (0,0), so a
+point forwarded to any surface is already a page point in the same
+document Radix measured its hull in. Moving from trigger to tooltip
+content now keeps the tooltip open — which was impossible before, since
+every exit was a lie about leaving.
+
+Verified with a real projected mouse: five one-pixel jitters over an
+open tooltip, all five landing on the trigger, no leave, no burst, no
+close. Real exits still dismiss. Popover and Select untouched, idle
+paint counters flat, 182 tests.
+
+One edge stays open and I'd rather name it than bury it: the two-hop
+path — trigger, across the card body, into the tooltip — still closes,
+about two milliseconds after the burst's first frame, even though the
+reported destination computes as *inside* Radix's hull. It predates this
+work (before today, every exit closed it), so it's not a regression, but
+it isn't explained either. It goes to the floating-layer kit, along with
+dismissal, stacking, and focus arbitration.

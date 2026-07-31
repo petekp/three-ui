@@ -10,7 +10,7 @@
 // deepestElementAt's own hit-testing is exercised through those stubs.
 
 import { beforeEach, describe, expect, it } from 'vitest'
-import { clearPointerState, forwardPointer } from './forwardEvents'
+import { clearPointerState, deepestElementAt, forwardPointer } from './forwardEvents'
 
 const ROOT = { left: 0, top: 0, right: 360, bottom: 460 }
 
@@ -58,6 +58,7 @@ const SIBLING_BOX = [20, 100, 120, 140] as const
 
 beforeEach(() => {
   document.body.innerHTML = ''
+  document.body.removeAttribute('style')
   log = []
 
   root = document.createElement('div')
@@ -216,6 +217,147 @@ describe('leaving the surface entirely', () => {
 
     expect(trigger.hasAttribute('data-hover')).toBe(false)
     expect(root.hasAttribute('data-hover')).toBe(false)
+  })
+})
+
+describe('pointer-transparent regions', () => {
+  // The second half of Pete's tooltip bug. A floating layer is a full-size
+  // slab standing in front of its panel, and it is transparent everywhere the
+  // popover does not cover — so the moment a tooltip opened, the slab caught
+  // every ray, the panel behind it heard `pointerOut`, and the departure below
+  // dismissed the tooltip that had just opened.
+  //
+  // On a 2D page a portal container solves this with `pointer-events: none`
+  // and `auto` on its content. That declaration is the answer here too: the
+  // forwarded hit test honours it, so a ray through clear glass hits nothing.
+
+  let layer: HTMLElement
+  let content: HTMLElement
+  const CONTENT_BOX = [200, 200, 300, 260] as const
+  /** Inside the slab, outside everything the slab holds. */
+  const CLEAR = { x: 250, y: 400, u: 250 / 360, v: 1 - 400 / 460 }
+
+  beforeEach(() => {
+    layer = document.createElement('div')
+    content = document.createElement('div')
+    layer.append(content)
+    root.append(layer)
+    box(layer, ROOT.left, ROOT.top, ROOT.right, ROOT.bottom)
+    box(content, ...CONTENT_BOX)
+
+    // Exactly how a portal container is authored on a normal page. In Chrome
+    // `layer` would inherit `none` from the root and only `content` needs the
+    // `auto`; happy-dom does not model inheritance, so the transparency is
+    // stated on both. What is under test either way is the rule that decides a
+    // single element: explicit `none` is not a landing place.
+    root.style.pointerEvents = 'none'
+    layer.style.pointerEvents = 'none'
+    content.style.pointerEvents = 'auto'
+  })
+
+  it('resolves a hit on the content', () => {
+    const on = uvOf(...CONTENT_BOX)
+    expect(deepestElementAt(root, on.x, on.y)).toBe(content)
+  })
+
+  it('resolves nothing where the layer is clear', () => {
+    expect(deepestElementAt(root, CLEAR.x, CLEAR.y)).toBeNull()
+  })
+
+  it('descends through a transparent ancestor to reach its content', () => {
+    // `pointer-events: none` on a parent is not a wall: a child may set
+    // `auto` and be hittable inside it. That is the portal-container idiom,
+    // and the walk has to descend through the clear part to find the popover.
+    expect(layer.style.pointerEvents).toBe('none')
+    const on = uvOf(...CONTENT_BOX)
+    expect(deepestElementAt(root, on.x, on.y)).toBe(content)
+  })
+
+  it('forwards nothing at all through a clear region', () => {
+    log.length = 0
+
+    expect(forwardPointer(root, CLEAR.u, CLEAR.v, 'move')).toBeNull()
+    expect(log).toHaveLength(0)
+  })
+})
+
+describe('leaving one surface for another', () => {
+  // Radix builds a grace polygon spanning trigger ∪ content precisely so the
+  // pointer may cross from one to the other without dismissing. Our surfaces
+  // are separate meshes, so that crossing IS an exit — and reporting it as a
+  // departure to nowhere closes the tooltip you were reaching for.
+  //
+  // Every parked source is fixed at page (0,0) (decisions.md #16), so the
+  // other surface's forwarded point is already a page point in the same
+  // document Radix measured its hull in. No conversion, and no guessing.
+
+  let other: HTMLElement
+  let otherChild: HTMLElement
+  const OTHER_BOX = [200, 200, 300, 260] as const
+
+  beforeEach(() => {
+    other = document.createElement('div')
+    otherChild = document.createElement('div')
+    other.append(otherChild)
+    document.body.append(other)
+    box(other, ROOT.left, ROOT.top, ROOT.right, ROOT.bottom)
+    box(otherChild, ...OTHER_BOX)
+  })
+
+  // The burst is dispatched on the departing root itself. Reading it there
+  // rather than at `document` keeps the other surface's own forwarded moves —
+  // which also bubble to document — out of the measurement.
+  const awayMoves = () => log.filter((l) => l.type === 'pointermove' && l.at === 'root')
+
+  it('reports the destination when the pointer arrived there first', async () => {
+    // The real order: the front mesh is delivered before the one behind it
+    // notices it lost the ray.
+    const on = uvOf(...TRIGGER_BOX)
+    forwardPointer(root, on.u, on.v, 'move')
+    const to = uvOf(...OTHER_BOX)
+    forwardPointer(other, to.u, to.v, 'move')
+    log.length = 0
+
+    clearPointerState(root)
+    await settle()
+
+    const moves = awayMoves()
+    expect(moves.length).toBeGreaterThan(0)
+    for (const m of moves) {
+      expect(m.x).toBeCloseTo(to.x, 6)
+      expect(m.y).toBeCloseTo(to.y, 6)
+    }
+  })
+
+  it('reports the destination even when it is forwarded after the exit', async () => {
+    // The other order, which r3f also produces: a mesh hears `pointerOut`
+    // before the new one is delivered. The burst is deferred to a later frame
+    // anyway, so by the time it speaks the destination is known.
+    const on = uvOf(...TRIGGER_BOX)
+    forwardPointer(root, on.u, on.v, 'move')
+    log.length = 0
+
+    clearPointerState(root)
+    const to = uvOf(...OTHER_BOX)
+    forwardPointer(other, to.u, to.v, 'move')
+    await settle()
+
+    const moves = awayMoves()
+    expect(moves.length).toBeGreaterThan(0)
+    expect(moves[0].x).toBeCloseTo(to.x, 6)
+  })
+
+  it('still parks off-page when the pointer left every surface', async () => {
+    const on = uvOf(...TRIGGER_BOX)
+    forwardPointer(root, on.u, on.v, 'move')
+    log.length = 0
+
+    clearPointerState(root)
+    await settle()
+
+    const moves = awayMoves()
+    expect(moves.length).toBeGreaterThan(0)
+    expect(moves[0].x).toBeLessThan(ROOT.left)
   })
 })
 

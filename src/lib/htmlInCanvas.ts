@@ -141,6 +141,13 @@ export function createDomTextureSource(
   const host = document.createElement('div')
   host.innerHTML = markup
   const element = (host.firstElementChild ?? host) as HTMLElement
+  // Re-root the pointer-events cascade. The canvas above is `none` so real
+  // hit-testing can never wander into a parked subtree — but that value
+  // inherits, and the forwarder's own hit test reads the computed one. Left
+  // alone, every element in every Surface would read as clear glass and
+  // nothing would ever be hittable. A scene that wants a transparent root (a
+  // floating layer) overrides this from onSource, which runs after.
+  element.style.pointerEvents = 'auto'
   canvas.appendChild(element)
   document.body.appendChild(canvas)
 

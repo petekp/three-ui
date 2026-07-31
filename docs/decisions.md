@@ -540,3 +540,72 @@ counters flat across 3s. `forwardEvents` now has a DOM test suite
 geometry. This is the same seam as #18: the forwarder is the only place
 that knows the pointer's real story, so anything it declines to say, no
 component downstream can recover.
+
+## 20. `pointer-events` is the raycaster's business too (2026-07-31, lab 009)
+
+**Context.** With #19 in, the tooltip closed correctly on a real exit — and
+also closed *instantly on open*, with the mouse held still over its
+trigger. Pete: *"it appears and then instantly exits, even leaving the
+mouse stationary over the trigger."*
+**Diagnosis, measured.** A floating-layer Surface is a full-panel
+(360×460) transparent quad standing a few millimetres off the panel it
+serves. The instant a tooltip mounts, the layer goes live — and from that
+frame on it is the front-most mesh, so it catches every ray. The panel
+behind it stops being hovered, fires r3f `onPointerOut` → `clearPointerState`
+→ the #19 departure burst → Radix dismisses the tooltip that just opened.
+The full document-level timeline showed it plainly: open, then LEAVE on
+`CARD:tooltip-trigger` one frame later, then `data-state` → `closed`.
+A stationary *real* mouse still emits moves (hand tremor, sub-pixel
+resampling), which is why Pete saw it every time and the single-CDP-move
+verification in #19 did not.
+**Decision.** Two halves, both about telling the truth rather than about
+Radix. (a) **`pointer-events` is honored in the forwarded hit test.**
+`deepestElementAt` skips any element whose computed `pointer-events` is
+`none` and returns `null` when nothing under the point accepts the pointer;
+`forwardPointer` then clears pointer state and forwards nothing. (b) **A
+Surface can be raycast against its content, not its plane.**
+`hitTest="content"` installs a `raycast` that intersects the quad, converts
+each hit's UV to a page point, and keeps only the hits `deepestElementAt`
+resolves. `.ui-layer > * { pointer-events: auto }` in `ui.css` is the
+ordinary portal-container idiom, now load-bearing in three dimensions: the
+container is clear, what it holds is not.
+**Why at raycast level and not in a handler.** An intersection r3f never
+sees is one it never counts as a hover — so the Surface *behind* keeps the
+pointer, uninterrupted, instead of being told it lost it. Declining inside
+a handler is already too late: by then the front mesh has been recorded as
+the hit and the one behind has had its `onPointerOut` fired.
+**The cascade had to be re-rooted.** The parking canvas is
+`pointer-events: none` (htmlInCanvas.ts) so real hit-testing can never
+wander into a parked subtree — and that value *inherits*, so computed style
+everywhere inside reads `none` and nothing would ever be hittable.
+`createDomTextureSource` now sets `pointerEvents = 'auto'` on the source
+root; `hitTest="content"` sets it back to `none`, before `onSource` runs, so
+a scene still has the last word. Side effect worth having: shadcn's
+`[&_svg]:pointer-events-none` is honored through a Surface for the first
+time.
+**A second half, cheap once (a) existed.** A departure now reports where
+the pointer actually *went* — if another Surface took it since the exit
+began, the burst carries that page point instead of the off-page one.
+Valid without any conversion because every parked source is `position:
+fixed` at page (0,0) (#16), so a point forwarded to any surface is already
+a page point in the document Radix measured its hull in. Asked per frame,
+not once: the destination can arrive a frame late, and the pointer may
+leave everything after all.
+**Rejected.** (a) *Keep the liveness gate and shrink the slab to the
+content rect* — reintroduces coordinate math the overlay plane exists to
+avoid (#16), and re-breaks the moment two layers stack. (b) *Suppress the
+departure while a layer is open* — a real exit would then never close
+anything. (c) *Let the layer swallow the ray and re-forward it downward* —
+one surface guessing at another's business; the raycaster already resolves
+depth correctly once it is told the truth.
+**Consequence.** Content-gating subsumes liveness: an empty layer accepts
+the pointer nowhere, so it is inert by construction, and Lab 009's
+`gatedRaycast` was deleted. Browser-verified: five 1px jitter moves over an
+open tooltip all land on `CARD:tooltip-trigger`, no leave, no burst, no
+close; a real exit still dismisses; trigger → tooltip-content transit now
+*stays* open, which was impossible before. Popover/Select unaffected, idle
+paints flat. 182 tests. **Known edge, pre-existing:** the two-hop transit
+(trigger → card body → tooltip content) still closes ~2ms after the burst's
+first frame, even though the reported destination computes as inside the
+hull. Not a regression — before this change every exit closed it — and it
+belongs to the floating-layer kit (#36).
