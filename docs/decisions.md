@@ -295,3 +295,82 @@ end where they land (browser: zero tail movement, phi exactly at the
 limit, ~0.05 rad/frame peak — the smoothstep bound); `cameraPose.ts`
 tests reproduce all three failure modes against the fixes, so a
 "simplification" back to lerp fails CI, not a user test.
+
+## 14. Overlap alone is not insider status — the centroid cone gates the regime (2026-07-30, lab 006 arrows)
+
+**Context.** Increment 4's directional pick adopts spatnav §8.4:
+overlapping candidates ("insiders") never reach the distance formula,
+and any insider outranks every outsider. The registered focus object is
+the whole unit group — Surface plane plus its grab-handle mesh — so
+each projected rect extends above the panel face.
+**Diagnosis, measured.** ArrowRight from doc-4 picked `deploy`, one
+full ROW up; the true right neighbor doc-5 was never in contention.
+Bare-mesh AABBs said the pick was impossible — no overlap (deploy's
+bottom 293.5px vs doc-4's top 297.9px). The contradiction traced to the
+handles: handle-extended rects overlap row-neighbors by ~18px slivers,
+deploy's rect had ~3px of rightward edge progress, and
+minimal-progress-wins made it THE insider — absolute precedence over
+the whole outsider pool, where doc-5 sat dismissed. Sliver hijack is
+generic to projected 3D: perspective guarantees near-tangent overlaps
+somewhere in every arc.
+**Decision.** A third insider filter: the candidate's *centroid*
+displacement must lie inside the direction's quarter-plane cone
+(main-axis component ≥ |cross-axis| − ε, sign included). Near-
+coincident centroids pass every cone, preserving FPWD stack
+reachability; an offset *contained* candidate is reachable via its
+dominant axis only — a documented refinement of "reachable from all
+four directions." The real browser rects are pinned as the regression
+test. **Rejected.** (a) *Register only the Surface mesh* — the
+satellite IS part of the unit's silhouette (entry pick, reframe
+visibility, and proxy rects all want the true footprint), and the next
+scene's satellite layout would re-break it. (b) *Minimum overlap-area
+or edge-progress thresholds* — pixel constants don't survive
+projection (camera distance rescales them continuously), and a true
+stack's next card can legitimately sit at near-zero progress; the cone
+is scale-free. **Consequence.** Sliver hijacks are impossible by
+construction (doc-4 → doc-5 verified in-browser); the deploy/doc-5
+rects live in `spatialNav.test.ts` as the tripwire.
+
+## 15. Orthogonality is the centroid outside the cross-band — in both regimes (2026-07-31, lab 006 arrows)
+
+**Context.** With the cone shipped (#14), the browser-verified lattice
+walk still zig-zagged rows: rightward along the middle row it dropped
+to the bottom row and stayed there. History stayed coherent, ruling out
+pointer noise; a full-field rect capture (all 33 panels, mirroring
+`screenRect` math against the registered groups) replayed the exact
+pick in the pure module — the walk was *lawful*, so the formula was
+wrong.
+**Diagnosis, measured — twice, two mechanisms.** (1) deploy → right
+picked doc-5, one row DOWN: the projected arc's rows shear apart toward
+the edges until doc-5's top rose to 4px below deploy's bottom. The
+outsider distance's orthogonal-displacement term measured band-to-band
+separation — 0 for any sliver of cross-overlap — so doc-5 paid nothing
+for sitting a row away (centroids 164px apart) and its 9px-nearer left
+edge beat synth, the level neighbor, 20.5 to 24.9. (2) Post-fix, one
+column further: synth → right picked calendar. At the arc's edge the
+projected AABBs bloat until every neighbor overlaps the origin — three
+cone-passing *insiders*, one per row (calendar below at progress 278.5,
+doc-19 above at 291.8, errors level at 297.9) — and the insider rank
+was raw minimal progress, which is a stack rule, not a lattice rule:
+it hands the pick to whichever row leans nearest on screen.
+**Decision.** One orthogonality measure for both regimes
+(`centroidOd`): the candidate *centroid's* distance outside the
+origin's cross-band, 0 while the centroid stays inside. Outsiders:
+`distance = hypot(gap, od) + od·Wo − aligned·Wa` as before, od
+redefined. Insiders: rank by `progress + od·Wo`. The centroid says
+which row something is actually in; the band says only whether the
+AABBs touch. True stacks are untouched by construction — a contained
+candidate's centroid is inside the band by definition, so FPWD
+reachability and pure-progress stack ranking survive verbatim.
+**Rejected.** (a) *Cranking Wa* until the level neighbor wins — a
+constant tuned to one capture loses two columns further into the shear.
+(b) *Tightening the cone* below 45° — same problem, and it would break
+legitimate diagonal reachability. (c) *An authored 2D lattice*
+(`order`'s philosophy extended to arrows) — defensible, deliberate, and
+deferred: it's a new API surface, and the geometric pick should be
+right on its own before authored overrides exist. **Consequence.** The
+3×11 walk is row-true in both directions through the shear zone
+(browser-verified); both full-field captures are pinned in
+`spatialNav.field.test.ts`, the curated mechanisms in
+`spatialNav.test.ts`. Any future formula change must survive four
+browser-captured regressions, not synthetic grids.

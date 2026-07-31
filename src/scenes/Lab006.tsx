@@ -4,6 +4,7 @@ import { useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
 import { Surface } from '../primitives/Surface'
 import {
   FocusGroup,
+  useFocusNavPolicy,
   useFocusReframe,
   useFocusScene,
   useFocusSceneEvents,
@@ -16,6 +17,7 @@ import {
   clampViewElevation,
   gazeAt,
   gazeTween,
+  viewPitchRoom,
   type GazeTween,
   type OrbitLimits,
 } from '../lib/cameraPose'
@@ -53,6 +55,7 @@ const ROW_YS = [0.78, 2.36, 3.94]
 const LOOK_TARGET = new THREE.Vector3(0, 1.7, 0)
 const HOME_POS = new THREE.Vector3(0, 2.0, 3.4)
 const HOME_TARGET = new THREE.Vector3(0, 1.6, 0)
+const WORLD_UP = new THREE.Vector3(0, 1, 0)
 const APPROACH_DIST = 3.05 // ≥ OrbitControls minDistance so the tween's end pose survives
 
 interface OrbitLike extends OrbitLimits {
@@ -219,6 +222,52 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
       // Big turns get a little more time; nudges stay snappy.
       THREE.MathUtils.clamp(0.3 + (between - allow) * 0.3, 0.3, 0.8),
     )
+  })
+
+  // No-candidate ladder (docs/focus.md "Directional navigation"): an arrow
+  // with nothing in its direction may nudge the VIEW one increment instead —
+  // the same head-turn grammar as the fulfiller, so "looking further that
+  // way" and "being steered to a panel" read as one body. Yaw is unbounded
+  // (no azimuth clamps on this orbit); pitch is bounded by the polar band,
+  // and viewPitchRoom is the honest predicate — at the band edge the press
+  // is a no-op rather than a dead-feeling half-tween.
+  useFocusNavPolicy({
+    canMove: (dir) => {
+      if (!controls) return false
+      if (dir === 'left' || dir === 'right') return true
+      const d = controls.target.clone().sub(camera.position).normalize()
+      const room = viewPitchRoom(d, controls)
+      return (dir === 'up' ? room.up : room.down) > 1e-3
+    },
+    nudge: ({ dir }) => {
+      if (!controls) return
+      const camPos = camera.position
+      const dist = THREE.MathUtils.clamp(
+        controls.target.distanceTo(camPos),
+        controls.minDistance ?? 0,
+        controls.maxDistance ?? Infinity,
+      )
+      const d = controls.target.clone().sub(camPos).normalize()
+      const NUDGE = 0.35 // rad — one comfortable head-turn increment
+      if (dir === 'left' || dir === 'right') {
+        // Positive yaw about +Y turns the view leftward (counter-clockwise
+        // seen from above).
+        d.applyAxisAngle(WORLD_UP, dir === 'left' ? NUDGE : -NUDGE)
+      } else {
+        const room = viewPitchRoom(d, controls)
+        const amt = Math.min(NUDGE, dir === 'up' ? room.up : room.down)
+        if (amt < 1e-4) return
+        // d × UP is the rightward horizontal axis; positive rotation about
+        // it pitches the view UP. Degenerate only when looking straight
+        // down — an extreme user-orbited pose; skip rather than guess.
+        const axis = new THREE.Vector3().crossVectors(d, WORLD_UP)
+        if (axis.lengthSq() < 1e-10) return
+        axis.normalize()
+        d.applyAxisAngle(axis, dir === 'up' ? amt : -amt)
+        clampViewElevation(d, controls)
+      }
+      armTween(camPos.clone(), camPos.clone().addScaledVector(d.normalize(), dist), 0.35)
+    },
   })
 
   // A grab of the controls mid-tween should win instantly.

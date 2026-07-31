@@ -843,3 +843,74 @@ user test. 119/119 vitest, tsc clean, idle contract intact (only the
 four live-feed panels paint; docs and chrome at zero; 120 fps).
 Decision #13 records the ride rules; `docs/focus.md` gains the pointer-
 selection and motion contracts.
+
+**Increment 4 shipped — arrows, and the projection that lied twice.**
+Directional navigation at scene/unit level: `spatialNav.ts` is pure and
+camera-blind (it sees screen-space AABBs sampled fresh per keypress,
+never the camera), built on spatnav §8.4's regime split — overlapping
+"insiders" never reach the distance formula and outrank every outsider
+— plus Flutter's directional-history stack, which here is load-bearing
+rather than polish: focus moves the camera, so the geometry that chose
+the last target is GONE by the next keypress, and a pure geometric
+argmax cannot be reciprocal even in principle. Pop on opposite, clear
+on perpendicular, and one chokepoint clears on everything external
+(`notify()` whenever `cause !== 'directional'`). The no-candidate
+ladder mirrors the reframe bridge — detect here, fulfill there: a
+`NavPolicy` answers `canMove(dir)` from `viewPitchRoom` (pitch room to
+the polar-band edges, yaw unbounded) and fulfills as a head-turn nudge
+that never moves focus and never records history.
+
+Browser verification with real CDP keys bought three findings, each a
+formula defect the vitest grids were too polite to produce. First the
+sliver hijack: ArrowRight from doc-4 picked deploy, a full row UP, on
+~3px of edge progress — grab handles extend every rect, row-neighbors
+overlap by slivers, and minimal-progress-wins crowned the sliver THE
+insider. The centroid cone (decision #14) gates the regime: overlap
+alone is not insider status. Then the walk zig-zagged rows, twice, by
+two different mechanisms. Rightward along the middle row, deploy →
+doc-5 (a row down): the arc's rows shear apart toward the projection's
+edges until doc-5's top rose to 4px below deploy's bottom, the
+band-separation orthogonality term read 0 through the sliver, and a
+9px-nearer left edge beat synth, the LEVEL neighbor, 20.5 to 24.9.
+Fixed — orthogonality became the candidate centroid's distance outside
+the origin's cross-band — and the walk promptly dropped a row one
+column later: synth → calendar, because at the arc's edge projected
+AABBs bloat until every neighbor overlaps the origin and the insider
+regime swallowed the whole neighborhood — three cone-passing insiders,
+one per row (calendar below, progress 278.5; doc-19 above, 291.8;
+errors level, 297.9), ranked by a stack rule that hands the pick to
+whichever row leans nearest on screen. One vocabulary fixed both
+(decision #15): `centroidOd` in both regimes — outsiders pay it in the
+distance, insiders rank by `progress + od·Wo`, and true stacks pay
+nothing by construction since a contained candidate's centroid cannot
+leave the band. The method matters as much as the fix: each defect was
+captured as the FULL 33-panel projected field (mirroring `screenRect`
+math against the registered groups, to the pixel), replayed through the
+pure module node-side to prove the browser pick lawful BEFORE calling
+it wrong, and pinned — mechanisms in `spatialNav.test.ts`, whole
+neighborhoods in `spatialNav.field.test.ts`. The two captures agree to
+the pixel because the rig only reframes when a target leaves the
+comfortable view: at home pose, projection is a fixed function of the
+lattice.
+
+The rest of the verification ledger: retraces walk back exact paths
+under the moving camera; the yaw nudge's tween target matched
+prediction to a millimeter (z 2.837 vs 2.836 computed by hand) and
+pitch-down reproduced the `asin` math exactly; the top row is a clean
+`canMove`-false no-op with gaze pinned at the polar limit to four
+decimals; engaged units pass arrows through with byte-identical camera
+poses; and an agent-reported "dial regression" (ArrowUp landing on a
+role-less div) proved to be a concurrent pointer click — the
+click-selects-unit grammar clearing `data-engaged` mid-run — with the
+instrumented controlled repro clean: Cutoff 3 → 4, zero focus events,
+proxy handler consuming the arrow at element level before the router
+ever sees it. Post-fix, the full 3×11 walk is row-true in both
+directions through the shear zone, verticals land in-column, and the
+leftward walk after an engage/release trail-clear retraces the row
+geometrically. 149/149 vitest, tsc clean, idle contract intact — every
+doc panel at zero paints throughout navigation; only the live feeds
+advance. Deferred, deliberately: member-level arrows, per-group `grid`
+mode, the spec's `auto` philosophy (view nudges before focus moves),
+the announcer, page-edge handoff — and an authored 2D lattice stays
+rejected-for-now (decision #15) until the geometric pick has earned
+its keep on its own.

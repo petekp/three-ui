@@ -159,6 +159,34 @@ rad/frame of up-vector spin); yaw/pitch gaze interpolation landed at
 the mathematical bound (0.052 rad/frame). All three schemes are pinned
 as `cameraPose.ts` tests.
 
+**Increment 4 (arrows, shipped 2026-07-31):** directional navigation at
+scene/unit level — the §8.4 regime split, Flutter's directional
+history, and the no-candidate ladder (contract above under "Directional
+navigation"), all browser-verified with real CDP keys. Evidence:
+retraces walk back exact paths under the moving camera and perpendicular
+presses clear; the yaw nudge's tween target matched prediction to a
+millimeter and the pitch nudge reproduced the `asin` math exactly, with
+the top row a clean `canMove`-false no-op; engaged units pass arrows
+through with byte-identical camera poses; the synth dial's proxy
+consumed Arrow/Home/End without router interference (an agent-reported
+"dial regression" proved to be a concurrent pointer click —
+click-selects-unit clearing `data-engaged` — and the instrumented repro
+is clean). The lasting find: **the lattice walk zig-zagged rows**, twice,
+by two different mechanisms. Full-field rect captures (mirroring
+`screenRect` against the registered groups, pinned as
+`spatialNav.field.test.ts`) replayed both browser picks exactly in the
+pure module — lawful picks, therefore formula defects: a 4px projected
+sliver zeroed the outsider orthogonality (deploy → doc-5), and
+projection bloat at the arc's edge made the whole neighborhood
+"insiders" ranked by raw progress (synth → calendar past a cone-passing
+row-above candidate at 291.8 vs errors at 297.9). One vocabulary fixed
+both — centroid-vs-band orthogonality in both regimes (decision #15) —
+and the 3×11 walk is row-true in both directions through the shear
+zone, verticals land in-column, and idle Surfaces stayed at zero paints
+throughout navigation. Deferred: member-level arrows, `grid` mode,
+directional entry refinements, the `auto` philosophy, announcer,
+page-edge handoff.
+
 **Thesis tie-in.** The library's claim is that the DOM is load-bearing,
 not a texture. Until focus works, that claim is mouse-only. The goal is
 keyboard-complete operation of a 3D workspace with the browser's real
@@ -253,6 +281,11 @@ Per group, a stack of previously-focused members (Flutter's
 
 ## Directional navigation (arrows, at scene/unit level)
 
+**Shipped increment 4** (`src/lib/spatialNav.ts`, pure + vitest-pinned)
+at scene and unit level; member-level arrows, per-group `grid` mode,
+and directional entry stay deferred — arrows stop at unit edges
+(Flutter's Tab-wraps/arrows-stop asymmetry, kept).
+
 Geometry is **camera-projected screen-space AABBs, sampled per
 keypress** — the spec's own frame (spatnav computes on final
 post-transform layout; projection is the faithful 3D generalization).
@@ -264,9 +297,20 @@ distance formula):
 
 1. **Insiders** — candidates whose rect overlaps/contains the origin's,
    filtered by edge-progress in the direction (top edge below origin's
-   top edge, for down). Rank by edge progress; tie-break by **depth**
-   (our painting order). The FPWD fix is law: fully-overlapped targets
-   must remain reachable.
+   top edge, for down), **and by the centroid cone** (decision #14,
+   browser-bought): the candidate's centroid displacement must lie in
+   the direction's quarter-plane — overlap alone is not insider status,
+   because projected neighbors overlap by slivers (grab handles,
+   perspective) and a ~3px sliver otherwise outranks the true neighbor.
+   Rank by edge progress **plus centroid orthogonality** (`od·Wo`,
+   decision #15, also browser-bought): at the arc's edge projection
+   bloat makes every neighbor an "insider", and raw minimal progress
+   then hands the pick to whichever row leans nearest on screen. True
+   stacks pay no penalty — a contained candidate's centroid is inside
+   the band by definition — so the FPWD fix is law, refined: concentric
+   stacks stay reachable from all four directions; an offset *contained*
+   candidate is reachable via its dominant axis only. Tie-break by
+   **depth** (our painting order).
 2. **Outsiders** — candidates strictly past the origin's trailing edge.
    Score with the distance function; smallest wins; ties by tree order
    (stable).
@@ -274,16 +318,26 @@ distance formula):
 **Distance function** — keep spatnav's structure, retune its constants:
 
 ```
-distance = euclidean + orthogonalDisplacement·Wo − alignmentBonus·Wa − √overlapArea
+distance = euclidean + orthogonalDisplacement·Wo − alignmentBonus·Wa
 ```
 
 The spec's Wo = 30 horizontal / 2 vertical encodes *row-dominant text
-layout*; a spatial workspace isn't one. Start symmetric (Wo ≈ 2 both
-axes, Wa = 5) and consider the TAG-prototyped centroid-angle term
-(atan2 delta vs requested direction) if diagonals misbehave — the TAG
-documented the stock formula over-favoring 0°/90° candidates. Per-group
-option: `grid` mode (aligned-candidates-first, axis-distance only) for
-regular control panels — likely the better default inside a synth face.
+layout*; a spatial workspace isn't one. Shipped symmetric (Wo ≈ 2 both
+axes, Wa = 5). **`orthogonalDisplacement` is the candidate centroid's
+distance outside the origin's cross-band — not band-to-band separation**
+(decision #15, browser-bought): band separation reads 0 for any sliver
+of cross-overlap, and the projected arc's rows shear apart toward the
+edges until a row-below neighbor's top grazes the origin's bottom — a
+4px sliver zeroed the penalty and its nearer edge beat the level
+neighbor. The centroid says which row something is actually in; the
+band says only whether the AABBs touch. Both regimes use this one
+measure (`centroidOd`). The spec's −√overlapArea term is omitted: the
+regime split guarantees outsiders share zero area with the origin, so
+the term is structurally 0 here. The TAG-prototyped centroid-angle term
+(their fix for the stock formula over-favoring 0°/90° candidates) did
+land — as the insider *gate* above, not as a distance term. Per-group
+`grid` mode (aligned-candidates-first, axis-distance only) stays
+deferred with member-level arrows.
 
 **Directional history — arrows must retrace.** The TAG flagged spatnav's
 non-reciprocity (right-then-left doesn't return) as an unresolved
@@ -293,10 +347,12 @@ chose the last target no longer exists by the next keypress** — a pure
 geometric argmax cannot be reciprocal here even in principle. Adopt
 Flutter's invalidation matrix wholesale: pop on opposite direction;
 clear on perpendicular axis, on Tab, on external focus change, on
-unmounted entry. External changes are detected by stamping the expected
-target before each `.focus()` and comparing on the `focusin` event
-(their `lastRequestedFocus` pattern) — works unchanged atop real DOM
-focus.
+unmounted entry. External-change detection needs no stamping atop a
+single router: `notify()` clears the trail whenever
+`cause !== 'directional'` — Tab, Enter, Escape, pointer, disposal all
+funnel through the same chokepoint. A retrace pops without
+re-recording, so ping-pong cannot grow the stack; an invalid retrace
+target clears the whole trail (it describes a world that's gone).
 
 **Directional entry into a group** lands on the member nearest the
 entry edge (spatnav's inner-distance rule), not authored-first — Enter
@@ -305,14 +361,18 @@ still uses authored-first/memory.
 **The no-candidate ladder** (per level): visible candidate → focus it.
 None, but the camera can still move that way → **tween one increment,
 don't move focus** (repeated presses alternate tween…tween…focus as
-targets come into view). Can't move → escalate to the parent group's
-ring. At the root → no-op. This requires a **camera-bounds predicate**
-(the spec's "can be manually scrolled" analog — OrbitControls
-min/max distance and polar clamps define it); without one the
-escalation loop is ill-defined. Both spec philosophies stay available
-per group: `auto` (only visible candidates, view nudges stepwise) vs
-`focus` (offscreen candidates focusable, camera follows focus — the
-default; it's our tween-on-focus).
+targets come into view). Can't move → no-op. Shipped as a mirror of
+the reframe bridge — detect here, fulfill there: the library asks
+registered `NavPolicy`s (`useFocusNavPolicy`) `canMove(dir)` and hands
+the first taker a `nudge` request; nudges never move focus and never
+record history. The **camera-bounds predicate** (the spec's "can be
+manually scrolled" analog) is `viewPitchRoom` (cameraPose.ts): pitch
+room to the polar-band edges, yaw unbounded for orbit rigs — without
+it the ladder is ill-defined. A rigless scene registers nothing and
+simply stops at the last projectable candidate. Of the spec's two
+per-group philosophies — `auto` (only visible candidates, view nudges
+stepwise) vs `focus` (offscreen candidates focusable, camera follows
+focus) — `focus` shipped as the default; `auto` stays deferred.
 
 ## Ordering
 

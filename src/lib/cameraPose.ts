@@ -115,6 +115,28 @@ export function gazeAt(
 }
 
 /**
+ * Angular room (radians of pitch) a unit view direction has before hitting
+ * the polar band's edges — the camera-bounds predicate for the no-candidate
+ * ladder's vertical half ("can the view still move that way?"). Yaw is
+ * unbounded for orbit-style rigs, so only pitch needs a predicate; a rig
+ * with azimuth limits would add the horizontal analog.
+ */
+export function viewPitchRoom(
+  d: THREE.Vector3,
+  limits: OrbitLimits,
+): { up: number; down: number } {
+  const yA = -Math.cos(limits.minPolarAngle ?? 0)
+  const yB = -Math.cos(limits.maxPolarAngle ?? Math.PI)
+  const pitchLo = Math.asin(THREE.MathUtils.clamp(Math.min(yA, yB), -1, 1))
+  const pitchHi = Math.asin(THREE.MathUtils.clamp(Math.max(yA, yB), -1, 1))
+  const pitch = Math.asin(THREE.MathUtils.clamp(d.y, -1, 1))
+  return {
+    up: Math.max(0, pitchHi - pitch),
+    down: Math.max(0, pitch - pitchLo),
+  }
+}
+
+/**
  * Returns a NEW position whose spherical pose about `target` satisfies the
  * limits. A pose already inside them passes through value-identical; a
  * violating pose keeps its distance/azimuth (when legal) and gives up only

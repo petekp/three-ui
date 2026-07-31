@@ -23,6 +23,12 @@ import {
   type Viewport,
 } from '../lib/focusTree'
 import { tabbables } from '../lib/tabbables'
+import {
+  createDirectionalHistory,
+  directionalPick,
+  type Dir,
+  type NavRect,
+} from '../lib/spatialNav'
 
 // FocusScene — lab 007's manager, implementing docs/focus.md.
 //
@@ -61,6 +67,7 @@ export type FocusCause =
   | 'escape' // Escape at scene level (no focus move; subscribers react)
   | 'release' // Escape out of an ENGAGED group — the camera's cue to un-commit
   | 'pointer' // focus arrived by means we didn't initiate (mouse, page Tab)
+  | 'directional' // arrow-key spatial move between units (docs/focus.md)
 
 export interface FocusSceneEvent {
   level: FocusLevel
@@ -91,6 +98,29 @@ export interface ReframeRequest {
 }
 
 export type ReframeFulfiller = (req: ReframeRequest) => void
+
+// Directional-nav policy (docs/focus.md "no-candidate ladder"). When an
+// arrow finds no candidate in its direction, the ladder asks whether the
+// VIEW can still move that way — if yes, nudge the camera one increment and
+// leave focus put (repeated presses alternate tween…tween…focus as targets
+// come into view); if no, the press is a no-op at the scene root. Camera
+// bounds are app state (orbit clamps, scroll extents), so like reframing
+// this is detect-here / fulfill-there: the app registers the predicate and
+// the motion. Rigless scenes get no nudge — spatial arrows still work
+// between projectable candidates; view motion is rig territory.
+
+export interface NudgeRequest {
+  dir: Dir
+  viewport: Viewport
+}
+
+export interface NavPolicy {
+  /** Can the view move any further in this direction? (For orbit rigs: yaw
+   *  is unbounded, pitch has the polar band — see viewPitchRoom.) */
+  canMove(dir: Dir): boolean
+  /** Move the view one increment in the direction. Never moves focus. */
+  nudge(req: NudgeRequest): void
+}
 
 /** One shape for both member kinds: a composite's root is the Surface source
  *  subtree; a leaf's root is its ARIA proxy in the shared portal layer. */
@@ -168,6 +198,8 @@ interface FocusSceneApi {
   /** App camera rigs claim visibility fulfillment; the built-in minimal
    *  fulfiller stands down while any registration is live. */
   registerReframeFulfiller(fn: ReframeFulfiller): () => void
+  /** App rigs claim the no-candidate ladder's view motion (see NavPolicy). */
+  registerNavPolicy(policy: NavPolicy): () => void
   focusUnit(groupId: string): boolean
   /** One shared projection pass repositioning every leaf proxy. Called on
    *  focus transitions automatically; call it at tween-settle / drag-end —
@@ -194,6 +226,7 @@ export const FocusGroupContext = createContext<FocusGroupApi | null>(null)
 
 const _box = new THREE.Box3()
 const _corner = new THREE.Vector3()
+const _navPos = new THREE.Vector3()
 
 /** Projected screen-space AABB of an object, or null when it has no volume
  *  or sits entirely behind the camera (those groups ring-order last, in
@@ -237,7 +270,14 @@ type Located =
   | { level: 'unit'; groupId: string }
   | { level: 'interior'; groupId: string }
 
-const ROUTED_KEYS = new Set(['Tab', 'Enter', 'F2', 'Escape'])
+const ARROW_DIRS: Record<string, Dir> = {
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+}
+
+const ROUTED_KEYS = new Set(['Tab', 'Enter', 'F2', 'Escape', ...Object.keys(ARROW_DIRS)])
 
 export function FocusScene({
   children,
@@ -261,6 +301,7 @@ export function FocusScene({
   const runtimes = useRef(new Map<string, GroupRuntime>()).current
   const subscribers = useRef(new Set<(e: FocusSceneEvent) => void>()).current
   const fulfillers = useRef(new Set<ReframeFulfiller>()).current
+  const navPolicies = useRef(new Set<NavPolicy>()).current
   const cursorRef = useRef<string | null>(null)
   // Cause of the focusin we are about to trigger; a focusin with no pending
   // cause arrived by mouse / native Tab / script — reported as 'pointer'.
@@ -488,7 +529,36 @@ export function FocusScene({
       else defaultReframe(req)
     }
 
+    // ---- Directional navigation (arrows) -----------------------------------
+
+    const history = createDirectionalHistory()
+
+    /** Candidate rects for a spatial pick: every registered group except the
+     *  origin, projected fresh at this keypress (nothing cached but the
+     *  history trail). Depth = camera distance — the painting-order
+     *  tie-break for stacked insiders. */
+    const navCandidates = (excludeId: string): NavRect[] => {
+      const out: NavRect[] = []
+      for (const { id } of tree.groups()) {
+        if (id === excludeId) continue
+        const obj = groupObject(id)
+        if (!obj) continue
+        const rect = screenRect(obj, camera, gl.domElement)
+        if (!rect) continue
+        out.push({
+          id,
+          ...rect,
+          depth: camera.position.distanceTo(_navPos.setFromMatrixPosition(obj.matrixWorld)),
+        })
+      }
+      return out
+    }
+
     const notify = (e: FocusSceneEvent) => {
+      // Any focus change that ISN'T an arrow move invalidates the
+      // directional trail — Tab, Enter, Escape, clicks, external moves,
+      // disposals. One chokepoint covers Flutter's whole invalidation row.
+      if (e.cause !== 'directional') history.clear()
       onFocusChangeRef.current?.(e)
       for (const fn of subscribers) fn(e)
     }
@@ -591,6 +661,47 @@ export function FocusScene({
       return ring[(idx + dir + ring.length) % ring.length]
     }
 
+    /** An arrow press at scene/unit level: retrace the trail, else pick
+     *  geometrically, else climb the no-candidate ladder. `originId` null
+     *  means nothing is selected — arrows enter like Tab, landing on what
+     *  the user is already looking at. */
+    const handleArrow = (dir: Dir, originId: string | null) => {
+      if (!originId) {
+        const target = entryTarget(ringOrder())
+        if (target) focusUnit(target, 'directional')
+        return
+      }
+      const back = history.onArrow(dir, (id) => unitElement(id) !== null)
+      if (back) {
+        focusUnit(back, 'directional')
+        return
+      }
+      const obj = groupObject(originId)
+      const originRect = obj ? screenRect(obj, camera, gl.domElement) : null
+      if (!originRect) {
+        // Unprojectable origin (behind the camera) anchors no geometry;
+        // treat the press as re-entry toward whatever is in view.
+        const target = entryTarget(ringOrder())
+        if (target && target !== originId) focusUnit(target, 'directional')
+        return
+      }
+      const pick = directionalPick(originRect, navCandidates(originId), dir)
+      if (pick) {
+        if (focusUnit(pick, 'directional')) history.record(originId, dir)
+        return
+      }
+      // The ladder: no candidate in the direction. If the view can still
+      // move that way, nudge one increment WITHOUT moving focus — repeated
+      // presses alternate tween…tween…focus as targets come into view.
+      // Can't move either: the press is a no-op at the scene root.
+      for (const policy of navPolicies) {
+        if (policy.canMove(dir)) {
+          policy.nudge({ dir, viewport: viewport() })
+          return
+        }
+      }
+    }
+
     const onKeydown = (e: KeyboardEvent) => {
       if (!ROUTED_KEYS.has(e.key)) return
       // Bubble phase on document: interior markup (dismissals, editors) has
@@ -598,6 +709,23 @@ export function FocusScene({
       if (e.defaultPrevented) return
       const loc = locate()
       if (loc.level === 'page') return
+
+      const arrowDir = ARROW_DIRS[e.key]
+      if (arrowDir) {
+        // Modified arrows belong to the platform (OS window management,
+        // word navigation) — never route them.
+        if (e.altKey || e.ctrlKey || e.metaKey) return
+        // The DOM owns arrows below unit altitude: leaf proxies stepped
+        // their physics before this handler ran (the defaultPrevented gate
+        // above), text carets and scroll containers keep native behavior.
+        // An ENGAGED unit reads the same way — arrows scroll the committed
+        // panel's content natively; Tab is the member traversal.
+        if (loc.level === 'interior') return
+        if (loc.level === 'unit' && isEngaged(loc.groupId)) return
+        e.preventDefault()
+        handleArrow(arrowDir, loc.level === 'unit' ? loc.groupId : cursorRef.current)
+        return
+      }
 
       if (loc.level === 'scene') {
         if (e.key === 'Tab') {
@@ -870,6 +998,10 @@ export function FocusScene({
         defaultTweenRef.current = null
         return () => fulfillers.delete(fn)
       },
+      registerNavPolicy(policy) {
+        navPolicies.add(policy)
+        return () => navPolicies.delete(policy)
+      },
       focusUnit: (groupId: string) => focusUnit(groupId, 'ring'),
       syncProxyRects,
     }
@@ -889,8 +1021,9 @@ export function FocusScene({
       isEngaged,
       proxyLayer,
       debugMembers,
+      historySize: () => history.size(),
     }
-  }, [camera, gl, tree, runtimes, subscribers, fulfillers])
+  }, [camera, gl, tree, runtimes, subscribers, fulfillers, navPolicies])
 
   // The built-in fulfiller's consumer: a 0.32s smoothstep truck. Armed only
   // in rigless scenes — registering any app fulfiller disarms it for good.
@@ -927,6 +1060,7 @@ export function FocusScene({
       entry: () => bundle.entryTarget(bundle.ringOrder()),
       engaged: (groupId: string) => bundle.isEngaged(groupId),
       members: bundle.debugMembers,
+      historySize: bundle.historySize,
       syncProxies: bundle.api.syncProxyRects,
       proxies: () =>
         [...bundle.proxyLayer.children].map((p) => ({
@@ -1031,4 +1165,23 @@ export function useFocusReframe(fulfiller: ReframeFulfiller) {
   const ref = useRef(fulfiller)
   ref.current = fulfiller
   useEffect(() => scene?.registerReframeFulfiller((req) => ref.current(req)), [scene])
+}
+
+/** Claim the no-candidate ladder's view motion (docs/focus.md "Directional
+ *  navigation"): `canMove` is the camera-bounds predicate, `nudge` the one-
+ *  increment view move. Rigless scenes get no nudge — arrows still work
+ *  between projectable candidates; view motion is rig territory. No-op
+ *  outside a FocusScene. */
+export function useFocusNavPolicy(policy: NavPolicy) {
+  const scene = use(FocusSceneContext)
+  const ref = useRef(policy)
+  ref.current = policy
+  useEffect(
+    () =>
+      scene?.registerNavPolicy({
+        canMove: (dir) => ref.current.canMove(dir),
+        nudge: (req) => ref.current.nudge(req),
+      }),
+    [scene],
+  )
 }

@@ -5,6 +5,7 @@ import {
   clampViewElevation,
   gazeAt,
   gazeTween,
+  viewPitchRoom,
   type OrbitLimits,
 } from './cameraPose'
 
@@ -119,6 +120,40 @@ describe('clampViewElevation (position sacred — head turns, release aims)', ()
     const d = clampViewElevation(new THREE.Vector3(0, 1, 0), LIMITS)
     expect(Number.isFinite(d.x) && Number.isFinite(d.y) && Number.isFinite(d.z)).toBe(true)
     expect(d.length()).toBeCloseTo(1, 6)
+  })
+})
+
+describe('viewPitchRoom (camera-bounds predicate for the no-candidate ladder)', () => {
+  it('the home view has a little up-room and lots of down-room', () => {
+    // HOME_POS → HOME_TARGET: pitched ~6.7° down; the polar band tops out
+    // just shy of horizontal, so upward room is real but small.
+    const d = new THREE.Vector3(0, 1.6, 0).sub(new THREE.Vector3(0, 2.0, 3.4)).normalize()
+    const room = viewPitchRoom(d, LIMITS)
+    expect(room.up).toBeGreaterThan(0.05)
+    expect(room.up).toBeLessThan(0.12)
+    expect(room.down).toBeGreaterThan(1.2)
+  })
+
+  it('a view clampViewElevation bent to the band edge has zero up-room left', () => {
+    const d = clampViewElevation(new THREE.Vector3(0.5, 0.6, -0.7).normalize(), LIMITS)
+    const room = viewPitchRoom(d, LIMITS)
+    expect(room.up).toBeLessThan(1e-9)
+    expect(room.down).toBeGreaterThan(1)
+  })
+
+  it('a straight-down view has zero down-room and the whole band of up-room', () => {
+    const room = viewPitchRoom(new THREE.Vector3(0, -1, 0), LIMITS)
+    expect(room.down).toBeLessThan(1e-9)
+    // Band spans from −90° up to just below horizontal.
+    expect(room.up).toBeCloseTo(Math.PI / 2 + Math.asin(-Math.cos(LIMITS.maxPolarAngle!)), 6)
+  })
+
+  it('room halves sum to the band size wherever the view sits inside it', () => {
+    const bandSize =
+      Math.asin(-Math.cos(LIMITS.maxPolarAngle!)) - Math.asin(-Math.cos(LIMITS.minPolarAngle!))
+    const d = new THREE.Vector3(0.3, -0.4, -0.866).normalize()
+    const room = viewPitchRoom(d, LIMITS)
+    expect(room.up + room.down).toBeCloseTo(bandSize, 6)
   })
 })
 
