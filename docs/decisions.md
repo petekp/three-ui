@@ -482,3 +482,61 @@ onto the Apply button moved its counter 360 → 380 with the popover
 dismissed it and retired the layer. This generalizes past Radix — it is
 the correct behavior for any portal-based library rendered into a Surface,
 and it is a precondition for the floating-layer kit (#36).
+
+## 19. A forwarded pointer must leave the way a real one does (2026-07-31, lab 009)
+
+**Context.** A Tooltip re-plumbed into a Surface opened on hover and then
+never closed. Moving the pointer off the mesh un-hovered the trigger —
+`[data-hover]` cleared correctly — but the content stayed mounted
+indefinitely, and any later unrelated interaction inherited a stale
+tooltip.
+**Diagnosis, measured.** `forwardEvents` synthesized only the *bubbling*
+half of the boundary protocol: `pointerout`/`pointerover`. Radix Tooltip
+(react-tooltip 1.6.7) closes in two ordered steps, and neither reads those.
+A native, **non-bubbling `pointerleave` on the trigger** builds a grace
+polygon from the exit point and the content rect; only once that state
+commits does it attach the `document`-level `pointermove` listener that
+closes the tooltip when the pointer lands outside the polygon. No leave, no
+grace area, no listener, no close.
+Fixing the leave alone was still not enough — and the reason is the durable
+part. Dispatching the departure `pointermove` **synchronously** after the
+leave did nothing; the identical event dispatched later closed the tooltip
+immediately. The leave sets React state, and the listener that would have
+heard the move is attached by the effect that runs after that commits.
+**Decision.** Two changes, both about faithfulness rather than about Radix.
+(a) `crossBoundary` synthesizes the full protocol in spec order — `out`,
+`leave` (one per element crossed, stopping at the deepest common ancestor),
+`over`, `enter` — so "the pointer left ME" is a claim only the elements
+actually crossed make. (b) Leaving a Surface sends a short **burst** of
+departure moves over the next few animation frames, at a point outside the
+source's own rect, cancelled if the pointer returns.
+**Why a burst is the honest model.** A real pointer that leaves an element
+keeps moving, so a consumer that arms a tracker *in response to* the leave
+still receives later moves. Ours is discrete: one exit, one instant. The
+burst restores the only property of continuous motion that consumers
+actually depend on. Three frames is slack for a React commit plus passive
+effects — two separate scheduler tasks, either of which can land after a
+given frame — and is far too short to be felt.
+**Why outside the rect is provably enough.** Radix pads its exit points
+*inward* (`getPaddedExitPoints`, padding 5, always toward the element), so
+the hull never escapes the trigger ∪ content bounding box, which is inside
+the source root. Any point outside the root's rect is outside the hull —
+for any tooltip, at any position. No tuning, no magic number that needs
+revisiting.
+**Rejected.** (a) *Close the tooltip from the scene when the ray leaves* —
+needs a controlled `open` prop on every hover component and breaks the
+byte-verbatim ports. (b) *Dispatch the departure move on `document`
+directly* — loses the surface that generated it; dispatching on the root
+still bubbles to document and keeps per-surface listeners working.
+(c) *A single `setTimeout`* — same race, just longer odds.
+**Consequence.** Browser-verified 2026-07-31 (Chrome 150, real CDP mouse):
+tooltip opens on hover (`delayed-open`, content mounted in the layer),
+closes on leave (`closed`, layer emptied), survives rapid re-entry
+(`instant-open`, still open 1.2s later — the departure was cancelled), and
+click-driven layers are unaffected (Popover and Select both stay open when
+the pointer leaves, and still dismiss on outside click). Idle paint
+counters flat across 3s. `forwardEvents` now has a DOM test suite
+(happy-dom) — the first in the repo, since everything else here is pure
+geometry. This is the same seam as #18: the forwarder is the only place
+that knows the pointer's real story, so anything it declines to say, no
+component downstream can recover.

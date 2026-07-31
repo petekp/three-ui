@@ -44,6 +44,10 @@ const ACTIVE_ATTR = 'data-active'
 interface PointerMirror {
   hovered: Element | null
   active: Element | null
+  /** Last forwarded position, in the source subtree's page coordinates. */
+  at: { x: number; y: number }
+  /** Pending animation frame for the departure moves; 0 when none. */
+  away: number
 }
 
 const mirrors = new WeakMap<HTMLElement, PointerMirror>()
@@ -51,7 +55,7 @@ const mirrors = new WeakMap<HTMLElement, PointerMirror>()
 const mirrorOf = (root: HTMLElement): PointerMirror => {
   let m = mirrors.get(root)
   if (!m) {
-    m = { hovered: null, active: null }
+    m = { hovered: null, active: null, at: { x: 0, y: 0 }, away: 0 }
     mirrors.set(root, m)
   }
   return m
@@ -75,6 +79,73 @@ function swapChainAttr(root: Element, prev: Element | null, next: Element | null
   for (const el of nextChain) if (!el.hasAttribute(attr)) el.setAttribute(attr, '')
 }
 
+/**
+ * The boundary-crossing protocol: what a real browser dispatches when the
+ * pointer moves off `prev` and onto `next` (either may be null at the edges
+ * of the surface).
+ *
+ * The pair that bubbles and the pair that doesn't say different things, and
+ * libraries listen to both:
+ *
+ * - `pointerout`/`pointerover` bubble, so one dispatch each is the whole
+ *   announcement — every ancestor hears "something under me changed".
+ * - `pointerleave`/`pointerenter` do NOT bubble. The browser fires one per
+ *   element actually crossed and stops at the deepest common ancestor,
+ *   because the pointer never left *that*. So they mean "the pointer left
+ *   ME", which is a claim only the crossed elements may make.
+ *
+ * Forwarding only the bubbling pair — which is all this did until 2026-07-31
+ * — is why a Radix tooltip opened inside a Surface could never close. It
+ * builds its grace area from a native `pointerleave` on the trigger, and
+ * only mounts the document listener that closes it once that area exists.
+ * No leave, no grace area, no close: the tooltip hung until something else
+ * unmounted it.
+ *
+ * Order matters and is the spec's: out, leave, over, enter — leaves outward
+ * from the deepest element, enters inward toward it.
+ *
+ * Known gap: the `mouseout`/`mouseleave`/`mouseover`/`mouseenter` twins are
+ * not mirrored. Nothing in the port listens for them (Radix is pointer-event
+ * native); add them here if a component ever needs them.
+ */
+function crossBoundary(
+  root: HTMLElement,
+  prev: Element | null,
+  next: Element | null,
+  init: PointerEventInit & MouseEventInit,
+) {
+  if (prev === next) return
+
+  const prevChain = chainOf(root, prev)
+  const nextChain = chainOf(root, next)
+  const entered = new Set(nextChain)
+  const left = new Set(prevChain)
+
+  prev?.dispatchEvent(
+    new PointerEvent('pointerout', { ...init, bubbles: true, relatedTarget: next }),
+  )
+  for (const el of prevChain) {
+    if (entered.has(el)) break // the deepest common ancestor — not left
+    el.dispatchEvent(
+      new PointerEvent('pointerleave', { ...init, bubbles: false, relatedTarget: next }),
+    )
+  }
+
+  next?.dispatchEvent(
+    new PointerEvent('pointerover', { ...init, bubbles: true, relatedTarget: prev }),
+  )
+  const entering: Element[] = []
+  for (const el of nextChain) {
+    if (left.has(el)) break
+    entering.push(el)
+  }
+  for (const el of entering.reverse()) {
+    el.dispatchEvent(
+      new PointerEvent('pointerenter', { ...init, bubbles: false, relatedTarget: prev }),
+    )
+  }
+}
+
 function updateHover(
   root: HTMLElement,
   target: Element,
@@ -82,24 +153,93 @@ function updateHover(
 ) {
   const m = mirrorOf(root)
   if (m.hovered === target) return
-  m.hovered?.dispatchEvent(
-    new PointerEvent('pointerout', { ...init, relatedTarget: target }),
-  )
+  // Mirror first, dispatch second: the browser has :hover applied before it
+  // fires the boundary events, so a handler reading [data-hover] must see the
+  // new state, not the one being left.
   swapChainAttr(root, m.hovered, target, HOVER_ATTR)
-  target.dispatchEvent(
-    new PointerEvent('pointerover', { ...init, relatedTarget: m.hovered }),
-  )
+  crossBoundary(root, m.hovered, target, init)
   m.hovered = target
 }
+
+/**
+ * How far outside the source's own rect to park the pointer on exit.
+ *
+ * Any positive margin is provably enough for Radix's grace area: it pads its
+ * exit points *inward* (`getPaddedExitPoints`, padding 5, always toward the
+ * element), so the hull it hands to the tracker never escapes the trigger ∪
+ * content bounding box — which is inside the source root. A point outside the
+ * root is therefore outside the hull, for any tooltip, at any position.
+ * 16px is simply comfortable clearance for fractional rects.
+ */
+const AWAY_MARGIN_PX = 16
+
+/**
+ * How many frames of departure to send. Three is enough slack for a consumer
+ * that reacts to the leave through a React state update — render and passive
+ * effects are separate scheduler tasks, and either may land after a given
+ * frame — while staying far too short to be felt.
+ */
+const AWAY_FRAMES = 3
 
 /** Drop all mirrored state (call when the pointer leaves the surface). */
 export function clearPointerState(root: HTMLElement) {
   const m = mirrors.get(root)
   if (!m) return
   if (m.hovered) {
-    m.hovered.dispatchEvent(new PointerEvent('pointerout', { bubbles: true }))
+    // Leave from where the pointer actually was. The grace polygon is
+    // anchored at these coordinates, so reporting the away point here would
+    // stretch the hull out to meet it and the move below would land inside
+    // its own grace area — open forever, for a subtler reason.
+    const init: PointerEventInit & MouseEventInit = {
+      clientX: m.at.x,
+      clientY: m.at.y,
+      bubbles: true,
+      cancelable: true,
+      pointerId: 1,
+      pointerType: 'mouse',
+      isPrimary: true,
+      button: 0,
+      buttons: 0,
+      view: window,
+    }
     swapChainAttr(root, m.hovered, null, HOVER_ATTR)
+    crossBoundary(root, m.hovered, null, init)
     m.hovered = null
+
+    // Then say where the pointer went, over the next few frames. Document
+    // -level trackers — Radix's grace area, and every dismissal heuristic
+    // built like it — reason about position, not about which subtree an event
+    // came from, so a leave with no follow-up move leaves them believing the
+    // pointer is still parked wherever it last was.
+    //
+    // Why a burst and not one dispatch: a real pointer that leaves an element
+    // keeps moving, so a consumer that ARMS a tracker in response to the
+    // leave still receives later moves. Ours is discrete — one exit, one
+    // instant — and a single synchronous move lands before any consumer has
+    // reacted. Radix is the worked example: `pointerleave` sets React state,
+    // and the document listener that closes the tooltip is attached by the
+    // effect after that commits. Measured 2026-07-31: the synchronous move
+    // did nothing; the identical move sent later closed the tooltip.
+    //
+    // Cancelled if the pointer comes back (see forwardPointer), so returning
+    // to the surface never eats its own dismissal.
+    const rect = root.getBoundingClientRect()
+    const away: PointerEventInit & MouseEventInit = {
+      ...init,
+      clientX: rect.left - AWAY_MARGIN_PX,
+      clientY: rect.top - AWAY_MARGIN_PX,
+    }
+    let frames = AWAY_FRAMES
+    const step = () => {
+      m.away = 0
+      // A surface torn down mid-departure has nothing to dismiss, and events
+      // from a detached tree never reach document anyway.
+      if (!root.isConnected) return
+      root.dispatchEvent(new PointerEvent('pointermove', away))
+      root.dispatchEvent(new MouseEvent('mousemove', away))
+      if (--frames > 0) m.away = requestAnimationFrame(step)
+    }
+    m.away = requestAnimationFrame(step)
   }
   if (m.active) {
     swapChainAttr(root, m.active, null, ACTIVE_ATTR)
@@ -127,6 +267,14 @@ export function forwardPointer(
   const x = rect.left + u * rect.width
   const y = rect.top + (1 - v) * rect.height
   const target = deepestElementAt(root, x, y)
+  const mirror = mirrorOf(root)
+  mirror.at = { x, y }
+  // The pointer is back before the departure finished sending — call it off,
+  // or we would announce the pointer is gone while it is demonstrably here.
+  if (mirror.away) {
+    cancelAnimationFrame(mirror.away)
+    mirror.away = 0
+  }
 
   const init: PointerEventInit & MouseEventInit = {
     clientX: x,

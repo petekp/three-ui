@@ -22,6 +22,13 @@ in `docs/` — **read `docs/platform.md` before touching
   `e.nativeEvent.stopPropagation()` any click into a Surface dismisses
   every open Radix popover/menu/dialog. `pointerdown` only — OrbitControls
   needs document-level move/up (decisions.md #18).
+- **Don't collapse the departure burst in `clearPointerState`.** Leaving a
+  Surface sends `pointerleave` (per element crossed, non-bubbling) and then
+  a few frames of `pointermove` outside the source rect. Both halves are
+  load-bearing: without the leave, Radix never builds the grace area that
+  arms its close listener; sent synchronously, the move lands before that
+  listener exists. A real pointer keeps moving after it leaves — ours has
+  to as well (decisions.md #19).
 - **Don't add repaint loops, MutationObservers, or dirty-flag heuristics
   to `Surface`.** `paint="auto"` is passive on purpose: the compositor's
   self-firing `onpaint` is the change signal (`paintCount`). Measured

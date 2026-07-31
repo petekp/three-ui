@@ -206,15 +206,10 @@ function DeployCard() {
 // Dialog is deliberately left alone. It is not anchored to anything — a
 // modal belongs to the camera, not to a panel — so it stays portaled to
 // document.body as the visible "before", and inc 3 gives it real chrome.
-function FloatingCard({
-  container,
-  popoverOpen,
-  onPopoverOpenChange,
-}: {
-  container: HTMLElement
-  popoverOpen: boolean
-  onPopoverOpenChange: (open: boolean) => void
-}) {
+// Every component here is uncontrolled — the scene knows nothing about what
+// is open. That is the claim: `container` is the only addition, and the
+// layer figures out the rest by watching itself.
+function FloatingCard({ container }: { container: HTMLElement }) {
   const [applied, setApplied] = useState(360)
   const onApply = () => setApplied((w) => w + 20)
 
@@ -226,7 +221,7 @@ function FloatingCard({
           <CardDescription>Portals aimed at a layer.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <Popover open={popoverOpen} onOpenChange={onPopoverOpenChange}>
+          <Popover>
             <PopoverTrigger asChild>
               <Button id="l9-pop-trigger" variant="outline" className="w-full">
                 Configure
@@ -328,9 +323,16 @@ function FloatingPanel({ position, rotation }: {
 }) {
   const panelGroup = useRef<Group>(null)
   const layerGroup = useRef<Group>(null)
-  const [popoverOpen, setPopoverOpen] = useState(false)
-  // Is the layer worth drawing and hit-testing? True from the moment
-  // something opens until its exit flight lands.
+  // Is the layer worth drawing and hit-testing? Exactly when something is
+  // mounted in it — occupancy, not any one component's open state.
+  //
+  // Asking a component instead is the bug this replaced: the slab was tied
+  // to the Popover, so a Select or Tooltip opened into a mesh nobody drew,
+  // and any flight landing while the popover was shut retired the slab out
+  // from under whatever else was showing. Occupancy is also the only signal
+  // that keeps the ports verbatim — per-component `open` props would mean
+  // wrapping every one of them, and the next library's components would not
+  // fit at all.
   const [layerLive, setLayerLive] = useState(false)
 
   // The portal container. One stable node for the panel's whole life: the
@@ -355,9 +357,22 @@ function FloatingPanel({ position, rotation }: {
   liveRef.current = layerLive
   const raycast = useMemo(() => gatedRaycast(() => liveRef.current), [])
 
+  // Occupancy watch. The content is mounted by a DIFFERENT React root (the
+  // card's, portaling in), so no effect in this tree ever re-runs when a
+  // popover opens — there is nothing passive to observe. childList on the
+  // host fires exactly on mount and unmount, which is precisely the two
+  // moments that matter, and never in between.
+  //
+  // This is not the MutationObserver the house rules ban: that one is about
+  // Surface's *paint* path, where `onpaint` is already the better change
+  // signal. This watches what exists, not when to repaint.
   useEffect(() => {
-    if (popoverOpen) setLayerLive(true)
-  }, [popoverOpen])
+    const sync = () => setLayerLive(layerHost.childElementCount > 0)
+    sync()
+    const mo = new MutationObserver(sync)
+    mo.observe(layerHost, { childList: true })
+    return () => mo.disconnect()
+  }, [layerHost])
 
   useEffect(() => {
     ;(window as Lab009Window).__lab009 = { recording: false, trace: [] }
@@ -399,9 +414,12 @@ function FloatingPanel({ position, rotation }: {
       hook.trace.push({ t: performance.now(), scale: v.scale, y: v.y, opacity: v.opacity, done })
     }
 
-    // An exit that has landed: the DOM is already gone (finish() fired
-    // animationend, Presence unmounted), so stop paying for the slab.
-    if (done && !popoverOpen) setLayerLive(false)
+    // Nothing to do when a flight lands. The mesh landing makes the
+    // conductor call finish(), which fires animationend, which lets Presence
+    // unmount the content — and that unmount is itself the childList
+    // mutation that retires the slab. Retiring it from here instead was the
+    // bug: `done` arrives for entrances too.
+    void done
   })
 
   return (
@@ -409,11 +427,7 @@ function FloatingPanel({ position, rotation }: {
       <FocusGroup id="shadcn-floating" order={1} objectRef={panelGroup}>
         <SurfaceApp
           content={
-            <FloatingCard
-              container={layerHost}
-              popoverOpen={popoverOpen}
-              onPopoverOpenChange={setPopoverOpen}
-            />
+            <FloatingCard container={layerHost} />
           }
           label="lab009-floating"
           width={PANEL_W}

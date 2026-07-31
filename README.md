@@ -1205,3 +1205,88 @@ the card behind it. One stable function reading a ref instead.
 Dialog is deliberately left unplumbed in the scene, labelled as such:
 a modal belongs to the camera, not to a panel, and that's increment
 3's subject.
+
+### Increment 2a — the tooltip that would not leave
+
+Pete, looking at the finished increment: *"i'm only seeing the select
+menu and the portaled dialog. i don't see a tooltip in 3d space."*
+
+Two bugs, stacked, and the second one is the interesting one.
+
+The first was mine and shallow. The floating slab's liveness was wired
+to the Popover's `open` state, because the Popover was the component
+being re-plumbed when the slab was written. So a Select or a Tooltip
+opened into a mesh nobody was drawing — the content was there, in the
+layer, correctly positioned, invisible. Worse, any animation landing
+while the popover happened to be shut retired the slab out from under
+whatever else was showing. The fix is a one-line reframing that turns
+out to matter: **liveness is occupancy**, not any component's opinion
+about itself. Is anything mounted in the layer? Then draw it. That is
+also the only formulation that keeps the ports byte-verbatim — asking
+components would mean wrapping every one of them, and the next
+library's components wouldn't fit at all.
+
+Then the tooltip appeared, and would not go away.
+
+Moving the pointer off the mesh un-hovered the trigger correctly —
+`[data-hover]` cleared, the mirror emptied — and the tooltip stayed
+mounted forever. Reading Radix's source explains why, and indicts our
+input layer rather than theirs. `forwardEvents` was synthesizing only
+the *bubbling* half of the boundary protocol: `pointerout` and
+`pointerover`. Radix Tooltip reads neither. It wants the non-bubbling
+half — a native `pointerleave` **on the trigger** — which builds a
+grace polygon from the exit point and the content rect, and only then
+attaches the `document` listener that closes the tooltip once the
+pointer lands outside that polygon. No leave, no grace area, no
+listener, no close.
+
+That distinction is not Radix trivia. `out`/`over` bubble, so one
+dispatch tells every ancestor "something under me changed".
+`leave`/`enter` don't bubble, and the browser fires one per element
+actually crossed, stopping at the deepest common ancestor — because
+the pointer never left *that*. They mean "the pointer left **me**",
+which is a claim only the crossed elements are entitled to make. We
+were emitting the announcement and withholding the testimony.
+
+Adding the leave was still not enough, and this is the part worth
+keeping. Sending the departure `pointermove` synchronously right after
+the leave did nothing at all. The identical event, sent a moment
+later, closed the tooltip instantly. The leave sets React state; the
+listener that would have heard the move is attached by the effect that
+runs after that commits. Our synthetic move arrived before its own
+audience existed.
+
+The bug is in the model, not the timing. A real pointer that leaves an
+element **keeps moving** — so anything that arms a tracker in response
+to a leave still gets later moves for free. Ours is discrete: one
+exit, one instant, one event. So leaving a Surface now sends a short
+burst of departure moves across the next few frames, cancelled if the
+pointer comes back. Three frames is slack for a React commit plus
+passive effects (two separate scheduler tasks, either of which can
+land after any given frame) and far too short to feel.
+
+The destination needs no tuning, which is the nice part. Radix pads
+its exit points *inward*, so the grace hull can never escape the
+trigger ∪ content bounding box — which lives inside the source root.
+Any point outside the root's own rect is therefore outside the hull,
+for any tooltip, at any position. Sixteen pixels out, and it is a
+theorem rather than a constant.
+
+This also bought the repo its first DOM test suite. Everything tested
+here so far has been pure geometry, which runs happily in node; but
+the thing under test this time *is* a sequence of DOM events — which
+ones, on which elements, carrying which coordinates — so `happy-dom`
+earns its place. Twelve tests now pin the protocol, including the two
+that reproduce Pete's bug and the one that proves coming back cancels
+the goodbye.
+
+Verified end to end with a real projected mouse: tooltip opens on
+hover, closes on leave, survives rapid re-entry, and the click-driven
+layers are untouched — Popover and Select both stay open when the
+pointer wanders off, and still dismiss on an outside click. Idle paint
+counters flat across three seconds.
+
+The through-line with the pointerdown finding (#18) is that both live
+at the same seam. The forwarder is the only thing in the system that
+knows the pointer's real story. Whatever it declines to say, no
+component downstream can reconstruct.
