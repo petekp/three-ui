@@ -960,3 +960,32 @@ the target plane, so the view can never rise past −2.2°) — both
 dissolved by reading the emitter and recomputing the fingerprints by
 hand. The lesson increment 4 taught, again: the report is data; the
 code is the verdict.
+
+**Increment 2 shipped — the barrel, and the scene that proves it.**
+`src/index.ts` is the public surface now: Surface, SurfaceLayer,
+MomentumCard, the control kit, the FocusScene kit with its four hooks,
+FocusOrbitRig — curated on purpose, with the lib/ internals
+(cameraPose, focusTree, spatialNav, physics1D, lodTier) staying
+private behind the primitives that wrap them. The proof is Lab008.tsx:
+a three-panel drafting wall — read-only brief, console with native
+typing, tuner whose Dial shares the panel's traversal — that imports
+from the barrel alone. If it needed to reach into src/lib, the barrel
+would be lying about being a library. It also runs a deliberate
+contrast to lab 006: no feeds, no timers, so idle is exactly zero —
+two stats samples four seconds apart, byte-identical, all three
+sources flat.
+
+The keyboard ledger, on a scene the focus system had never seen:
+entry policy picked the center console; the ring wraps
+console→tuner→brief in authored order; arrows clamp at the wall's
+edge; Enter parked the camera 3.05 from the console with the input
+natively focused; typed "x9" landed as `x9ember-3` in the parked
+subtree and Transmit's DOM handler logged "Sent as x9ember-3."; the
+read-only tuner descended straight onto its dial leaf (role slider,
+"Tuner frequency", 440 Hz) and one ArrowRight moved valuetext and the
+painted readout together to 880 Hz; the Escape ladder stepped
+interior→unit→scene with the camera landing home exact. One
+verification stall was my own script, twice over: `agent-browser
+type` takes a selector before the text, and I'd passed text alone —
+the CLI sat waiting for an element named after my payload. The app
+never had a bug; the harness did.
