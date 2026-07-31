@@ -1,14 +1,17 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentProps,
   type ReactNode,
 } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import type { Group } from 'three'
+import { Mesh } from 'three'
+import type { Group, Object3D } from 'three'
 import { FocusGroup, Surface } from '../index'
+import { useAnimationConductor } from '../primitives/useAnimationConductor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -22,6 +25,36 @@ import {
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from '@/components/ui/popover'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 
 // Lab 009 — shadcn as matter. The components below are byte-verbatim from
 // the shadcn registry (new-york-v4); nothing about them knows it is being
@@ -29,10 +62,43 @@ import { Label } from '@/components/ui/label'
 // elsewhere: the hover/active variant twins and the refused tw-animate-css
 // import in styles/ui.css, and the React-mount adapter here.
 
+const PX = 200 // CSS pixels per world unit
 const PANEL_W = 360
 const PANEL_H = 460
-const W3 = PANEL_W / 200
-const H3 = PANEL_H / 200
+const W3 = PANEL_W / PX
+const H3 = PANEL_H / PX
+
+// How far the floating layer stands off its panel. Big enough to read as a
+// separate slab (its own shadow, its own specular) without breaking the
+// illusion that it belongs to the card.
+const LAYER_LIFT = 0.13
+
+/**
+ * Raycast only while `live()` says so.
+ *
+ * The obvious spelling — `raycast={live ? undefined : noop}` — silently
+ * fails: r3f applies props onto the instance, and handing back `undefined`
+ * does not restore the class default, it leaves the last function attached.
+ * The slab stayed permanently un-hittable and every click fell through to
+ * the card behind it. One stable function that reads a ref instead.
+ */
+function gatedRaycast(live: () => boolean): Object3D['raycast'] {
+  return function (this: Object3D, raycaster, intersects) {
+    if (!live()) return
+    Mesh.prototype.raycast.call(this, raycaster, intersects)
+  }
+}
+
+interface FlightSample {
+  t: number
+  scale: number
+  y: number
+  opacity: number
+  done: boolean
+}
+type Lab009Window = Window & {
+  __lab009?: { recording: boolean; trace: FlightSample[] }
+}
 
 // SurfaceApp — mount a React tree as a Surface's live DOM. A second React
 // root renders into the parked source subtree; state, effects, and event
@@ -133,6 +199,253 @@ function DeployCard() {
   )
 }
 
+// The anchored floating family, re-plumbed. Everything here is still
+// verbatim shadcn markup; the only addition is `container`, which aims each
+// portal at the scene's floating layer instead of document.body.
+//
+// Dialog is deliberately left alone. It is not anchored to anything — a
+// modal belongs to the camera, not to a panel — so it stays portaled to
+// document.body as the visible "before", and inc 3 gives it real chrome.
+function FloatingCard({
+  container,
+  popoverOpen,
+  onPopoverOpenChange,
+}: {
+  container: HTMLElement
+  popoverOpen: boolean
+  onPopoverOpenChange: (open: boolean) => void
+}) {
+  const [applied, setApplied] = useState(360)
+  const onApply = () => setApplied((w) => w + 20)
+
+  return (
+    <TooltipProvider>
+      <Card className="h-full w-full">
+        <CardHeader>
+          <CardTitle>Floating family</CardTitle>
+          <CardDescription>Portals aimed at a layer.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <Popover open={popoverOpen} onOpenChange={onPopoverOpenChange}>
+            <PopoverTrigger asChild>
+              <Button id="l9-pop-trigger" variant="outline" className="w-full">
+                Configure
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent id="l9-pop-content" container={container}>
+              <PopoverHeader>
+                <PopoverTitle>Dimensions</PopoverTitle>
+                <PopoverDescription>Set the layer size.</PopoverDescription>
+              </PopoverHeader>
+              {/* Live control inside the floating slab: a pointer has to
+                  cross the mesh, get forwarded into the layer's parked DOM,
+                  and land on this button for the count to move. */}
+              <div className="mt-3 flex items-center justify-between">
+                <span className="text-sm text-muted-foreground" id="l9-pop-count">
+                  width {applied}
+                </span>
+                <Button id="l9-pop-apply" size="sm" onClick={onApply}>
+                  Apply
+                </Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+
+          {/* `position="popper"` is consumer code, not a port seam: the
+              default item-aligned mode sizes itself against the viewport
+              (measured 568px tall inside a 460px panel), which is a
+              coordinate space a Surface does not live in. */}
+          <Select>
+            <SelectTrigger id="l9-select-trigger" className="w-full">
+              <SelectValue placeholder="Framework" />
+            </SelectTrigger>
+            <SelectContent
+              id="l9-select-content"
+              container={container}
+              position="popper"
+            >
+              <SelectItem value="next">Next.js</SelectItem>
+              <SelectItem value="remix">Remix</SelectItem>
+              <SelectItem value="astro">Astro</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button
+                id="l9-dialog-trigger"
+                variant="secondary"
+                className="w-full"
+              >
+                Open dialog (unplumbed)
+              </Button>
+            </DialogTrigger>
+            <DialogContent id="l9-dialog-content">
+              <DialogHeader>
+                <DialogTitle>Are you sure?</DialogTitle>
+                <DialogDescription>
+                  This dialog is portaled to document.body.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter showCloseButton />
+            </DialogContent>
+          </Dialog>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button id="l9-tip-trigger" variant="ghost" className="w-full">
+                Hover me
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent id="l9-tip-content" container={container}>
+              Tooltip in a texture
+            </TooltipContent>
+          </Tooltip>
+        </CardContent>
+      </Card>
+    </TooltipProvider>
+  )
+}
+
+// The floating panel: a card slab, and a second slab standing off it that
+// holds everything the card's portals emit.
+//
+// The trick that makes this cheap is a coordinate coincidence that is not a
+// coincidence at all: every parked source canvas is `position: fixed` at
+// (0,0), and Floating UI positions with `position: fixed` + transform. So
+// the popover's page rect is *already* panel-local — the layer canvas is
+// the same size as the panel canvas and shares its origin, which means
+// Radix's own positioning lands the content in exactly the right place on
+// the layer with no projection, no unprojection, and no math from us.
+//
+// What the layer costs: one 360×460 texture that paints once when empty and
+// then only when its contents change. What it buys: real depth. The popover
+// is a slab in front of the card — it casts a shadow on it, catches its own
+// specular, and occludes it from the side.
+function FloatingPanel({ position, rotation }: {
+  position: [number, number, number]
+  rotation: [number, number, number]
+}) {
+  const panelGroup = useRef<Group>(null)
+  const layerGroup = useRef<Group>(null)
+  const [popoverOpen, setPopoverOpen] = useState(false)
+  // Is the layer worth drawing and hit-testing? True from the moment
+  // something opens until its exit flight lands.
+  const [layerLive, setLayerLive] = useState(false)
+
+  // The portal container. One stable node for the panel's whole life: the
+  // card's React root portals into it, the layer Surface rasterizes it.
+  const layerHost = useMemo(() => {
+    const el = document.createElement('div')
+    el.className = 'ui-layer'
+    el.style.width = `${PANEL_W}px`
+    el.style.height = `${PANEL_H}px`
+    return el
+  }, [])
+
+  const mountLayer = useCallback(
+    (el: HTMLElement) => {
+      el.appendChild(layerHost)
+      return () => layerHost.remove()
+    },
+    [layerHost],
+  )
+
+  const liveRef = useRef(layerLive)
+  liveRef.current = layerLive
+  const raycast = useMemo(() => gatedRaycast(() => liveRef.current), [])
+
+  useEffect(() => {
+    if (popoverOpen) setLayerLive(true)
+  }, [popoverOpen])
+
+  useEffect(() => {
+    ;(window as Lab009Window).__lab009 = { recording: false, trace: [] }
+  }, [])
+
+  // The bridge. shadcn asked for `fade-in-0 zoom-in-95 slide-in-from-top-2`
+  // in Tailwind; the conductor reads that curve out of the paused animation
+  // and hands it here, one pose per frame, for the mesh to wear.
+  useAnimationConductor(layerHost, (v, done) => {
+    const g = layerGroup.current
+    if (!g) return
+
+    // CSS scales about the content's own transform-origin, near the
+    // trigger. A group scales about its own origin, at the panel's center —
+    // so pivot-correct: p + (x - p)·s is the same as scaling about the
+    // origin and translating by p·(1 - s).
+    const rect = layerHost
+      .querySelector('[data-slot$="-content"]')
+      ?.getBoundingClientRect()
+    const pivotX = rect ? (rect.left + rect.width / 2 - PANEL_W / 2) / PX : 0
+    const pivotY = rect ? -(rect.top + rect.height / 2 - PANEL_H / 2) / PX : 0
+
+    g.scale.setScalar(v.scale)
+    g.position.set(
+      pivotX * (1 - v.scale) + v.x / PX,
+      pivotY * (1 - v.scale) - v.y / PX, // DOM y grows down; world y grows up
+      LAYER_LIFT,
+    )
+    g.traverse((o) => {
+      const mat = (o as Mesh).material
+      if (mat && !Array.isArray(mat)) mat.opacity = v.opacity
+    })
+
+    // Scene hook: the house pattern for browser-verifying a lab. Records
+    // what the mesh actually wore, frame by frame, so a probe can read the
+    // flight back without racing the render loop.
+    const hook = (window as Lab009Window).__lab009
+    if (hook?.recording) {
+      hook.trace.push({ t: performance.now(), scale: v.scale, y: v.y, opacity: v.opacity, done })
+    }
+
+    // An exit that has landed: the DOM is already gone (finish() fired
+    // animationend, Presence unmounted), so stop paying for the slab.
+    if (done && !popoverOpen) setLayerLive(false)
+  })
+
+  return (
+    <group position={position} rotation={rotation} ref={panelGroup}>
+      <FocusGroup id="shadcn-floating" order={1} objectRef={panelGroup}>
+        <SurfaceApp
+          content={
+            <FloatingCard
+              container={layerHost}
+              popoverOpen={popoverOpen}
+              onPopoverOpenChange={setPopoverOpen}
+            />
+          }
+          label="lab009-floating"
+          width={PANEL_W}
+          height={PANEL_H}
+          castShadow
+        >
+          <planeGeometry args={[W3, H3]} />
+        </SurfaceApp>
+      </FocusGroup>
+
+      {/* The floating layer. Same size and origin as the panel, standing
+          off it along the normal. Transparent everywhere the DOM painted
+          nothing — and when nothing is open, inert to the raycaster so it
+          does not swallow clicks meant for the card behind it. */}
+      <group ref={layerGroup} name="l9-layer" position={[0, 0, LAYER_LIFT]} visible={layerLive}>
+        <Surface
+          label="lab009-layer"
+          width={PANEL_W}
+          height={PANEL_H}
+          html=""
+          onSource={mountLayer}
+          transparent
+          castShadow
+          raycast={raycast}
+        >
+          <planeGeometry args={[W3, H3]} />
+        </Surface>
+      </group>
+    </group>
+  )
+}
+
 export function Lab009() {
   const group = useRef<Group>(null)
 
@@ -161,6 +474,8 @@ export function Lab009() {
           </SurfaceApp>
         </FocusGroup>
       </group>
+
+      <FloatingPanel position={[2.05, 1.5, 0.25]} rotation={[0, -0.45, 0]} />
     </>
   )
 }

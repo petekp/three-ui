@@ -5,12 +5,23 @@
  * globals.css with three deliberate deviations, each one a dialect rule
  * of rendering DOM as matter:
  *
- *  1. `tw-animate-css` is NOT imported. Opacity/transform keyframes are
- *     compositor-owned and never rasterize into a Surface texture
- *     (docs/platform.md) — open/close motion belongs to the MESH.
+ *  1. `tw-animate-css` IS imported — but as a score, not a performance.
+ *     Its keyframes run on descendants of the drawn root, so they DO
+ *     rasterize (Chrome 150.0.7871.187) — at one paint AND one texture
+ *     upload per frame, ~120/s, and a translate slides pixels *inside*
+ *     the slab and clips at its edge. So a Surface never lets them run:
+ *     useAnimationConductor seizes each animation on animationstart,
+ *     parks the DOM at the visible pole, and performs the declared
+ *     curve on the MESH instead — 2 uploads for a whole flight. The
+ *     classes stay in verbatim shadcn markup and remain the authoring
+ *     vocabulary; three-ui just moves where the motion happens.
+ *     See docs/decisions.md #17 and docs/platform.md.
  *  2. shadcn's `body { bg-background text-foreground }` base rule is
  *     scoped to `.ui-root` instead: the host page owns <body>; every
- *     Surface-mounted React tree gets a .ui-root container.
+ *     Surface-mounted React tree gets a .ui-root container. `.ui-layer`
+ *     is its transparent twin — the portal container for a floating
+ *     Surface, which inherits the typography but paints no background,
+ *     so everything the popover does not cover stays clear glass.
  *  3. `hover`/`active` variants also match `[data-hover]`/`[data-active]`:
  *     real hit-testing never reaches a parked subtree, so Surface's
  *     forwardEvents mirrors pointer state as data attributes. This one
@@ -22,6 +33,7 @@
  */
 
 @import 'tailwindcss';
+@import 'tw-animate-css';
 
 @custom-variant hover (&:is(:hover, [data-hover]));
 @custom-variant active (&:is(:active, [data-active]));
@@ -101,6 +113,9 @@
   }
   .ui-root {
     @apply bg-background font-sans text-foreground antialiased;
+  }
+  .ui-layer {
+    @apply font-sans text-foreground antialiased;
   }
 }
 

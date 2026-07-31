@@ -20,11 +20,13 @@ the texture; motion and blending live on the mesh.
 | Text/number updates | ✅ | self-paints; coalesced mutations = 1 paint |
 | `color`, `background`, `box-shadow`, `border` — static or animated | ✅ | paint properties; animations self-paint per frame |
 | Layout: width/height, flex, grid, element insertion/removal | ✅ | layout+paint; transitions fine, count as "animating" while running |
-| Static `opacity`, static `transform` (incl. on children) | ✅ | baked into the paint record |
+| Static `opacity`, static `transform` on a **descendant** | ✅ | baked into the paint record |
+| Static `opacity`/`transform` **on the content root**, *changed after mount* | ⚠️ | bakes only when some unrelated mutation next re-records — until then the texture shows the old value. Set it before first paint or not at all |
 | JS-driven style mutation (set `style.*` per frame) | ✅ | each mutation rebuilds the record |
 | Focus rings, caret, selection | ✅ | self-paint (caret blink included) |
 | `:hover` / `:active` styling | ✅ via mirror | author as `[data-hover]` / `[data-active]` alongside the pseudo-class — synthetic events can't flip pseudo-classes |
-| **Animated/transitioned `opacity` or `transform`** (CSS keyframes, transitions, WAAPI) | ❌ **never** | compositor-owned: keyframes freeze; transitions show no tween *and leave a stale end state* until an unrelated repaint heals it. `paint="always"` cannot fix this. |
+| **Animated/transitioned `opacity`/`transform` on the content root** | ❌ **never** | changing the drawn element's own opacity/transform doesn't invalidate its record, so nothing repaints: keyframes freeze; transitions show no tween *and leave a stale end state* until an unrelated mutation heals it. `paint="always"` cannot fix this — it replays the cached record |
+| Animated/transitioned `opacity`/`transform` on a **descendant** | ⚠️ works, costs | genuinely rasterizes per frame (measured) — but at **1 paint + 1 upload per frame**, ~120/s. Fine for one-off UI; ruinous at scale. Prefer `useAnimationConductor` (2 paints total) or move the mesh |
 | `<video>`, animated GIF, `<canvas>`, CSS filters, `will-change`, inner scrolling | ⚠️ untested | assume broken; route media around the DOM (below) |
 
 ## Translate 2D idioms, don't port them

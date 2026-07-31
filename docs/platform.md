@@ -6,8 +6,8 @@ it, so a future Chrome can be re-tested claim by claim. For what to *do*
 about these facts, see [authoring.md](authoring.md). All trial-API contact
 in code is confined to `src/lib/htmlInCanvas.ts`.
 
-Last verified: **2026-07-29, Chrome 150, macOS (M-series, 120Hz, dpr 2)**,
-launched with `--enable-features=CanvasDrawElement`.
+Last verified: **2026-07-31, Chrome 150.0.7871.187, macOS (M-series, 120Hz,
+dpr 2)**, launched with `--enable-features=CanvasDrawElement`.
 
 ## The mental model
 
@@ -62,31 +62,75 @@ as insurance).
 at the same rate at every N tested (per-source min == max) — under load
 the frame stretches uniformly; no source stalls.
 
-## Compositor-owned properties (the hard limit)
+## The drawn root's own opacity/transform (corrected 2026-07-31)
 
-Properties the compositor animates on promoted layers never enter the
-paint record. **No paint policy can capture them** — `paint="always"`
-repainting every frame reads the same stale record.
+**This section was wrong from 2026-07-29 to 2026-07-31.** It claimed
+opacity/transform animations are compositor-owned and can never rasterize.
+The observations were real; the explanation was too broad, and the rule it
+justified banned things that work. Corrected claim:
 
-| Case | Result | Evidence (2026-07-29) |
-|---|---|---|
-| `opacity` keyframe animation | **frozen** at pre-animation raster | alpha constant 255 through a full 1↔0.1 cycle, sampled per frame with per-frame `requestPaint` |
-| `opacity` **static** (no animation) | **bakes correctly** | `opacity:0.3` → alpha 77 |
-| `transform` static, on a child of the drawn element | **bakes correctly** | `translateX(100px)` child rasterizes at the transformed position |
-| `opacity` transition | **no tween AND stale end state**: raster keeps the old value after the transition completes | `.4s` transition 1→0.2: mid = 255, 600ms past end = 255 |
-| …until any unrelated repaint | **self-heals** | subsequent `textContent` change re-bakes: alpha 51 (= 0.2) |
+> `drawElementImage(el)` replays **el's own paint record**. Changing el's
+> **own** `opacity`/`transform` does **not invalidate** that record, so it
+> never self-fires `onpaint`. The value bakes correctly whenever something
+> *else* forces a re-record. Anything on a **descendant** is inside the
+> record: it rasterizes per frame and self-paints per frame.
 
-The transition case is the dangerous one: it produces an *intermittently
-wrong* texture that silently corrects on the next incidental mutation — a
-heisenbug generator hiding inside `transition: opacity`, the most common
-idiom on the web.
+The discriminating experiment (Chrome 150.0.7871.187, lab 009): identical
+`@keyframes { opacity: 1 → 0 }`, identical tree, only the target differs.
+Texture sampled per frame by reading the source canvas pixel under a
+known-position landmark div.
 
-Mechanism: animating opacity/transform promotes the element to its own
-compositor layer; the record then carries the base value and the real one
-lives on the layer. Any fresh re-record (an unrelated mutation) bakes the
-current computed value again. The API itself hints at this division:
-`getElementTransform()` exists precisely because transforms are handed to
-you *separately* from the paint.
+| Animated target | DOM opacity swept | Distinct texture values / 29 frames | Paints |
+|---|---|---|---|
+| a **descendant** div | 1 → 0 | **29** (`255,0,0` → `255,119,119` → `255,238,238`) | **29** |
+| the **drawn root** itself | 0.97 → 0.03 | **1** — frozen at `255,0,0` | **1** |
+
+A `background` keyframe run alongside as a known-paint control gave 29
+distinct values (`255,0,0` → `136,0,119` → `17,0,238`), and `transform`
+on a descendant moved a hard edge across a fixed sample point. So
+descendants animate, self-paint, and rasterize — for opacity and transform
+alike.
+
+The static case, same landmark, watching alpha:
+
+| Step | Texture alpha |
+|---|---|
+| baseline | 255 |
+| root `opacity: 0.5` set, nothing else touched | **255** — stale, no paint fired |
+| unrelated descendant mutation (`textContent`) | **128** — the fresh record bakes 0.5 correctly |
+| root opacity cleared | 255 |
+
+That is the old "self-heals on the next unrelated repaint" observation,
+reproduced exactly — and it is the whole heisenbug. A `transition: opacity`
+on the content root shows no tween and leaves a stale end state because
+nothing in that sequence ever invalidates the record; the *next* unrelated
+mutation bakes whatever the value happens to be by then. An animation on
+the root is the same bug with no healing mutation ever arriving.
+
+It also explains why `paint="always"` couldn't rescue it: `requestPaint()`
+schedules a **replay**, and a replay of a still-valid record re-reads
+nothing. Record invalidation is driven by changes *inside* the element's
+own subtree. Paint policy was never the lever.
+
+**Consequence for authoring:** animating opacity/transform on descendants
+is correct and supported (see [authoring.md](authoring.md)) — but it costs
+**1 paint + 1 texture upload per frame per Surface**, ~120/s on this
+hardware. That cost, not a rasterization limit, is what
+`useAnimationConductor` exists to avoid ([decisions.md #16](decisions.md)).
+The content root stays off-limits.
+
+**How the over-broad version survived two days.** The original probes
+animated the drawn root — the natural thing to reach for when the question
+is "does this Surface fade?" — and every reading was accurate for that
+target. Nothing contradicted it until a *descendant* was animated for an
+unrelated reason (verbatim shadcn markup, whose `animate-in` keyframes run
+on portaled content deep inside the subtree) and visibly worked. Any claim
+of the form "property P can't be captured" must name **which element P is
+on**; el-vs-descendant is a real seam in this API, not a detail.
+
+`getElementTransform()` existing at all is the API conceding the same
+seam: the drawn element's own transform is handed to you *separately*,
+because it is not part of what gets replayed.
 
 **Untested, suspected compositor-side:** `<video>` frames, animated GIFs,
 `<canvas>` children, CSS filters, `will-change` side effects, scroll
@@ -160,8 +204,13 @@ replay lands must be established that way.
 1. HUD chips: `drawElementImage ✓ / texElementImage2D ✓` on load.
 2. Self-paint: does a mutation fire `onpaint` with no `requestPaint`?
 3. Resolve: red→blue single-mutation experiment — buffer shows blue?
-4. Compositor: animated-opacity experiment — alpha still frozen? (If this
-   *starts working*, the authoring rules in authoring.md can be relaxed.)
+4. Root-vs-descendant: run the same opacity keyframe on the content root
+   and on a descendant div, sampling the source-canvas pixel under a
+   known-position landmark. Expect frozen + 1 paint for the root, a full
+   per-frame ramp + 1 paint/frame for the descendant. If the **root** case
+   starts self-painting, the authoring rule can be relaxed further; if the
+   **descendant** case stops, `useAnimationConductor` is load-bearing for
+   correctness and not just for cost.
 5. Probe: `?probe=128` → 120fps at 0 paints/s; `?probe=96&live=1` ceiling.
 6. Rescale: dolly inside 1.5 world units of a lab-006 panel → tier 3
    commits with one paint, glyphs sharpen; a focused field keeps its

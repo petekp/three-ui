@@ -70,6 +70,13 @@ export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children'> {
   side?: THREE.Side
   roughness?: number
   metalness?: number
+  /**
+   * Honor the texture's alpha. Off by default (a panel is a solid slab).
+   * On for overlay Surfaces — a floating layer's source paints only its
+   * popover/menu/dialog and leaves the rest of the subtree unpainted, so
+   * the slab shows the scene through everywhere the DOM drew nothing.
+   */
+  transparent?: boolean
 }
 
 // LOD evaluations run every Nth frame, phase-offset per Surface so a scene
@@ -123,6 +130,7 @@ export function Surface({
   side = THREE.FrontSide,
   roughness = 0.35,
   metalness = 0.05,
+  transparent = false,
   ...meshProps
 }: SurfaceProps) {
   const controls = useThree(
@@ -338,6 +346,24 @@ export function Surface({
 
   const handleDown = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation()
+    // ...and stop the REAL event at the canvas, so document-level listeners
+    // see only the forwarded one.
+    //
+    // Every pointer that reaches a texture arrives as a native event whose
+    // target is the <canvas> — which is outside every portaled layer in the
+    // document. Libraries that detect outside-interaction that way (Radix's
+    // DismissableLayer, and every menu/popover/dialog built on it) therefore
+    // dismiss on *any* click into a Surface, including clicks that landed on
+    // their own content. Measured: two pointerdowns arrive at document, the
+    // trusted one targeting CANVAS and the synthetic one targeting the real
+    // button; the canvas event fires first and closes the popover.
+    //
+    // Suppressing the canvas event is not a workaround for Radix — it is the
+    // truth. The canvas is how the pointer travelled, not what it hit. Only
+    // pointerdown is suppressed: OrbitControls registers document-level move
+    // and up listeners for the duration of a drag, and silencing those would
+    // strand a drag that began on empty space and ended over a panel.
+    e.nativeEvent.stopPropagation()
     const uv = uvOf(e)
     const source = sourceRef.current
     if (!uv || !source) return
@@ -391,6 +417,7 @@ export function Surface({
         roughness={roughness}
         metalness={metalness}
         side={side}
+        transparent={transparent}
       />
     </mesh>
   )

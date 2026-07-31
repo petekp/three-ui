@@ -1087,3 +1087,121 @@ URL reaches plain-Chrome users for only a few more weeks — the
 public-push moment that actually matters is the API's estimated
 late-2026 stable ship, and until then the demo travels as video with
 the live URL as a bonus.
+
+### Increment 2 — the floating family, and a platform rule that was wrong
+
+The increment's stated subject was the portal seam. It delivered that,
+and then it overturned one of the project's two founding platform
+facts, which is the part worth leading with.
+
+**Portals, probed before re-plumbed.** Popover, Dialog, Select, and
+Tooltip went in *unmodified* first, purely to record what they do.
+They render to `document.body` — outside every rasterized subtree — so
+the content lands in no texture at all: present in the DOM, live to
+the accessibility tree, invisible as matter. Dialog additionally locks
+scroll and `aria-hidden`s the host page, which for a canvas app means
+hiding the entire scene from assistive tech. Radix exposes exactly one
+lever, `Portal`'s `container`, so the port deviation is one line per
+component and the components stay byte-verbatim.
+
+**The overlay plane.** Aiming `container` at the panel's own content
+root paints the popover but clips it at the panel edge. The shipped
+answer gives the floating content its **own** Surface: a same-sized
+transparent slab lifted along the panel normal, with its own parked
+source (`.ui-layer` — the typography, no background). What makes it
+cheap is a coincidence worth naming: both parked sources sit
+`position: fixed` at page (0,0), and Floating UI also positions with
+`position: fixed`, so a portaled popover's page rect is *already*
+layer-local. Radix's own collision and flip logic lands the content in
+exactly the right place and we add a Z offset and nothing else — zero
+coordinate math, and the panel keeps paying nothing while the slab is
+empty.
+
+**The conductor, and the bug hiding in a scrub.** shadcn asks for
+motion in Tailwind (`animate-in fade-in-0 zoom-in-95
+slide-in-from-top-2`). `useAnimationConductor` seizes each animation on
+`animationstart`, pauses it, scrubs `currentTime` while reading
+`getComputedStyle` — the style engine applies the timing function, so
+the samples come back already eased and we never implement a
+cubic-bezier — parks the DOM at the visible pole, and replays the
+curve on the mesh. An open costs **2 texture uploads**; the popover
+physically flies (opacity 0.101→1, scale 0.955→1, y −7.19→0 over
+149ms). Then exits started ending 130ms early. The first theory was
+`animationcancel`; the event log killed it (one clean start/end pair,
+no cancel). Monkeypatching `Animation.prototype` found it: **seeking a
+paused animation to its exact end time puts it in the *finished* state,
+and finishing dispatches `animationend`** — so the last scrub sample
+was announcing, one frame in, that a 150ms exit was already over, and
+Radix's Presence unmounted on hearing it. Half a millisecond short of
+the end is the same frame visually and keeps it merely paused;
+`animationend` moved 36ms → 161ms.
+
+**The canvas is always outside.** With a live popover in the overlay
+Surface, clicking its own Apply button *dismissed* it. Capture-phase
+logging showed two `pointerdown`s per click — the trusted one
+targeting `CANVAS`, the forwarded synthetic one targeting the real
+button — and the canvas one arrives first. Radix's `DismissableLayer`,
+and every menu/popover/dialog/combobox built on it in any library,
+decides "outside" from a document-level pointer target. The WebGL
+canvas is outside *every* portaled layer, so any click into any
+Surface reads as outside-interaction. `Surface` now stops the native
+pointerdown once the hit is forwarded, which isn't a Radix workaround
+but the truth: the canvas is how the pointer travelled, not what it
+hit. `pointerdown` only — OrbitControls needs document-level move and
+up, or a drag that starts on empty space and ends over a panel is
+stranded. Verified both directions with real CDP clicks projected onto
+the button: the counter moved 360 → 380 with the popover still open,
+and a click on the same slab outside the popover still dismissed it
+and retired the layer.
+
+**And the fact that was wrong.** Increment 1's entry above says
+opacity/transform keyframes are "compositor-owned and never
+rasterize." Half of that is false, and the half that's true is true
+for a different reason. The discriminating experiment — same
+`@keyframes { opacity: 1 → 0 }`, same tree, only the *target* differs,
+texture sampled per frame under a known-position landmark div:
+
+| animated target | DOM opacity swept | distinct texture values / 29 frames | paints |
+|---|---|---|---|
+| a **descendant** div | 1 → 0 | **29** — a clean ramp | **29** |
+| the **drawn root** itself | 0.97 → 0.03 | **1** — frozen | **1** |
+
+Descendants animate, self-paint, and rasterize; the drawn root does
+not. The mechanism isn't compositor promotion at all — changing the
+drawn element's **own** opacity/transform doesn't *invalidate* its
+paint record, so nothing ever repaints. Set the root's opacity to 0.5
+and the texture holds the old alpha; touch any descendant's
+`textContent` and the fresh record bakes 0.5 correctly. That is the
+old "self-heals on the next unrelated repaint" heisenbug, reproduced
+exactly and finally explained, and it's why `paint="always"` never
+helped: `requestPaint()` schedules a *replay*, and replaying a
+still-valid record re-reads nothing. Paint policy was never the lever.
+
+The over-broad version survived two days because every original probe
+animated the drawn root — the natural thing to reach for when the
+question is "does this Surface fade?" — and each reading was accurate
+for that target. Nothing contradicted it until a descendant got
+animated for an unrelated reason (verbatim shadcn markup, whose
+keyframes run deep inside a portaled subtree) and visibly worked. The
+lesson generalizes past this API: a claim of the form "property P
+can't be captured" is incomplete until it names **which element P is
+on**.
+
+So the authoring rule relaxes and sharpens at once. Descendant motion
+is supported; the content root stays off-limits. The conductor doesn't
+become unnecessary — it becomes a *cost* decision rather than a
+correctness one, and the cost is stark: one paint plus one upload per
+frame, ~120/s per open popover, against 2 uploads for the whole
+flight. A single animating popover would otherwise spend a tenth of
+the entire scene's paint budget.
+
+One smaller trap, recorded because it cost an hour and will recur:
+`raycast={live ? undefined : noop}` does not work in r3f. Props are
+applied onto the instance, and handing back `undefined` doesn't
+restore the class default — it leaves the last function attached. The
+slab stayed permanently un-hittable and every click fell through to
+the card behind it. One stable function reading a ref instead.
+
+Dialog is deliberately left unplumbed in the scene, labelled as such:
+a modal belongs to the camera, not to a panel, and that's increment
+3's subject.

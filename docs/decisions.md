@@ -374,3 +374,111 @@ right on its own before authored overrides exist. **Consequence.** The
 `spatialNav.field.test.ts`, the curated mechanisms in
 `spatialNav.test.ts`. Any future formula change must survive four
 browser-captured regressions, not synthetic grids.
+
+## 16. A portaled layer is its own Surface on an overlay plane (2026-07-31, lab 009 popovers)
+
+**Context.** Verbatim shadcn/Radix floating components (Popover, Select,
+Tooltip, Dropdown, Dialog) render through a portal to `document.body` —
+outside every rasterized subtree, so the content simply never appears in
+any texture. Radix exposes exactly one lever: `Portal`'s `container`.
+**Diagnosis, measured.** Pointing `container` at the panel's own content
+root does put the content in the texture, but wrong: Floating UI positions
+with `position: fixed`, so the content lands at *page* coordinates while
+the panel's DOM is a 360×460 box — the popover clipped at the panel edge,
+and a popover that opens upward or outward had nowhere to go. Growing the
+panel's source to hold the overflow makes every panel pay for a popover it
+usually isn't showing.
+**Decision.** The floating content gets its **own** Surface: a same-sized
+transparent slab lifted `LAYER_LIFT` along the panel normal, with its own
+parked source (`.ui-layer` — the typography without the background). The
+coordinate math is *zero*, and not by luck: both parked sources are
+`position: fixed` at page (0,0), and Floating UI also positions with
+`position: fixed`, so the popover's page rect is **already** layer-local.
+Radix's own positioning lands the content in exactly the right place; we
+add a Z offset and nothing else. Port cost stays one line per component
+(`container` passthrough, deviation #4). The slab is `visible={false}` and
+un-raycastable while empty, so an idle panel pays nothing.
+**Rejected.** (a) *Portal into the panel's own root* — clipping, above.
+(b) *Reparent the DOM after Radix positions it* — fights Presence,
+re-runs Floating UI's observers, and breaks on every Radix update.
+(c) *Re-implement positioning in world space* — throws away the thing
+that makes the port verbatim; Floating UI's collision/flip logic is the
+component's actual behavior.
+**Consequence.** A popover reads as a separate slab with its own shadow
+and specular (browser-verified). Two gotchas are paid for here: the pivot
+correction (CSS scales about the content's own `transform-origin` near the
+trigger, a group scales about the panel center — `p + (x−p)·s`), and
+`raycast` must be a **stable function reading a ref**, never
+`raycast={live ? undefined : noop}` — r3f applies props onto the instance
+and handing back `undefined` does not restore the class default, it leaves
+the last function attached. That spelling left the slab permanently
+un-hittable and every click fell through to the card behind it.
+
+## 17. CSS motion is translated onto the mesh, not replayed in the texture (2026-07-31, lab 009)
+
+**Context.** shadcn asks for motion in Tailwind —
+`data-[state=open]:animate-in fade-in-0 zoom-in-95 slide-in-from-top-2`.
+Those keyframes run on a *descendant* of the drawn root, so they do
+rasterize ([platform.md](platform.md), corrected 2026-07-31) — at **1
+paint + 1 upload per frame**, ~120/s per open popover, and a translate on
+the content slides pixels *within* the slab and clips at its edge, which
+reads as a texture glitch rather than a panel moving.
+**Decision.** `useAnimationConductor` seizes each animation on
+`animationstart`, before a frame of it reaches the texture: `pause()` it,
+scrub `currentTime` while reading `getComputedStyle` (the style engine
+applies the timing function, so samples come back already eased — we never
+implement a cubic-bezier), park the DOM at the **visible pole** so the
+texture always holds fully-materialized content, replay the sampled curve
+on the mesh from the r3f clock, then `finish()` so `animationend` fires on
+schedule. Measured: an open costs **2 texture uploads** instead of ~18,
+and the popover physically flies (opacity 0.101→1, scale 0.955→1,
+y −7.19→0 over 149ms).
+**Rejected.** (a) *Let the keyframes rasterize* — the per-frame upload
+cost is the entire reason the paint pipeline is passive (#3), and one
+popover would spend a tenth of the whole-scene budget. (b) *Parse
+`effect.getKeyframes()` and interpolate ourselves* — means owning
+cubic-bezier, `steps()`, and Tailwind's `--tw-enter-*` custom-property
+indirection; scrubbing asks the browser instead. (c) *Swallow
+`animationend`* — Radix's Presence keeps exiting content mounted until it
+hears that event; a bridge that ate it would leak every popover it closed.
+**Consequence.** Two subtleties are load-bearing and must not be
+"simplified" out. **Never scrub to the exact end time:** a paused
+animation whose `currentTime` reaches its end enters the *finished* state,
+and finishing **dispatches `animationend`** — so the last scrub sample
+announced, one frame in, that a 150ms exit was already over. Presence
+unmounted the content 130ms early (measured: `animationend` at +36ms,
+mesh still flying to +150ms). `END_EPSILON_MS = 0.5` keeps it merely
+paused; verified `animationend` moved 36ms → 161ms. And **`animationcancel`
+must hold the last pose, not snap to rest** — "rest" for a dismissed
+layer is wherever it was when its content vanished, and REST made a
+closing popover flash back to opaque on its final frame.
+
+## 18. The canvas is always "outside" — Surface stops the native pointerdown (2026-07-31, lab 009)
+
+**Context.** With a live Popover in an overlay Surface, clicking its own
+Apply button dismissed the popover instead of pressing the button.
+**Diagnosis, measured.** Logging document-level `pointerdown` with capture
+showed **two** events per click: the trusted one targeting `CANVAS`, and
+the forwarded synthetic one targeting `BUTTON#l9-pop-apply`. The canvas
+event fires first. Radix's `DismissableLayer` — and every menu, popover,
+dialog, and combobox built on it, across every UI library — decides
+"outside" from the target of a document-level pointer event. The WebGL
+canvas is outside *every* portaled layer in the document, so **any** click
+into **any** Surface reads as an outside-interaction.
+**Decision.** `Surface` calls `e.nativeEvent.stopPropagation()` in its
+pointerdown handler, alongside the existing r3f-level `stopPropagation`.
+This is not a Radix workaround: the canvas is *how the pointer travelled*,
+not *what it hit*. Once a hit is resolved to a UV and forwarded, the
+synthetic event is the truth and the native one is plumbing.
+**Rejected.** (a) *Patch Radix / pass `onPointerDownOutside`* — would need
+repeating for every library and every component, and the ports must stay
+byte-verbatim. (b) *Suppress move and up as well* — OrbitControls
+registers document-level `pointermove`/`pointerup` for the duration of a
+drag; silencing those strands any drag that began on empty space and ended
+over a panel. Only `pointerdown` is suppressed, deliberately.
+**Consequence.** Browser-verified both ways: a real CDP click projected
+onto the Apply button moved its counter 360 → 380 with the popover
+**still open**, and a click on the same slab outside the popover still
+dismissed it and retired the layer. This generalizes past Radix — it is
+the correct behavior for any portal-based library rendered into a Surface,
+and it is a precondition for the floating-layer kit (#36).

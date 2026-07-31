@@ -8,12 +8,20 @@ in `docs/` — **read `docs/platform.md` before touching
 
 ## Hard rules (each one is paid for — see docs/decisions.md)
 
-- **Never animate/transition `opacity` or `transform` inside Surface
-  markup** (keyframes, transitions, WAAPI). Compositor-owned: keyframes
-  freeze in the texture; transitions leave a *stale* end state that
-  self-heals on the next unrelated repaint — an intermittent bug by
-  construction. Pulse paint properties (background/box-shadow); move or
-  fade the mesh instead. Static opacity/transform values are fine.
+- **Never animate/transition `opacity` or `transform` on a Surface's
+  *content root*** (keyframes, transitions, WAAPI). Changing the drawn
+  element's own opacity/transform doesn't invalidate its paint record, so
+  nothing repaints: keyframes freeze; transitions leave a *stale* end
+  state that self-heals on the next unrelated repaint — an intermittent
+  bug by construction. On **descendants** they work correctly (measured
+  2026-07-31 — platform.md was wrong about this until then), but cost one
+  paint + one upload per frame; route them through
+  `useAnimationConductor` or move the mesh (decisions.md #17).
+- **Don't unstop the native pointerdown in `Surface`.** The canvas is
+  outside every portaled layer, so without
+  `e.nativeEvent.stopPropagation()` any click into a Surface dismisses
+  every open Radix popover/menu/dialog. `pointerdown` only — OrbitControls
+  needs document-level move/up (decisions.md #18).
 - **Don't add repaint loops, MutationObservers, or dirty-flag heuristics
   to `Surface`.** `paint="auto"` is passive on purpose: the compositor's
   self-firing `onpaint` is the change signal (`paintCount`). Measured

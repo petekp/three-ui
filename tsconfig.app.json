@@ -5,7 +5,10 @@
     "lib": ["ES2023", "DOM"],
     "module": "esnext",
     "types": ["vite/client"],
-    "paths": { "@/*": ["./src/*"] },
+    "paths": {
+      "@/registry/new-york-v4/ui/*": ["./src/components/ui/*"],
+      "@/*": ["./src/*"]
+    },
     "allowArbitraryExtensions": true,
     "skipLibCheck": true,
 
