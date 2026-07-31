@@ -79,6 +79,63 @@ Escape still clears it. Idle contract held on-screen (33 surfaces ·
 - **Disposing a focused proxy hands focus up first** (own unit, else
   the canvas) before removal — never a silent drop to `<body>`.
 
+**Implementation status (increment 3, shipped 2026-07-30):** the
+scoped-down-then-ratified rework driven by the first real user test
+(Pete, four-point critique — every point traced to a designed-but-
+unshipped or genuinely-missing rule). Browser-verified in lab 006 with
+real CDP keys: entry lands on the panel under the viewport center; the
+ring follows the authored roster; a descended group traps and wraps Tab
+through mixed DOM+WebGL members; one Escape releases and zooms home;
+survey focus can never land off-frame (camera position pinned through a
+full ring walk including the wrap — pure head-turns). Decisions layered
+on this contract:
+
+- **Reframe bridge** (see Camera integration): the library detects
+  focus-visibility violations and emits `ReframeRequest`s; the app's
+  rig fulfills (`useFocusReframe`). A clamped built-in fulfiller covers
+  rigless scenes and stands down when any app fulfiller registers.
+- **The altitude rule.** Tab traverses peers at your current altitude:
+  scene level walks units; a DESCENDED group is modal — Tab cycles its
+  members and WRAPS (composite tabbables and leaf proxies in one ring),
+  and Escape is the release that un-latches, lands on the unit, and
+  emits `cause:'release'` (the rig's cue to zoom home). Click-in
+  interior focus WITHOUT Enter never traps — APG exit-at-edge holds, so
+  the trap binds to *camera commitment*, not to interior focus. WCAG
+  no-keyboard-trap is satisfied by Escape as the documented exit.
+- **Engaged is a gesture-latched DOM stamp**, the one deliberate
+  exception to zero-shadow-state: `data-engaged` on the unit root, set
+  only inside `descend()`, cleared on every release path and whenever
+  focus leaves the group. Honest because the *gesture* is the source of
+  truth (activeElement can't encode commitment), and the stamp doubles
+  as the CSS chrome hook and dies with its subtree.
+- **Authored ring order** (`sceneRing`): `FocusGroup order` wins;
+  the band algorithm is demoted to a fallback for unordered groups.
+  Ordered groups never project during a ring walk, so mid-tween camera
+  sampling can't touch the authored case (settle-gating the geometric
+  fallback stays a watch item).
+- **Entry policy**: with no live cursor, Tab/Enter selects the nearest
+  *fully-visible* unit to the viewport center (`entryPick`), falling
+  back to most-visible; `initialFocus` overrides. Validated in lab 006:
+  the home pose's view ray meets the arc exactly at the bottom row, and
+  entry chose that row's center panel.
+- **Survey vs engaged chrome must differ.** Lab 006: dim 2px inset at
+  unit, bright 3px cyan ring + brighter border while engaged. Found in
+  the process: the inc-2 chrome selectors were DEAD CSS — the stamped
+  unit element IS the `.p6` root, so the descendant form
+  (`[data-focus] .p6`) never matched and all visible "focus" came from
+  the handle mesh; the self form (`.p6[data-focus]`) is the shipped
+  fix. Computed-style + screenshot verified.
+- **Fulfiller lessons (browser-bought):** screen-space pixel deltas
+  linearize catastrophically for far-off-frame panels — a box
+  straddling the camera plane projects to absurd rects, and a faithful
+  truck flew the camera to x≈−1058. Lab 006's fulfiller is therefore a
+  minimal HEAD-TURN (rotate the view direction to a comfort cone —
+  exact at any angle, bounded by π), with elevation pre-clamped to
+  OrbitControls' polar limits so the settle handoff can't pop the
+  position (observed y 2→3.05 otherwise). The library's default
+  fulfiller keeps pixel math but clamps to one viewport per event.
+- Arrows, the announcer, and page-edge handoff remain deferred.
+
 **Thesis tie-in.** The library's claim is that the DOM is load-bearing,
 not a texture. Until focus works, that claim is mouse-only. The goal is
 keyboard-complete operation of a 3D workspace with the browser's real
@@ -241,10 +298,15 @@ default; it's our tween-on-focus).
   device. Escape hatch: explicit numeric order prop (Flutter's
   `OrderedTraversalPolicy`: ordered members first, stable-sorted, then
   unordered in secondary order).
-- **Between groups: screen-space reading order**, via Flutter's band
-  algorithm: take the topmost rect; form the infinite horizontal band
-  spanning its vertical extent; every rect intersecting the band is a
-  member; order members left-to-right; repeat with the remainder.
+- **Between groups: authored order first** (`FocusGroup order` →
+  `sceneRing`, shipped increment 3) — a designed roster IS the intent;
+  the first user test read the band algorithm's arc-projection output
+  as scrambled. Unordered groups fall back to **screen-space reading
+  order**, via Flutter's band algorithm: take the topmost rect; form
+  the infinite horizontal band spanning its vertical extent; every rect
+  intersecting the band is a member; order members left-to-right;
+  repeat with the remainder. Ordered groups never project at all
+  during a ring walk.
 - **Every sort stable** (Flutter treats this as contract): equal
   coordinates must not shuffle between keypresses.
 - **Sample order at boundary-hop time, and at tween-settle** — never
@@ -337,6 +399,25 @@ glide, then interior Tab). The mode boundary is a keypress, never a
 camera-distance threshold (no ambiguous mid-zoom band). Mouse users who
 dollied in manually get the entry heuristic: first Tab enters the group
 dominating the viewport.
+
+**Reframe bridge (shipped increment 3).** DOM `focus()` carries an
+implicit obligation — the scroll container brings the element into view
+(WCAG 2.4.11's floor). Our `preventScroll:true` suppresses the page's
+fulfillment (correct: panels aren't in page flow), so the obligation
+transfers to the camera — which is APP state. So the library only
+*detects and requests*: after every focus transition it caused (never
+`pointer`/`escape`/`release`), if the focused unit or leaf projects
+<50% visible without covering the viewport center, it emits
+`ReframeRequest {groupId, object, rect, viewport, cause, level}` to
+registered fulfillers (`useFocusReframe` / `registerReframeFulfiller`).
+The DOM precedent is exact: focus() requests, the scroll container
+fulfills, `scroll-margin` tunes (`reframeMargin` is its analog). XR is
+why the split is load-bearing — a fulfiller may refuse to move the
+user's head and highlight instead. A built-in minimal fulfiller (bare
+camera truck, clamped to one viewport per event) keeps the invariant in
+rigless scenes and stands down while any app fulfiller is registered.
+`'descend'` requests are emitted (the rigless floor) but rigs ignore
+them — their approach ride already centers the target.
 
 ## Surface markup rules (tab hygiene)
 

@@ -8,14 +8,19 @@ import {
   type RefObject,
 } from 'react'
 import * as THREE from 'three'
-import { useThree } from '@react-three/fiber'
+import { useFrame, useThree } from '@react-three/fiber'
 import {
   createFocusTree,
   createMemoryStack,
+  entryPick,
   interiorBoundary,
+  needsReframe,
   readingOrder,
+  reframeDelta,
+  sceneRing,
   type MemoryStack,
   type OrderRect,
+  type Viewport,
 } from '../lib/focusTree'
 import { tabbables } from '../lib/tabbables'
 
@@ -54,6 +59,7 @@ export type FocusCause =
   | 'exit' // Tab past the last interior element → next unit
   | 'interior' // Tab across a member boundary INSIDE a group (composite ⇄ leaf)
   | 'escape' // Escape at scene level (no focus move; subscribers react)
+  | 'release' // Escape out of an ENGAGED group — the camera's cue to un-commit
   | 'pointer' // focus arrived by means we didn't initiate (mouse, page Tab)
 
 export interface FocusSceneEvent {
@@ -61,6 +67,30 @@ export interface FocusSceneEvent {
   groupId?: string
   cause: FocusCause
 }
+
+// Reframe bridge (docs/focus.md, ratified 2026-07-30). The DOM's focus()
+// carries an implicit obligation — the scroll container brings the focused
+// element into view. Our preventScroll:true suppresses the page's fulfillment
+// (correct: panels aren't in page flow) so the obligation transfers to the
+// camera. But the camera is APP state (orbit rigs, scroll cameras, XR heads
+// we must never move) — so the library only DETECTS and REQUESTS; the app's
+// rig fulfills however it wants. A minimal built-in fulfiller covers rigless
+// scenes so the invariant holds out of the box.
+
+export interface ReframeRequest {
+  groupId: string
+  /** The scene object whose projection triggered the request. */
+  object: THREE.Object3D
+  /** Projected rect in canvas CSS px; null = entirely behind the camera. */
+  rect: { x: number; y: number; w: number; h: number } | null
+  viewport: Viewport
+  /** 'descend' is the commitment gesture (center-stage it); every other
+   *  cause wants the MINIMAL correction (scrollIntoView block:'nearest'). */
+  cause: FocusCause
+  level: FocusLevel
+}
+
+export type ReframeFulfiller = (req: ReframeRequest) => void
 
 /** One shape for both member kinds: a composite's root is the Surface source
  *  subtree; a leaf's root is its ARIA proxy in the shared portal layer. */
@@ -111,6 +141,9 @@ export interface LeafHandle {
 interface GroupRegistration {
   id: string
   label?: string
+  /** Authored ring position. Groups with an order ignore camera geometry
+   *  entirely (sceneRing); unordered groups fall back to reading order. */
+  order?: number
   /** Object projected for ring ordering; falls back to the first composite
    *  member's mesh when absent. */
   objectRef?: RefObject<THREE.Object3D | null>
@@ -132,6 +165,9 @@ interface FocusSceneApi {
   ): () => void
   registerLeaf(groupId: string, entry: LeafEntry): LeafHandle
   subscribe(fn: (e: FocusSceneEvent) => void): () => void
+  /** App camera rigs claim visibility fulfillment; the built-in minimal
+   *  fulfiller stands down while any registration is live. */
+  registerReframeFulfiller(fn: ReframeFulfiller): () => void
   focusUnit(groupId: string): boolean
   /** One shared projection pass repositioning every leaf proxy. Called on
    *  focus transitions automatically; call it at tween-settle / drag-end —
@@ -206,9 +242,17 @@ const ROUTED_KEYS = new Set(['Tab', 'Enter', 'F2', 'Escape'])
 export function FocusScene({
   children,
   onFocusChange,
+  initialFocus,
+  reframeMargin = 24,
 }: {
   children: ReactNode
   onFocusChange?: (e: FocusSceneEvent) => void
+  /** Group the first Tab into the scene selects. Default: entryPick — the
+   *  nearest fully-visible unit to the viewport center. */
+  initialFocus?: string
+  /** Inset (CSS px) the reframe correction aims inside — scroll-margin's
+   *  analog. */
+  reframeMargin?: number
 }) {
   const camera = useThree((s) => s.camera)
   const gl = useThree((s) => s.gl)
@@ -216,12 +260,22 @@ export function FocusScene({
   const tree = useRef(createFocusTree<MemberData>()).current
   const runtimes = useRef(new Map<string, GroupRuntime>()).current
   const subscribers = useRef(new Set<(e: FocusSceneEvent) => void>()).current
+  const fulfillers = useRef(new Set<ReframeFulfiller>()).current
   const cursorRef = useRef<string | null>(null)
   // Cause of the focusin we are about to trigger; a focusin with no pending
   // cause arrived by mouse / native Tab / script — reported as 'pointer'.
   const pendingCauseRef = useRef<FocusCause | null>(null)
   const onFocusChangeRef = useRef(onFocusChange)
   onFocusChangeRef.current = onFocusChange
+  const initialFocusRef = useRef(initialFocus)
+  initialFocusRef.current = initialFocus
+  const marginRef = useRef(reframeMargin)
+  marginRef.current = reframeMargin
+  // The built-in fulfiller's tween: a bare camera truck, consumed by
+  // useFrame below. Never armed while an app fulfiller is registered.
+  const defaultTweenRef = useRef<{ from: THREE.Vector3; to: THREE.Vector3; t: number } | null>(
+    null,
+  )
 
   const bundle = useMemo(() => {
     // ONE portal layer for every proxy (docs/focus.md: never a React root per
@@ -301,25 +355,130 @@ export function FocusScene({
       }
     }
 
-    // Ring order is sampled fresh at each keypress from the CURRENT camera
-    // (docs/focus.md "Ordering": imperative at keypress, no React state).
-    // Mid-tween presses sample the in-flight camera — acceptable for Tab,
-    // whose order barely shifts; arrows (next increment) must gate on
-    // tween-settle.
+    const groupObject = (id: string): THREE.Object3D | null =>
+      runtimes.get(id)?.reg.objectRef?.current ??
+      tree.members(id).find((m) => m.data.object)?.data.object ??
+      null
+
+    const viewport = (): Viewport => ({
+      w: gl.domElement.clientWidth,
+      h: gl.domElement.clientHeight,
+    })
+
+    // Authored order wins (sceneRing — the group half of Flutter's policy
+    // split, adopted after the first user test scrambled a designed grid);
+    // camera geometry is consulted only for unordered groups, sampled fresh
+    // at the keypress. Fully-authored scenes never project here at all.
     const ringOrder = (): string[] => {
+      const groups = tree.groups()
       const rects: OrderRect[] = []
       const unprojected: string[] = []
-      for (const { id } of tree.groups()) {
-        const rt = runtimes.get(id)
-        const obj =
-          rt?.reg.objectRef?.current ??
-          tree.members(id).find((m) => m.data.object)?.data.object ??
-          null
+      for (const { id, order } of groups) {
+        if (order !== undefined) continue
+        const obj = groupObject(id)
         const rect = obj ? screenRect(obj, camera, gl.domElement) : null
         if (rect) rects.push({ id, ...rect })
         else unprojected.push(id)
       }
-      return [...readingOrder(rects), ...unprojected]
+      return sceneRing(groups, [...readingOrder(rects), ...unprojected])
+    }
+
+    // Scene-entry policy: with no live cursor, the first Tab/Enter selects
+    // what the user is looking at — authored initialFocus, else the nearest
+    // fully-visible unit to the viewport center (entryPick).
+    const entryTarget = (ring: string[]): string | null => {
+      const initial = initialFocusRef.current
+      if (initial && ring.includes(initial)) return initial
+      const rects: OrderRect[] = []
+      for (const id of ring) {
+        const obj = groupObject(id)
+        const rect = obj ? screenRect(obj, camera, gl.domElement) : null
+        if (rect) rects.push({ id, ...rect })
+      }
+      return entryPick(rects, viewport())
+    }
+
+    // ENGAGED — the altitude latch (docs/focus.md, ratified 2026-07-30):
+    // descend is a commitment the camera physically enacts, so while a group
+    // is engaged, Tab traverses its members and WRAPS — the group is modal,
+    // Escape is the release. The latch lives in the document as a stamp on
+    // the unit root ([data-engaged] — same channel the focus chrome reads),
+    // set/cleared only at explicit gesture sites; click-in without descend
+    // never sets it, so mouse-entered interiors keep APG exit-at-edge.
+    const isEngaged = (groupId: string): boolean =>
+      unitElement(groupId)?.dataset.engaged === '1'
+
+    const setEngaged = (groupId: string, on: boolean) => {
+      const root = unitElement(groupId)
+      if (!root) return
+      if (on) root.dataset.engaged = '1'
+      else delete root.dataset.engaged
+    }
+
+    // ---- Reframe bridge ----------------------------------------------------
+
+    /** The object AT reads focus geometry from: the focused leaf's own mesh
+     *  when a proxy holds focus, else the group's registered object. */
+    const focusedObject = (groupId: string): THREE.Object3D | null => {
+      const active = document.activeElement
+      const leaf = tree
+        .members(groupId)
+        .find((m) => m.kind === 'leaf' && m.data.root === active)
+      return leaf?.data.object ?? groupObject(groupId)
+    }
+
+    /** Built-in minimal fulfiller: truck the bare camera by the world-space
+     *  equivalent of the screen overshoot at the object's depth. No controls
+     *  integration, no lookAt change — apps with rigs register their own
+     *  fulfiller and this never runs. */
+    const defaultReframe = (req: ReframeRequest) => {
+      if (!req.rect) return
+      if (!(camera instanceof THREE.PerspectiveCamera)) return
+      const raw = reframeDelta(req.rect, req.viewport, marginRef.current)
+      if (raw.dx === 0 && raw.dy === 0) return
+      // Pixel math linearizes badly once a box nears the camera plane (its
+      // projected rect explodes). Bound the correction to one viewport per
+      // event: monotone progress toward visibility, never a runaway.
+      const dx = THREE.MathUtils.clamp(raw.dx, -req.viewport.w, req.viewport.w)
+      const dy = THREE.MathUtils.clamp(raw.dy, -req.viewport.h, req.viewport.h)
+      const objPos = new THREE.Vector3().setFromMatrixPosition(req.object.matrixWorld)
+      const depth = objPos.distanceTo(camera.position)
+      const fov = THREE.MathUtils.degToRad(camera.fov)
+      const worldPerPx = (2 * depth * Math.tan(fov / 2)) / req.viewport.h
+      // Camera right → image left; camera up → image down. Solve for the
+      // truck that moves the IMAGE by (dx, dy).
+      const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
+      const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1)
+      const delta = right.multiplyScalar(-dx * worldPerPx).add(up.multiplyScalar(dy * worldPerPx))
+      defaultTweenRef.current = {
+        from: camera.position.clone(),
+        to: camera.position.clone().add(delta),
+        t: 0,
+      }
+    }
+
+    /** Detect a focus-visibility violation and request fulfillment. Pointer
+     *  causes never reframe (mouse grammar owns its own camera); 'descend'
+     *  emits so rigless scenes get a floor, but rigs typically ignore it —
+     *  their commitment ride already centers the target. */
+    const maybeReframe = (loc: Located, cause: FocusCause) => {
+      if (cause === 'pointer' || cause === 'escape' || cause === 'release') return
+      if (loc.level !== 'unit' && loc.level !== 'interior') return
+      const obj = focusedObject(loc.groupId)
+      if (!obj) return
+      const vp = viewport()
+      const rect = screenRect(obj, camera, gl.domElement)
+      if (rect && !needsReframe(rect, vp)) return
+      const req: ReframeRequest = {
+        groupId: loc.groupId,
+        object: obj,
+        rect,
+        viewport: vp,
+        cause,
+        level: loc.level,
+      }
+      if (fulfillers.size > 0) for (const f of fulfillers) f(req)
+      else defaultReframe(req)
     }
 
     const notify = (e: FocusSceneEvent) => {
@@ -350,13 +509,22 @@ export function FocusScene({
           // Paint-property hook for authored markup ([data-focus] CSS);
           // one repaint per transition, deliberate.
           if (root) {
-            if (state === 'none') delete root.dataset.focus
-            else root.dataset.focus = state
+            if (state === 'none') {
+              delete root.dataset.focus
+              // Focus left the group by ANY route (pointer, dispose,
+              // programmatic) — the trap must not outlive residency.
+              delete root.dataset.engaged
+            } else {
+              root.dataset.focus = state
+            }
           }
           rt.reg.onStateChange?.(state, cause)
         }
       }
       notify({ ...loc, cause } as FocusSceneEvent)
+      // The ported scrollIntoView obligation, checked at every transition we
+      // caused. Runs AFTER notify so fulfillers see the event first.
+      maybeReframe(loc, cause)
     }
 
     const focusEl = (el: HTMLElement, cause: FocusCause) => {
@@ -393,6 +561,10 @@ export function FocusScene({
     const descend = (groupId: string) => {
       const remembered = runtimes.get(groupId)?.memory.recall(interiorValid(groupId))
       const target = remembered ?? interiorFirst(groupId)
+      // The latch sets at the GESTURE — Enter is the commitment the camera
+      // enacts. Click-in interiors never pass through here, so they never
+      // trap (APG exit-at-edge preserved for mouse-entered focus).
+      setEngaged(groupId, true)
       if (target && target !== document.activeElement) {
         focusEl(target, 'descend')
       } else {
@@ -425,18 +597,25 @@ export function FocusScene({
           const ring = ringOrder()
           if (ring.length === 0) return // no groups — browser's Tab, unchanged
           e.preventDefault()
-          // Advance FROM the cursor, never re-enter it: after Escape-from-
-          // unit, Tab means "move on", not "go back where I just was".
-          const next = step(ring, cursorRef.current, e.shiftKey ? -1 : 1)
+          const cursor = cursorRef.current
+          // With a live cursor, advance FROM it, never re-enter it: after
+          // Escape-from-unit, Tab means "move on". With none, this is scene
+          // ENTRY: select what the user is looking at (entry policy), not
+          // ring[0] — the ratified fix for "first Tab landed off-screen".
+          const next =
+            cursor !== null && ring.includes(cursor)
+              ? step(ring, cursor, e.shiftKey ? -1 : 1)
+              : (entryTarget(ring) ?? step(ring, null, e.shiftKey ? -1 : 1))
           if (next) focusUnit(next, 'ring')
         } else if (e.key === 'Enter' || e.key === 'F2') {
           const ring = ringOrder()
           if (ring.length === 0) return
           e.preventDefault()
+          const cursor = cursorRef.current
           const target =
-            cursorRef.current && ring.includes(cursorRef.current)
-              ? cursorRef.current
-              : ring[0]
+            cursor !== null && ring.includes(cursor)
+              ? cursor
+              : (entryTarget(ring) ?? ring[0])
           focusUnit(target, 'ring')
         } else if (e.key === 'Escape') {
           // No focus move at the root — subscribers decide (camera home).
@@ -447,8 +626,18 @@ export function FocusScene({
 
       if (loc.level === 'unit') {
         if (e.key === 'Tab') {
-          const ring = ringOrder()
           e.preventDefault()
+          if (isEngaged(loc.groupId)) {
+            // Trapped: at descended altitude Tab traverses THIS group's
+            // members — forward enters at the first element, backward at the
+            // last (wrap grammar). A read-only engaged panel has no interior:
+            // Tab is dead until Escape releases.
+            const flat = memberSequences(loc.groupId).flat()
+            const target = e.shiftKey ? flat[flat.length - 1] : flat[0]
+            if (target) focusEl(target, 'interior')
+            return
+          }
+          const ring = ringOrder()
           const next = step(ring, loc.groupId, e.shiftKey ? -1 : 1)
           if (next) focusUnit(next, 'ring')
         } else if (e.key === 'Enter' || e.key === 'F2') {
@@ -456,6 +645,14 @@ export function FocusScene({
           descend(loc.groupId)
         } else if (e.key === 'Escape') {
           e.preventDefault()
+          if (isEngaged(loc.groupId)) {
+            // RELEASE: un-latch and cue the camera home in one gesture.
+            // Focus HOLDS on the unit — no focusin fires — so the event
+            // dispatches manually; the next Tab resumes the ring from here.
+            setEngaged(loc.groupId, false)
+            notify({ level: 'unit', groupId: loc.groupId, cause: 'release' })
+            return
+          }
           focusEl(gl.domElement, 'ascend')
         }
         return
@@ -478,9 +675,22 @@ export function FocusScene({
         if (action.type === 'move') {
           focusEl(action.to, 'interior')
         } else if (action.type === 'exit') {
+          if (isEngaged(loc.groupId)) {
+            // Trap wrap: past the last member → back to the first.
+            const first = interiorFirst(loc.groupId)
+            if (first) focusEl(first, 'interior')
+            return
+          }
           const next = step(ringOrder(), loc.groupId, 1)
           if (next) focusUnit(next, 'exit')
         } else {
+          if (isEngaged(loc.groupId)) {
+            // Trap wrap, backward: before the first member → the last.
+            const flat = memberSequences(loc.groupId).flat()
+            const last = flat[flat.length - 1]
+            if (last) focusEl(last, 'interior')
+            return
+          }
           focusUnit(loc.groupId, 'ascend') // one step up: own unit
         }
       } else if (e.key === 'Escape') {
@@ -488,6 +698,13 @@ export function FocusScene({
         // Explicit unfocus clears the stack (Flutter): Enter right after
         // must land on the FIRST tabbable, not the thing just escaped.
         runtimes.get(loc.groupId)?.memory.clear()
+        if (isEngaged(loc.groupId)) {
+          // RELEASE from inside: one Escape un-latches, lands on the unit,
+          // and cues the camera home ('release' rides the focusin).
+          setEngaged(loc.groupId, false)
+          focusUnit(loc.groupId, 'release')
+          return
+        }
         focusUnit(loc.groupId, 'ascend')
       }
       // Enter/F2 at interior are the DOM's business.
@@ -510,7 +727,7 @@ export function FocusScene({
 
     const api: FocusSceneApi = {
       registerGroup(reg) {
-        tree.registerGroup(reg.id, reg.label)
+        tree.registerGroup(reg.id, reg.label, reg.order)
         runtimes.set(reg.id, { reg, memory: createMemoryStack(), lastState: 'none' })
         return () => {
           tree.unregisterGroup(reg.id)
@@ -610,6 +827,12 @@ export function FocusScene({
         subscribers.add(fn)
         return () => subscribers.delete(fn)
       },
+      registerReframeFulfiller(fn) {
+        fulfillers.add(fn)
+        // An app rig taking over cancels any built-in truck mid-flight.
+        defaultTweenRef.current = null
+        return () => fulfillers.delete(fn)
+      },
       focusUnit: (groupId: string) => focusUnit(groupId, 'ring'),
       syncProxyRects,
     }
@@ -617,8 +840,33 @@ export function FocusScene({
     const debugMembers = (groupId: string) =>
       tree.members(groupId).map((m) => ({ id: m.id, kind: m.kind }))
 
-    return { api, onKeydown, onFocusin, onFocusout, locate, ringOrder, proxyLayer, debugMembers }
-  }, [camera, gl, tree, runtimes, subscribers])
+    return {
+      api,
+      onKeydown,
+      onFocusin,
+      onFocusout,
+      locate,
+      ringOrder,
+      entryTarget,
+      isEngaged,
+      proxyLayer,
+      debugMembers,
+    }
+  }, [camera, gl, tree, runtimes, subscribers, fulfillers])
+
+  // The built-in fulfiller's consumer: a 0.32s smoothstep truck. Armed only
+  // in rigless scenes — registering any app fulfiller disarms it for good.
+  useFrame((_, dt) => {
+    const tw = defaultTweenRef.current
+    if (!tw) return
+    tw.t = Math.min(1, tw.t + dt / 0.32)
+    const k = tw.t * tw.t * (3 - 2 * tw.t)
+    camera.position.lerpVectors(tw.from, tw.to, k)
+    if (tw.t >= 1) {
+      defaultTweenRef.current = null
+      bundle.api.syncProxyRects()
+    }
+  })
 
   useEffect(() => {
     // The canvas is the scene's single entry stop in the page tab order.
@@ -637,6 +885,8 @@ export function FocusScene({
       locate: bundle.locate,
       ring: bundle.ringOrder,
       cursor: () => cursorRef.current,
+      entry: () => bundle.entryTarget(bundle.ringOrder()),
+      engaged: (groupId: string) => bundle.isEngaged(groupId),
       members: bundle.debugMembers,
       syncProxies: bundle.api.syncProxyRects,
       proxies: () =>
@@ -672,12 +922,16 @@ export function FocusScene({
 export function FocusGroup({
   id,
   label,
+  order,
   objectRef,
   onStateChange,
   children,
 }: {
   id: string
   label?: string
+  /** Authored scene-ring position (docs/focus.md "Ordering"). Ordered groups
+   *  ignore camera geometry; omit to fall back to projected reading order. */
+  order?: number
   objectRef?: RefObject<THREE.Object3D | null>
   onStateChange?: (state: GroupFocusState, cause: FocusCause) => void
   children: ReactNode
@@ -691,10 +945,11 @@ export function FocusGroup({
     return scene.registerGroup({
       id,
       label,
+      order,
       objectRef,
       onStateChange: (state, cause) => onStateChangeRef.current?.(state, cause),
     })
-  }, [scene, id, label, objectRef])
+  }, [scene, id, label, order, objectRef])
 
   const api = useMemo<FocusGroupApi | null>(
     () =>
@@ -724,4 +979,16 @@ export function useFocusSceneEvents(handler: (e: FocusSceneEvent) => void) {
   const ref = useRef(handler)
   ref.current = handler
   useEffect(() => scene?.subscribe((e) => ref.current(e)), [scene])
+}
+
+/** Claim reframe fulfillment for the app's camera rig (docs/focus.md
+ *  "Reframe bridge"). While ANY fulfiller is registered the built-in bare-
+ *  camera truck stands down — the rig owns visibility however it wants,
+ *  including ignoring 'descend' requests its approach ride already covers.
+ *  No-op outside a FocusScene. */
+export function useFocusReframe(fulfiller: ReframeFulfiller) {
+  const scene = use(FocusSceneContext)
+  const ref = useRef(fulfiller)
+  ref.current = fulfiller
+  useEffect(() => scene?.registerReframeFulfiller((req) => ref.current(req)), [scene])
 }

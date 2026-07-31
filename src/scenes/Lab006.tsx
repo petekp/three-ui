@@ -4,6 +4,7 @@ import { useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
 import { Surface } from '../primitives/Surface'
 import {
   FocusGroup,
+  useFocusReframe,
   useFocusScene,
   useFocusSceneEvents,
   type GroupFocusState,
@@ -74,6 +75,7 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
     toPos: THREE.Vector3
     toTarget: THREE.Vector3
     t: number
+    dur: number
   } | null>(null)
   const curTarget = useRef(new THREE.Vector3())
 
@@ -96,6 +98,7 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
           toPos: center.clone().addScaledVector(facing, APPROACH_DIST),
           toTarget: center.clone(),
           t: 0,
+          dur: 0.9,
         }
       },
       home: () => {
@@ -107,6 +110,7 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
           toPos: HOME_POS.clone(),
           toTarget: HOME_TARGET.clone(),
           t: 0,
+          dur: 0.9,
         }
       },
     }
@@ -114,6 +118,59 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
       api.current = null
     }
   }, [api, camera, controls])
+
+  // Reframe fulfiller (docs/focus.md "Reframe bridge"): the rig claims
+  // visibility, standing the library's bare-camera truck down. 'descend' is
+  // ignored — the approach ride already centers that target. Fulfillment is
+  // a HEAD-TURN, not a truck: in an arc workspace you survey by turning in
+  // place, and screen-space pixel deltas linearize catastrophically for far
+  // panels (a box straddling the camera plane projects to absurd rects —
+  // browser-verified runaway to x≈−1000). The angular form is exact for any
+  // panel direction, minimal (rotates only to the comfort-cone edge), and
+  // bounded by π.
+  useFocusReframe((req) => {
+    if (req.cause === 'descend' || !controls) return
+    if (!(camera instanceof THREE.PerspectiveCamera)) return
+    const camPos = camera.position
+    const panelPos = new THREE.Vector3().setFromMatrixPosition(req.object.matrixWorld)
+    const dist = controls.target.distanceTo(camPos)
+    const d = controls.target.clone().sub(camPos).normalize()
+    const dStar = panelPos.clone().sub(camPos).normalize()
+    const fovRad = THREE.MathUtils.degToRad(camera.fov)
+    const hFov = Math.atan(Math.tan(fovRad / 2) * (req.viewport.w / req.viewport.h))
+    // Inside ~72% of the tighter half-angle reads as comfortably framed.
+    const allow = Math.min(fovRad / 2, hFov) * 0.72
+    const between = d.angleTo(dStar)
+    if (between <= allow) return
+    const axis = new THREE.Vector3().crossVectors(d, dStar)
+    if (axis.lengthSq() < 1e-10) return // dead astern — no unique turn
+    axis.normalize()
+    const dNew = d.applyAxisAngle(axis, between - allow)
+    // Respect the app's own orbit limits: settle hands the pose back to
+    // OrbitControls, whose polar clamp re-satisfies phi by MOVING the
+    // position — a visible pop (browser-verified: y 2→3.05 on a steep
+    // up-turn). Clamp the view elevation first so update() is a no-op.
+    // phi(position about target) = acos(−dNew.y).
+    const oc = controls as unknown as { minPolarAngle?: number; maxPolarAngle?: number }
+    const yA = -Math.cos(oc.minPolarAngle ?? 0)
+    const yB = -Math.cos(oc.maxPolarAngle ?? Math.PI)
+    const yClamped = THREE.MathUtils.clamp(dNew.y, Math.min(yA, yB), Math.max(yA, yB))
+    if (yClamped !== dNew.y) {
+      const h = Math.sqrt(Math.max(1 - yClamped * yClamped, 1e-9))
+      const hLen = Math.hypot(dNew.x, dNew.z) || 1
+      dNew.set((dNew.x / hLen) * h, yClamped, (dNew.z / hLen) * h)
+    }
+    controls.enabled = false
+    tween.current = {
+      fromPos: camPos.clone(),
+      fromTarget: controls.target.clone(),
+      toPos: camPos.clone(),
+      toTarget: camPos.clone().addScaledVector(dNew, dist),
+      t: 0,
+      // Big turns get a little more time; nudges stay snappy.
+      dur: THREE.MathUtils.clamp(0.3 + (between - allow) * 0.3, 0.3, 0.8),
+    }
+  })
 
   // A grab of the controls mid-tween should win instantly.
   useEffect(() => {
@@ -137,7 +194,7 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
   useFrame((_, delta) => {
     const tw = tween.current
     if (!tw || !controls) return
-    tw.t = Math.min(1, tw.t + delta / 0.9)
+    tw.t = Math.min(1, tw.t + delta / tw.dur)
     const k = tw.t * tw.t * (3 - 2 * tw.t) // smoothstep
     camera.position.lerpVectors(tw.fromPos, tw.toPos, k)
     curTarget.current.lerpVectors(tw.fromTarget, tw.toTarget, k)
@@ -165,11 +222,13 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
 function WorkPanel({
   spec,
   slot,
+  order,
   rig,
   register,
 }: {
   spec: PanelSpec
   slot: ArcSlot
+  order: number
   rig: React.RefObject<RigApi | null>
   register: (id: string, group: THREE.Group | null) => void
 }) {
@@ -253,7 +312,7 @@ function WorkPanel({
         if (g) g.lookAt(LOOK_TARGET.x, LOOK_TARGET.y, LOOK_TARGET.z)
       }}
     >
-      <FocusGroup id={spec.id} objectRef={group} onStateChange={setFocus}>
+      <FocusGroup id={spec.id} order={order} objectRef={group} onStateChange={setFocus}>
         <Surface
           label={`lab006-${spec.id}`}
           name={`lab006-${spec.id}`}
@@ -351,6 +410,9 @@ export function Lab006() {
           g.getWorldDirection(new THREE.Vector3()),
         )
       }
+    } else if (e.cause === 'release') {
+      // Escape released an ENGAGED panel — the matching un-commit gesture.
+      rig.current?.home()
     } else if (e.level === 'scene' && e.cause === 'escape') {
       rig.current?.home()
     }
@@ -411,7 +473,16 @@ export function Lab006() {
       </mesh>
 
       {panels.map((spec, i) => (
-        <WorkPanel key={spec.id} spec={spec} slot={slots[i]} rig={rig} register={register} />
+        <WorkPanel
+          key={spec.id}
+          spec={spec}
+          slot={slots[i]}
+          // Authored ring order: the roster grid read as designed — top row
+          // first, left to right (roster row 0 is the BOTTOM row).
+          order={(ROWS - 1 - Math.floor(i / COLS)) * COLS + (i % COLS)}
+          rig={rig}
+          register={register}
+        />
       ))}
     </>
   )

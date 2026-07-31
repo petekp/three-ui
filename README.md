@@ -722,3 +722,67 @@ surfaces · 0 paints/s between feed ticks). Carried debt: the leaf-only
 proxy-as-unit fallback is implemented but unexercised; the ring is
 still a closed loop; ring sampling isn't gated on tween-settle yet —
 and the run-1 Tab anomaly never recurred across ~40 real presses.
+
+**Increment 3 shipped — the first user test rewrote the defaults.**
+Pete drove the increment-2 build and filed four complaints: the first
+Tab focused something off-screen; the ring order read as scrambled;
+once past the dial there was no obvious way back; and a zoomed-into
+panel didn't hold Tab. The design dialogue that followed ratified a
+rework, and every point traced to either a designed-but-unshipped rule
+or a real hole in the contract. Shipped: an **entry policy** (with no
+live cursor, Tab/Enter selects the nearest fully-visible unit to the
+viewport center — `entryPick`, `initialFocus` overrides; the home
+pose's view ray turns out to meet the arc exactly at the bottom row,
+and entry picks that row's center panel); **authored ring order**
+(`FocusGroup order` → `sceneRing` — the roster grid IS the intent,
+Flutter's band algorithm demoted to a fallback for unordered groups,
+and ordered groups never project during a walk, which retires the
+mid-tween-sampling worry for the authored case); the **reframe
+bridge** (the ported scrollIntoView obligation: `preventScroll:true`
+suppressed the page's fulfillment of focus's implicit
+bring-into-view contract, so the camera inherits it — the library
+detects violations and emits `ReframeRequest`s, the app's rig
+fulfills via `useFocusReframe`, a clamped built-in fulfiller covers
+rigless scenes, and XR is why the inversion is load-bearing: a
+fulfiller may refuse to move your head); and the **altitude rule**
+(Tab traverses peers at your current altitude — scene level walks
+units; a DESCENDED group is modal, Tab cycling its mixed DOM+WebGL
+members with wrap — saw → square → sine → Cutoff → saw — and one
+Escape is the release: un-latch, land on the unit, `cause:'release'`,
+camera home). Click-in interior focus without Enter never traps — APG
+exit-at-edge holds, because the trap binds to *camera commitment*,
+not interior focus. The latch itself is a gesture-stamped
+`data-engaged` on the unit root — the one deliberate exception to
+zero-shadow-state, honest because a gesture can't be derived from
+`activeElement`, and it doubles as the CSS hook for the new
+survey-vs-engaged chrome (dim 2px inset vs unmistakable 3px cyan
+ring).
+
+Three lessons were paid for in browser time. **The pixel-space
+reframe ran away**: a panel far around the arc straddles the camera
+plane, its projected AABB explodes to ~100k px, and a faithful
+world-per-pixel truck flew the camera to x≈−1058 — and even a correct
+truck can't frame a panel *beside* you. The rig's fulfiller became a
+head-turn: rotate the view direction just to the comfort-cone edge —
+exact at any angle, minimal, bounded by π. **The settle pop**: handing
+the pose back to OrbitControls tripped its polar clamp, which
+re-satisfies limits by MOVING the position (y 2→3.05 on a steep
+up-turn) — the fulfiller now pre-clamps view elevation to the app's
+own limits so the handoff is a no-op. **The inc-2 focus chrome was
+dead CSS**: the stamped unit element IS the `.p6` root, so the
+descendant selector `[data-focus] .p6` never matched — every visible
+"focus" this whole time was the grab-handle mesh. Self selectors
+(`.p6[data-focus]`) now, verified by computed style and screenshot.
+
+Verified end-to-end with real CDP keys: entry lands on `pr`; the
+33-panel ring follows the roster top row → middle → bottom, each
+left-to-right; a six-step survey walk (including the wrap to the
+far-top-left panel) kept every focused panel on-screen with the camera
+position pinned at home — pure head-turns; 18 more Tabs to the synth,
+Enter → engaged + approach ride, the trap cycle + backward wrap,
+Escape → release with the exact home pose restored; programmatic
+click-in then exits at the edge to the next unit (no trap); idle
+contract intact (33 surfaces · 0 paints/s · 120 fps). 106/106 vitest,
+tsc clean. Deferred: arrows (increment 4), the announcer, page-edge
+handoff; tween-settle gating for the geometric fallback stays a watch
+item; flow-through Tab stays a possible future opt-in policy.

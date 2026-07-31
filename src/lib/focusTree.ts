@@ -60,6 +60,8 @@ export function createMemoryStack<T>(): MemoryStack<T> {
 interface GroupRecord<T> {
   id: string
   label?: string
+  /** Authored ring position (sceneRing); undefined = geometric fallback. */
+  order?: number
   seq: number
   members: Map<string, MemberInfo<T> & { seq: number }>
   /** Focus memory over member ids; validation happens lazily at recall. */
@@ -67,11 +69,11 @@ interface GroupRecord<T> {
 }
 
 export interface FocusTree<T> {
-  registerGroup(id: string, label?: string): void
+  registerGroup(id: string, label?: string, order?: number): void
   unregisterGroup(id: string): void
   registerMember(groupId: string, member: MemberInfo<T>): void
   unregisterMember(groupId: string, memberId: string): void
-  groups(): { id: string; label?: string }[]
+  groups(): { id: string; label?: string; order?: number }[]
   members(groupId: string): MemberInfo<T>[]
   /** Push-to-top with dedupe. Call on every focus that lands in the group. */
   remember(groupId: string, memberId: string): void
@@ -94,15 +96,16 @@ export function createFocusTree<T>(): FocusTree<T> {
   let seq = 0
 
   return {
-    registerGroup(id, label) {
+    registerGroup(id, label, order) {
       const existing = groups.get(id)
       if (existing) {
         // Members may have arrived first (see registerMember) — adopt the
         // implicit record rather than dropping its members.
         existing.label = label
+        existing.order = order
         return
       }
-      groups.set(id, { id, label, seq: seq++, members: new Map(), memory: createMemoryStack() })
+      groups.set(id, { id, label, order, seq: seq++, members: new Map(), memory: createMemoryStack() })
     },
     unregisterGroup(id) {
       groups.delete(id)
@@ -130,7 +133,7 @@ export function createFocusTree<T>(): FocusTree<T> {
     groups() {
       return [...groups.values()]
         .sort((a, b) => a.seq - b.seq)
-        .map(({ id, label }) => ({ id, label }))
+        .map(({ id, label, order }) => ({ id, label, order }))
     },
     members(groupId) {
       const g = groups.get(groupId)
@@ -224,6 +227,11 @@ export interface OrderRect {
   h: number
 }
 
+export interface Viewport {
+  w: number
+  h: number
+}
+
 export function readingOrder(rects: readonly OrderRect[]): string[] {
   const remaining = rects.map((r, i) => ({ ...r, i }))
   const out: string[] = []
@@ -244,4 +252,126 @@ export function readingOrder(rects: readonly OrderRect[]): string[] {
     remaining.splice(remaining.indexOf(pick), 1)
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// Scene-ring policy — the group-level half of Flutter's Ordered vs
+// ReadingOrder traversal split, adopted after lab 006's first user test:
+// the band algorithm on arc projections scrambles a designed grid (the back
+// row projects higher than the front, bands curve, order shuffles with
+// camera pose). When the author has stated an order, geometry gets no vote.
+
+/**
+ * Authored order wins: groups with `order` come first, sorted ascending
+ * (input order breaks ties). Unordered groups follow in the caller's
+ * geometric order (camera reading order); any left unplaced by geometry
+ * (unprojectable) trail in input order.
+ */
+export function sceneRing(
+  groups: readonly { id: string; order?: number }[],
+  geometric: readonly string[],
+): string[] {
+  const indexed = groups.map((g, i) => ({ ...g, i }))
+  const ordered = indexed
+    .filter((g) => g.order !== undefined)
+    .sort((a, b) => a.order! - b.order! || a.i - b.i)
+    .map((g) => g.id)
+  const unplaced = new Set(indexed.filter((g) => g.order === undefined).map((g) => g.id))
+  const rest: string[] = []
+  for (const id of geometric) {
+    if (unplaced.has(id)) {
+      rest.push(id)
+      unplaced.delete(id)
+    }
+  }
+  for (const g of indexed) if (unplaced.has(g.id)) rest.push(g.id)
+  return [...ordered, ...rest]
+}
+
+// ---------------------------------------------------------------------------
+// Focus-visibility geometry. The invariant these serve (docs/focus.md,
+// ratified 2026-07-30): focus must never land outside the frame. The DOM's
+// focus() carries an implicit scroll-into-view obligation; rebuilding focus
+// outside the scroll model means rebuilding the obligation — detection is
+// pure and lives here, fulfillment (camera motion) belongs to the app's rig.
+
+export function visibleFraction(
+  r: { x: number; y: number; w: number; h: number },
+  vp: Viewport,
+): number {
+  if (r.w <= 0 || r.h <= 0) return 0
+  const ix = Math.min(r.x + r.w, vp.w) - Math.max(r.x, 0)
+  const iy = Math.min(r.y + r.h, vp.h) - Math.max(r.y, 0)
+  if (ix <= 0 || iy <= 0) return 0
+  return (ix * iy) / (r.w * r.h)
+}
+
+/**
+ * Does focusing this rect oblige a reframe? Violated when less than half
+ * the rect is visible — UNLESS it covers the viewport center, which means
+ * the thing dominates the screen (a descended panel overflowing the frame
+ * is being looked at, not lost).
+ */
+export function needsReframe(
+  r: { x: number; y: number; w: number; h: number },
+  vp: Viewport,
+): boolean {
+  const cx = vp.w / 2
+  const cy = vp.h / 2
+  const coversCenter = r.x <= cx && r.x + r.w >= cx && r.y <= cy && r.y + r.h >= cy
+  return visibleFraction(r, vp) < 0.5 && !coversCenter
+}
+
+/**
+ * The smallest screen-space move of `r` that brings it inside the viewport
+ * inset by `margin` (the scroll-margin analog). {0,0} when already inside.
+ * An axis where the rect outsizes the inset box centers instead — there is
+ * no "inside", so aim at balance.
+ */
+export function reframeDelta(
+  r: { x: number; y: number; w: number; h: number },
+  vp: Viewport,
+  margin = 24,
+): { dx: number; dy: number } {
+  const axis = (pos: number, size: number, span: number): number => {
+    const lo = margin
+    const hi = span - margin
+    if (size > hi - lo) return (lo + hi) / 2 - (pos + size / 2)
+    if (pos < lo) return lo - pos
+    if (pos + size > hi) return hi - (pos + size)
+    return 0
+  }
+  return { dx: axis(r.x, r.w, vp.w), dy: axis(r.y, r.h, vp.h) }
+}
+
+/**
+ * Scene-entry policy: the first Tab into the scene should select what the
+ * user is already looking at — the nearest fully-visible rect to the
+ * viewport center. No fully-visible candidate: the most-visible partial
+ * (nearer center breaks ties). Nothing visible at all: null — the caller
+ * falls back to ring order.
+ */
+export function entryPick(rects: readonly OrderRect[], vp: Viewport): string | null {
+  const cx = vp.w / 2
+  const cy = vp.h / 2
+  const dist = (r: OrderRect) => Math.hypot(r.x + r.w / 2 - cx, r.y + r.h / 2 - cy)
+  let bestFull: OrderRect | null = null
+  let bestPart: OrderRect | null = null
+  let bestPartFrac = 0
+  for (const r of rects) {
+    const frac = visibleFraction(r, vp)
+    if (frac >= 0.999) {
+      if (!bestFull || dist(r) < dist(bestFull)) bestFull = r
+    } else if (frac > 0) {
+      if (
+        !bestPart ||
+        frac > bestPartFrac ||
+        (frac === bestPartFrac && dist(r) < dist(bestPart))
+      ) {
+        bestPart = r
+        bestPartFrac = frac
+      }
+    }
+  }
+  return bestFull?.id ?? bestPart?.id ?? null
 }

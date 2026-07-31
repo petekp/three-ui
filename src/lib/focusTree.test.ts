@@ -2,10 +2,16 @@ import { describe, expect, it } from 'vitest'
 import {
   createFocusTree,
   createMemoryStack,
+  entryPick,
   interiorBoundary,
+  needsReframe,
   readingOrder,
+  reframeDelta,
+  sceneRing,
+  visibleFraction,
   type MemberInfo,
   type OrderRect,
+  type Viewport,
 } from './focusTree'
 
 const member = (id: string, order?: number): MemberInfo<null> => ({
@@ -297,5 +303,104 @@ describe('registration order tolerance (React child effects run bottom-up)', () 
     t.registerMember('g', { id: 'dial', kind: 'leaf', order: 0, data: null })
     t.registerMember('g', { id: 'panel', kind: 'composite', order: 1, data: null })
     expect(t.members('g').map((m) => m.id)).toEqual(['dial', 'panel'])
+  })
+})
+
+describe('sceneRing (authored order beats geometry)', () => {
+  it('sorts authored groups by order, geometry gets no vote', () => {
+    const ring = sceneRing(
+      [{ id: 'a', order: 2 }, { id: 'b', order: 0 }, { id: 'c', order: 1 }],
+      ['a', 'c', 'b'], // scrambled camera order — must be ignored
+    )
+    expect(ring).toEqual(['b', 'c', 'a'])
+  })
+
+  it('unordered groups follow the geometric order, after every authored one', () => {
+    const ring = sceneRing([{ id: 'a', order: 0 }, { id: 'x' }, { id: 'y' }], ['y', 'x'])
+    expect(ring).toEqual(['a', 'y', 'x'])
+  })
+
+  it('unordered groups geometry could not place trail in registration order', () => {
+    const ring = sceneRing([{ id: 'x' }, { id: 'y' }, { id: 'z' }], ['y'])
+    expect(ring).toEqual(['y', 'x', 'z'])
+  })
+
+  it('breaks order ties by registration sequence (stable)', () => {
+    expect(sceneRing([{ id: 'a', order: 1 }, { id: 'b', order: 1 }], [])).toEqual(['a', 'b'])
+  })
+
+  it('tolerates authored ids appearing in the geometric list without duplicating', () => {
+    const ring = sceneRing([{ id: 'a', order: 0 }, { id: 'x' }], ['a', 'x', 'a'])
+    expect(ring).toEqual(['a', 'x'])
+  })
+})
+
+describe('entryPick (first Tab selects what the user is looking at)', () => {
+  const vp: Viewport = { w: 1000, h: 600 }
+  const r = (id: string, x: number, y: number, w = 100, h = 100): OrderRect => ({ id, x, y, w, h })
+
+  it('picks the fully-visible rect nearest the viewport center', () => {
+    expect(entryPick([r('edge', 0, 0), r('center', 450, 250)], vp)).toBe('center')
+  })
+
+  it('any fully-visible rect beats any partially-visible one, regardless of distance', () => {
+    // 'half' straddles the right edge NEAR center height; 'corner' is far
+    // away but entirely on screen. Entry must never select a clipped thing.
+    expect(entryPick([r('half', 950, 250), r('corner', 0, 0, 50, 50)], vp)).toBe('corner')
+  })
+
+  it('with only partials, the most-visible fraction wins', () => {
+    expect(entryPick([r('sliver', 990, 0, 200, 100), r('mostly', 900, 0, 200, 100)], vp)).toBe(
+      'mostly',
+    )
+  })
+
+  it('fraction ties break toward the viewport center', () => {
+    // Both are exactly half visible; 'near' is at center height.
+    expect(entryPick([r('far', 950, 0, 100, 100), r('near', 950, 250, 100, 100)], vp)).toBe('near')
+  })
+
+  it('returns null when nothing projects into the viewport', () => {
+    expect(entryPick([r('gone', 2000, 0), r('behind', -500, -500, 100, 100)], vp)).toBeNull()
+  })
+
+  it('returns null for an empty scene', () => {
+    expect(entryPick([], vp)).toBeNull()
+  })
+})
+
+describe('focus-visibility geometry (the ported scroll-into-view obligation)', () => {
+  const vp: Viewport = { w: 1000, h: 600 }
+
+  it('visibleFraction: full, half, none, degenerate', () => {
+    expect(visibleFraction({ x: 100, y: 100, w: 100, h: 100 }, vp)).toBe(1)
+    expect(visibleFraction({ x: 950, y: 100, w: 100, h: 100 }, vp)).toBe(0.5)
+    expect(visibleFraction({ x: 1200, y: 100, w: 100, h: 100 }, vp)).toBe(0)
+    expect(visibleFraction({ x: 0, y: 0, w: 0, h: 100 }, vp)).toBe(0)
+  })
+
+  it('needsReframe: mostly-hidden rects violate, fully-visible ones do not', () => {
+    expect(needsReframe({ x: 970, y: 100, w: 100, h: 100 }, vp)).toBe(true) // 30% visible
+    expect(needsReframe({ x: 100, y: 100, w: 100, h: 100 }, vp)).toBe(false)
+    expect(needsReframe({ x: 1100, y: 100, w: 100, h: 100 }, vp)).toBe(true) // fully off
+  })
+
+  it('needsReframe: a rect dominating the screen is being looked at, not lost', () => {
+    // 15% visible fraction, but it covers the viewport center — a descended
+    // panel overflowing the frame must not trigger a reframe fight.
+    expect(needsReframe({ x: -500, y: -500, w: 2000, h: 2000 }, vp)).toBe(false)
+  })
+
+  it('reframeDelta: zero inside, minimal pull-back at edges (margin 24)', () => {
+    expect(reframeDelta({ x: 100, y: 100, w: 100, h: 100 }, vp)).toEqual({ dx: 0, dy: 0 })
+    expect(reframeDelta({ x: 950, y: 100, w: 100, h: 100 }, vp)).toEqual({ dx: -74, dy: 0 })
+    expect(reframeDelta({ x: -50, y: 100, w: 100, h: 100 }, vp)).toEqual({ dx: 74, dy: 0 })
+    expect(reframeDelta({ x: 100, y: 550, w: 100, h: 100 }, vp)).toEqual({ dx: 0, dy: -74 })
+  })
+
+  it('reframeDelta: an axis the rect outsizes centers instead of thrashing', () => {
+    const d = reframeDelta({ x: 0, y: 100, w: 2000, h: 100 }, vp)
+    expect(d.dx).toBe(-500) // center 1000 → viewport center 500
+    expect(d.dy).toBe(0)
   })
 })
