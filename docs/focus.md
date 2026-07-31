@@ -136,6 +136,29 @@ on this contract:
   fulfiller keeps pixel math but clamps to one viewport per event.
 - Arrows, the announcer, and page-edge handoff remain deferred.
 
+**Polish pass (second user test, shipped 2026-07-30):** five noticings,
+each verified fixed in browser with real CDP input, plus one discovered
+mid-verification. (1) Release aims the home ride at the released panel
+— position comes home, the view holds the panel Tab framed (a corner
+panel released to dead-center NDC (0,0) where bare `home()` lost it
+off-screen). (2) Fast Tab interpolates continuously — the rig publishes
+the live aim into `controls.target` every tween frame, so mid-flight
+re-arms read the rendered pose, not the stale settle value (5-Tab burst:
+max 0.018 rad/frame, no snaps). (3) Motion modes: rig `setMotion`, auto
+honoring `prefers-reduced-motion` end to end (emulated media query →
+one-frame jump cut), and the library's default fulfiller jump-cuts under
+reduced motion too. (4) Pointer selection (see Camera integration):
+click selects the unit, buttons keep their focus, dead-space clicks
+select instead of dropping focus. (5) Approach settle pop: every armed
+pose is pre-clamped legal (`clampOrbitPose`), so the controls-handoff
+`update()` is a no-op — top-row approach lands phi exactly at the limit
+with zero tail movement. The discovery: the corner-to-corner ride
+whipped 1.13 rad in one frame — target-point lerp swept the target past
+the camera; the great-circle fix then arced over the zenith (0.31
+rad/frame of up-vector spin); yaw/pitch gaze interpolation landed at
+the mathematical bound (0.052 rad/frame). All three schemes are pinned
+as `cameraPose.ts` tests.
+
 **Thesis tie-in.** The library's claim is that the DOM is load-bearing,
 not a texture. Until focus works, that claim is mouse-only. The goal is
 keyboard-complete operation of a 3D workspace with the browser's real
@@ -418,6 +441,44 @@ camera truck, clamped to one viewport per event) keeps the invariant in
 rigless scenes and stands down while any app fulfiller is registered.
 `'descend'` requests are emitted (the rigless floor) but rigs ignore
 them — their approach ride already centers the target.
+
+**Pointer selection (shipped with the increment-3 polish).** Clicking a
+Surface selects its unit — the pointer analog of Tab, minus the camera:
+the click proves the panel visible, so the `'pointer'` cause never
+reframes, and the ring cursor updates so the next Tab continues from
+the clicked panel. Mechanics: forwarded synthetic clicks bubble to a
+document-level capture listener (capture because focus-follows-click is
+browser behavior, not an event contract markup can `stopPropagation`
+away). The listener defers one microtask — `forwardPointer` runs its
+focus fixup *after* dispatching the click, including a blur when
+nothing focusable sat under the point, which would immediately undo a
+focus set synchronously — then fills in `focusUnit(id, 'pointer')` only
+if the group ended up without focus. Clicks that land real focus (a
+button) therefore win; clicking dead space in a panel now selects it
+instead of dropping focus to nothing. Click-in still never engages
+(APG exit-at-edge preserved — the trap binds to Enter's camera
+commitment, not to mouse entry).
+
+**Motion.** The built-in fulfiller honors `prefers-reduced-motion` by
+applying its correction as a jump-cut — vestibular safety is a library
+floor, not app policy. Rigs are expected to do the same (lab 006's rig:
+`setMotion('animated' | 'instant' | 'auto')`, auto following the media
+query). Two rig lessons paid for in browser traces, pinned in
+`cameraPose.ts` tests, for any fulfiller that tweens `(position,
+target)` poses against OrbitControls: (1) **arm only poses already
+legal under the controls' polar/distance limits** — settle hands the
+pose to `update()`, which re-satisfies clamps by *moving the position*,
+a visible last-frame yank otherwise (every top- and middle-row approach
+in lab 006 violated the polar limit); (2) **interpolate gaze in
+yaw/pitch, never by lerping the target point** (the target's straight
+path can sweep past the camera — measured 1.13 rad in one frame) **and
+not on the great circle either** (near-antiparallel horizontal aims arc
+over the zenith, where lookAt's up-vector degenerates — measured 0.31
+rad/frame). Yaw/pitch is turning-in-place body grammar; its elevation
+never leaves the endpoints' band, so the pole is unreachable. And for
+re-arms mid-flight: publish the live aim into `controls.target` every
+tween frame — arming a new tween from the stale settle-time target is
+what made fast Tab jank.
 
 ## Surface markup rules (tab hygiene)
 

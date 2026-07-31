@@ -450,6 +450,13 @@ export function FocusScene({
       const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
       const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1)
       const delta = right.multiplyScalar(-dx * worldPerPx).add(up.multiplyScalar(dy * worldPerPx))
+      // prefers-reduced-motion: same correction as a jump-cut. Vestibular-
+      // safe is a library floor, not app policy.
+      if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        camera.position.add(delta)
+        syncProxyRects()
+        return
+      }
       defaultTweenRef.current = {
         from: camera.position.clone(),
         to: camera.position.clone().add(delta),
@@ -725,6 +732,36 @@ export function FocusScene({
       if (!e.relatedTarget) queueMicrotask(() => syncStates('pointer'))
     }
 
+    // Click grammar: clicking a surface SELECTS its unit — the pointer
+    // analog of Tab, minus the camera ('pointer' cause skips reframe: a
+    // clicked panel is visible by definition). Clicks that land real focus
+    // themselves (a button — forwardEvents' focus fixup) win; selection only
+    // fills the gap where the fixup left the group without focus. Capture
+    // phase, because focus-follows-click is browser behavior, not an event
+    // contract markup can stopPropagation away.
+    const groupAt = (el: Element): string | null => {
+      for (const { id } of tree.groups())
+        for (const m of tree.members(id))
+          if (m.kind === 'composite' && m.data.root.contains(el)) return id
+      return null
+    }
+
+    const onClick = (e: MouseEvent) => {
+      if (!(e.target instanceof Element)) return
+      const groupId = groupAt(e.target)
+      if (!groupId) return
+      // forwardPointer runs its focus fixup AFTER dispatching the click —
+      // including a blur when nothing focusable was under the point, which
+      // would immediately undo a focus set here. Defer one microtask so the
+      // fixup settles first, then fill in only if the group ended up bare.
+      queueMicrotask(() => {
+        const loc = locate()
+        if ((loc.level === 'unit' || loc.level === 'interior') && loc.groupId === groupId)
+          return
+        focusUnit(groupId, 'pointer')
+      })
+    }
+
     const api: FocusSceneApi = {
       registerGroup(reg) {
         tree.registerGroup(reg.id, reg.label, reg.order)
@@ -845,6 +882,7 @@ export function FocusScene({
       onKeydown,
       onFocusin,
       onFocusout,
+      onClick,
       locate,
       ringOrder,
       entryTarget,
@@ -880,6 +918,7 @@ export function FocusScene({
     document.addEventListener('keydown', bundle.onKeydown)
     document.addEventListener('focusin', bundle.onFocusin)
     document.addEventListener('focusout', bundle.onFocusout)
+    document.addEventListener('click', bundle.onClick, true)
     const w = window as unknown as { __focusScene?: unknown }
     w.__focusScene = {
       locate: bundle.locate,
@@ -905,6 +944,7 @@ export function FocusScene({
       document.removeEventListener('keydown', bundle.onKeydown)
       document.removeEventListener('focusin', bundle.onFocusin)
       document.removeEventListener('focusout', bundle.onFocusout)
+      document.removeEventListener('click', bundle.onClick, true)
       delete w.__focusScene
     }
   }, [bundle, gl])

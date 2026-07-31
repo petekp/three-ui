@@ -12,6 +12,14 @@ import {
 import { Dial } from '../primitives/controls/Dial'
 import { arcLayout, type ArcSlot } from '../lib/arcLayout'
 import {
+  clampOrbitPose,
+  clampViewElevation,
+  gazeAt,
+  gazeTween,
+  type GazeTween,
+  type OrbitLimits,
+} from '../lib/cameraPose'
+import {
   buildPanels,
   injectLab006Styles,
   PANEL_W,
@@ -47,15 +55,23 @@ const HOME_POS = new THREE.Vector3(0, 2.0, 3.4)
 const HOME_TARGET = new THREE.Vector3(0, 1.6, 0)
 const APPROACH_DIST = 3.05 // ≥ OrbitControls minDistance so the tween's end pose survives
 
-interface OrbitLike {
+interface OrbitLike extends OrbitLimits {
   enabled: boolean
   target: THREE.Vector3
   update: () => void
 }
 
+type MotionMode = 'animated' | 'instant' | 'auto'
+
 interface RigApi {
   approach: (center: THREE.Vector3, facing: THREE.Vector3) => void
-  home: () => void
+  /** Return the position home; with `lookToward`, HOLD that point in view
+   *  from there (release grammar — the same framing Tab gave it) instead of
+   *  restoring the default aim, which loses edge panels off-screen. */
+  home: (lookToward?: THREE.Vector3) => void
+  /** 'auto' (default) follows prefers-reduced-motion; 'instant' jump-cuts
+   *  every camera move to its end pose. */
+  setMotion: (mode: MotionMode) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -71,13 +87,18 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
 
   const tween = useRef<{
     fromPos: THREE.Vector3
-    fromTarget: THREE.Vector3
     toPos: THREE.Vector3
     toTarget: THREE.Vector3
+    /** Gaze rides the great circle between the two aims (cameraPose.ts):
+     *  lerping the target POINT can sweep it past the camera and lookAt
+     *  whips — browser-measured 1.13 rad in one frame on a corner-to-
+     *  corner ride. Angular interpolation makes that impossible. */
+    gaze: GazeTween
     t: number
     dur: number
   } | null>(null)
   const curTarget = useRef(new THREE.Vector3())
+  const motion = useRef<MotionMode>('auto')
 
   // Home pose on mount (App's Canvas camera default belongs to other labs).
   useEffect(() => {
@@ -87,37 +108,74 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
     controls.update()
   }, [camera, controls])
 
+  const instantNow = () =>
+    motion.current === 'auto'
+      ? (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false)
+      : motion.current === 'instant'
+
+  // Every camera move funnels through here. The pose is pre-clamped to the
+  // controls' polar/distance limits BEFORE arming: settle hands the pose to
+  // OrbitControls, whose update() re-satisfies clamps by MOVING THE POSITION
+  // — a last-frame pop otherwise (cameraPose.ts; vitest-pinned: every top-
+  // and middle-row approach pose violated the polar limit). Instant mode
+  // applies the same end pose as one jump-cut.
+  const armTween = (toPosRaw: THREE.Vector3, toTarget: THREE.Vector3, dur: number) => {
+    if (!controls) return
+    const toPos = clampOrbitPose(toPosRaw, toTarget, controls)
+    if (instantNow()) {
+      tween.current = null
+      camera.position.copy(toPos)
+      controls.target.copy(toTarget)
+      curTarget.current.copy(toTarget)
+      controls.enabled = true
+      controls.update()
+      focus?.syncProxyRects()
+      return
+    }
+    controls.enabled = false
+    // Seed the live aim now — cancel can fire before the first tween frame.
+    curTarget.current.copy(controls.target)
+    tween.current = {
+      fromPos: camera.position.clone(),
+      toPos,
+      toTarget: toTarget.clone(),
+      gaze: gazeTween(camera.position, controls.target, toPos, toTarget),
+      t: 0,
+      dur,
+    }
+  }
+
+  const impl: RigApi = {
+    approach: (center, facing) =>
+      armTween(center.clone().addScaledVector(facing, APPROACH_DIST), center.clone(), 0.9),
+    home: (lookToward) => {
+      let toTarget = HOME_TARGET.clone()
+      if (lookToward && controls) {
+        const d = lookToward.clone().sub(HOME_POS)
+        if (d.lengthSq() > 1e-8) {
+          clampViewElevation(d.normalize(), controls)
+          toTarget = HOME_POS.clone().addScaledVector(d, HOME_POS.distanceTo(HOME_TARGET))
+        }
+      }
+      armTween(HOME_POS.clone(), toTarget, 0.9)
+    },
+    setMotion: (mode) => {
+      motion.current = mode
+    },
+  }
+  const implRef = useRef(impl)
+  implRef.current = impl
+
   useEffect(() => {
     api.current = {
-      approach: (center, facing) => {
-        if (!controls) return
-        controls.enabled = false
-        tween.current = {
-          fromPos: camera.position.clone(),
-          fromTarget: controls.target.clone(),
-          toPos: center.clone().addScaledVector(facing, APPROACH_DIST),
-          toTarget: center.clone(),
-          t: 0,
-          dur: 0.9,
-        }
-      },
-      home: () => {
-        if (!controls) return
-        controls.enabled = false
-        tween.current = {
-          fromPos: camera.position.clone(),
-          fromTarget: controls.target.clone(),
-          toPos: HOME_POS.clone(),
-          toTarget: HOME_TARGET.clone(),
-          t: 0,
-          dur: 0.9,
-        }
-      },
+      approach: (center, facing) => implRef.current.approach(center, facing),
+      home: (lookToward) => implRef.current.home(lookToward),
+      setMotion: (mode) => implRef.current.setMotion(mode),
     }
     return () => {
       api.current = null
     }
-  }, [api, camera, controls])
+  }, [api])
 
   // Reframe fulfiller (docs/focus.md "Reframe bridge"): the rig claims
   // visibility, standing the library's bare-camera truck down. 'descend' is
@@ -133,7 +191,14 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
     if (!(camera instanceof THREE.PerspectiveCamera)) return
     const camPos = camera.position
     const panelPos = new THREE.Vector3().setFromMatrixPosition(req.object.matrixWorld)
-    const dist = controls.target.distanceTo(camPos)
+    // controls.target carries the LIVE aim even mid-tween (useFrame syncs it
+    // every frame), so a fast Tab re-aims from the rendered view, and the
+    // radius clamp guards mid-flight distances the lerp path can produce.
+    const dist = THREE.MathUtils.clamp(
+      controls.target.distanceTo(camPos),
+      controls.minDistance ?? 0,
+      controls.maxDistance ?? Infinity,
+    )
     const d = controls.target.clone().sub(camPos).normalize()
     const dStar = panelPos.clone().sub(camPos).normalize()
     const fovRad = THREE.MathUtils.degToRad(camera.fov)
@@ -145,31 +210,15 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
     const axis = new THREE.Vector3().crossVectors(d, dStar)
     if (axis.lengthSq() < 1e-10) return // dead astern — no unique turn
     axis.normalize()
-    const dNew = d.applyAxisAngle(axis, between - allow)
-    // Respect the app's own orbit limits: settle hands the pose back to
-    // OrbitControls, whose polar clamp re-satisfies phi by MOVING the
-    // position — a visible pop (browser-verified: y 2→3.05 on a steep
-    // up-turn). Clamp the view elevation first so update() is a no-op.
-    // phi(position about target) = acos(−dNew.y).
-    const oc = controls as unknown as { minPolarAngle?: number; maxPolarAngle?: number }
-    const yA = -Math.cos(oc.minPolarAngle ?? 0)
-    const yB = -Math.cos(oc.maxPolarAngle ?? Math.PI)
-    const yClamped = THREE.MathUtils.clamp(dNew.y, Math.min(yA, yB), Math.max(yA, yB))
-    if (yClamped !== dNew.y) {
-      const h = Math.sqrt(Math.max(1 - yClamped * yClamped, 1e-9))
-      const hLen = Math.hypot(dNew.x, dNew.z) || 1
-      dNew.set((dNew.x / hLen) * h, yClamped, (dNew.z / hLen) * h)
-    }
-    controls.enabled = false
-    tween.current = {
-      fromPos: camPos.clone(),
-      fromTarget: controls.target.clone(),
-      toPos: camPos.clone(),
-      toTarget: camPos.clone().addScaledVector(dNew, dist),
-      t: 0,
+    // The head-turn keeps the POSITION sacred, so legality comes from
+    // bending the view elevation, not the pose clamp (cameraPose.ts).
+    const dNew = clampViewElevation(d.applyAxisAngle(axis, between - allow), controls)
+    armTween(
+      camPos.clone(),
+      camPos.clone().addScaledVector(dNew, dist),
       // Big turns get a little more time; nudges stay snappy.
-      dur: THREE.MathUtils.clamp(0.3 + (between - allow) * 0.3, 0.3, 0.8),
-    }
+      THREE.MathUtils.clamp(0.3 + (between - allow) * 0.3, 0.3, 0.8),
+    )
   })
 
   // A grab of the controls mid-tween should win instantly.
@@ -197,10 +246,16 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
     tw.t = Math.min(1, tw.t + delta / tw.dur)
     const k = tw.t * tw.t * (3 - 2 * tw.t) // smoothstep
     camera.position.lerpVectors(tw.fromPos, tw.toPos, k)
-    curTarget.current.lerpVectors(tw.fromTarget, tw.toTarget, k)
+    gazeAt(tw.gaze, camera.position, k, curTarget.current)
+    // Publish the live aim every frame (controls are disabled — no fight).
+    // Arming a NEW tween mid-flight reads controls.target as "where am I
+    // looking"; without this it held the stale settle-time value, and fast
+    // Tab snapped the view back to it — instantaneous jank by construction.
+    controls.target.copy(curTarget.current)
     camera.lookAt(curTarget.current)
     if (tw.t >= 1) {
       tween.current = null
+      camera.position.copy(tw.toPos)
       controls.target.copy(tw.toTarget)
       controls.enabled = true
       controls.update()
@@ -412,7 +467,10 @@ export function Lab006() {
       }
     } else if (e.cause === 'release') {
       // Escape released an ENGAGED panel — the matching un-commit gesture.
-      rig.current?.home()
+      // The position comes home but the view HOLDS the released panel (the
+      // framing Tab gave it); a bare home() lost edge panels off-screen.
+      const g = e.groupId ? groups.current.get(e.groupId) : undefined
+      rig.current?.home(g?.getWorldPosition(new THREE.Vector3()))
     } else if (e.level === 'scene' && e.cause === 'escape') {
       rig.current?.home()
     }
@@ -433,6 +491,7 @@ export function Lab006() {
         return true
       },
       home: () => rig.current?.home(),
+      setMotion: (mode: 'animated' | 'instant' | 'auto') => rig.current?.setMotion(mode),
       panelWorldPos: (id: string) => {
         const g = groups.current.get(id)
         return g ? g.getWorldPosition(new THREE.Vector3()).toArray() : null

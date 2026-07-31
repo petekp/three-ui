@@ -261,3 +261,37 @@ display-tracking; the value is projected density, camera-driven.
 **Consequence.** `LOD_EVERY`/`LOD_AGREE`/`BAND` and the ladder stay
 internal and freely tunable; the public contract is only "density
 between min and max, chosen sensibly."
+
+## 13. Camera rides arm legal poses and interpolate gaze in yaw/pitch (2026-07-30, lab 006 polish)
+
+**Context.** The focus rig tweens `(position, target)` poses and hands
+the result to OrbitControls at settle. Three disorientation bugs
+arrived together in the second user test: approach rides ended with a
+last-frame yank; fast Tab snapped the aim backward; and (found during
+verification) a corner-to-corner ride whipped the view 1.13 rad in a
+single frame. All three are structural, not tuning: `update()`
+re-satisfies polar/distance clamps by MOVING THE POSITION (every top-
+and middle-row approach pose violated the polar limit — vitest-pinned);
+a tween armed mid-flight read `controls.target`, which held the STALE
+settle-time aim; and lerping the target POINT sweeps it past the
+camera's path, where `lookAt` of a near-zero difference vector spins.
+**Decision.** Every armed pose is pre-clamped legal before the tween
+starts (`clampOrbitPose` — target sacred, position slides;
+`clampViewElevation` — position sacred, aim bends), so the settle
+handoff is a no-op by construction. The live aim is published into
+`controls.target` every tween frame (controls are disabled — no fight),
+so re-arms read the rendered pose. Gaze interpolates in YAW/PITCH
+(`gazeTween`/`gazeAt`): rotate about vertical along the short arc,
+morph elevation linearly, carry distance separately. **Rejected.**
+(a) *Target-point lerp* — the whip above. (b) *Great-circle slerp of
+the view direction* — tried, measured 0.31 rad/frame: near-antiparallel
+horizontal aims arc over the ZENITH, where lookAt's up-vector
+degenerates and the ride glances at the ceiling. Yaw/pitch elevation
+never leaves the endpoints' band, so the pole is unreachable; it is
+also the body grammar of turning in place. (c) *Loosening
+OrbitControls limits* — the limits are app policy; the old settle pose
+WAS the clamped pose, just reached via a yank. **Consequence.** Rides
+end where they land (browser: zero tail movement, phi exactly at the
+limit, ~0.05 rad/frame peak — the smoothstep bound); `cameraPose.ts`
+tests reproduce all three failure modes against the fixes, so a
+"simplification" back to lerp fails CI, not a user test.

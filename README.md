@@ -786,3 +786,60 @@ contract intact (33 surfaces · 0 paints/s · 120 fps). 106/106 vitest,
 tsc clean. Deferred: arrows (increment 4), the announcer, page-edge
 handoff; tween-settle gating for the geometric fallback stays a watch
 item; flow-through Tab stays a possible future opt-in policy.
+
+**Polish pass — the second user test's five noticings.** Every one
+reproduced, fixed, and re-verified with real CDP input; two turned out
+to be the same structural disease, and the verification tracer caught a
+sixth bug none of us had seen. (1) *Escape stranded edge panels*:
+release now rides the position home while the view HOLDS the released
+panel — `home(lookToward)` aims along the elevation-clamped panel
+direction, and the released corner panel lands at NDC (0.000, 0.000)
+where bare `home()` used to lose it off-screen entirely. (2) *Fast Tab
+janked*: by construction — the rig only wrote `controls.target` at
+settle, so a tween armed mid-flight read the STALE pre-ride aim as its
+start and snapped the view backward one whole step. The fix publishes
+the live aim into `controls.target` every tween frame (controls are
+disabled during rides — nothing fights); a 5-Tab burst now traces
+0.018 rad/frame max, no snap frames. (3) *Instant mode*: rig
+`setMotion('animated'|'instant'|'auto')`, auto following
+`prefers-reduced-motion` — verified through real emulated media (one
+0.38 rad frame, nothing else), and the library's default fulfiller
+jump-cuts under reduced motion too. (4) *Click should select*: shipped
+as library grammar — a document-level capture listener sees the
+forwarded click bubble and, one microtask later (after `forwardPointer`
+'s focus fixup, whose no-focusable branch BLURS and would undo an
+eager focus), selects the unit iff the click left the group bare.
+Verified: clicking a doc panel selects it with the camera provably
+frozen (Δ = 0.000000 — 'pointer' never reframes); clicking a button
+keeps the button; clicking dead space in the synth selects it where
+before focus dropped to nothing; Tab afterward continues the ring FROM
+the clicked panel. (5) *The approach settle pop*: same disease as the
+head-turn pop fixed in increment 3, one layer up — the approach pose
+itself was illegal. Panels face the eye-level look target, so top-row
+approach poses put the camera BELOW the panel: phi 1.88 rad against
+OrbitControls' 1.532 limit (middle row violates too — 1.667; nearly
+every approach popped at settle). `clampOrbitPose` pre-clamps every
+armed pose about its sacred target, so the settle `update()` is a
+fixed point: browser trace shows zero tail movement, phi landing at
+exactly 87.8°.
+
+The discovery: riding corner-to-corner (release-aim poses made these
+reachable), the tracer measured a 1.13 rad single-frame whip. Lerping
+the target POINT sweeps it close past the camera's path, and lookAt of
+a near-zero difference vector spins. First fix — slerp the view
+direction on the great circle — measured 0.31 rad/frame: these aims
+are near-antiparallel and near-horizontal, so their great circle arcs
+over the ZENITH, where lookAt's up-vector degenerates (and the ride
+looks at the ceiling). The stable parametrization is YAW/PITCH
+decomposition — turn about vertical along the short arc, morph
+elevation linearly: elevation never leaves the endpoints' band, the
+pole is unreachable, and it is literally how a body turns in place.
+Final trace: 0.052 rad/frame — the smoothstep mathematical bound for a
+168° turn. All three schemes (lerp whip, great-circle zenith spin,
+yaw/pitch bound) plus the settle-pop reconciliation are pinned as pure
+`cameraPose.ts` vitest (14 tests; the suite simulates OrbitControls'
+clamp verbatim), so the next "simplification" fails CI instead of a
+user test. 119/119 vitest, tsc clean, idle contract intact (only the
+four live-feed panels paint; docs and chrome at zero; 120 fps).
+Decision #13 records the ride rules; `docs/focus.md` gains the pointer-
+selection and motion contracts.
