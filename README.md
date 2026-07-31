@@ -681,3 +681,44 @@ Not in yet, deliberately: arrows/spatial nav, ARIA proxies for the
 physical controls, the announcer — and the scene ring closes into a
 loop rather than handing off to the page (that needs the proxy layer
 to own the page-side stops first).
+
+**Increment 2 shipped — the mixed group: a knob in the panel's Tab
+order.** The unproven half of the design was the leaf member — a WebGL
+control with no DOM of its own joining a Surface's traversal. Lab 006
+now proves it synth-style: `filter — voice a` is one FocusGroup holding
+the panel (three wave buttons, live DOM) and a physical `<Dial>`
+floating beside the glass. Tab descends into the panel, walks saw →
+square → sine natively, and the next press crosses the member boundary
+onto the knob — an opacity-0 ARIA slider proxy at its projected rect
+carrying real document focus while the cylinder answers with emissive
+glow. Arrows are impulses, not setState: `hopImpulse` bisects the
+actual integrator (flipImpulse's idiom) so one press from rest hops
+exactly one detent at any tuning, key repeat compounds into momentum,
+and the cutoff readout in the DOM panel ticks with every detent the
+physics crosses. Home/End snap to the extreme well and let the field
+seat it. The proxy layer is ONE imperative div beside the canvas — no
+React anywhere near it, which retires react-three-a11y's
+root-per-proxy crash class by construction — and rects re-project at
+focus transitions, camera tween-settle, and drag-end, never per frame.
+
+Two lessons were paid for in browser time. Registration order: React
+child effects run bottom-up, so the dial registered before its own
+FocusGroup existed and the tree silently dropped it — proxy present in
+the layer, absent from the traversal, Tab sailing past the knob to the
+next unit. `registerMember` now creates group records implicitly, and
+unordered members sort composites-first (a Surface's composite
+registers LATE — its source element is async), so mount timing can't
+reorder a designed device; `order` stays as the authored escape hatch.
+Announce timing: waiting for physical settle reads ~2.7s late, because
+the arrow kick's ringdown must decay below the strict rest threshold
+first — `aria-valuenow` now lands at each detent crossing (paint-free,
+probe 6), with the settle write authoritative.
+
+Verified end-to-end with real CDP keys: ring → Enter → native interior
+walk → boundary move onto the proxy → arrows/Home/End through the
+physics → Shift+Tab back into the panel at its last tabbable → memory
+restore onto the knob → Escape ladder, idle contract intact (33
+surfaces · 0 paints/s between feed ticks). Carried debt: the leaf-only
+proxy-as-unit fallback is implemented but unexercised; the ring is
+still a closed loop; ring sampling isn't gated on tween-settle yet —
+and the run-1 Tab anomaly never recurred across ~40 real presses.

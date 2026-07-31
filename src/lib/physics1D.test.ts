@@ -5,6 +5,7 @@ import {
   detentField,
   endStops,
   flipImpulse,
+  hopImpulse,
   overCenterField,
   step,
   stopsField,
@@ -137,5 +138,37 @@ describe('endStops + stopsField (the slider)', () => {
   it('throws from either direction land inside travel, on stops', () => {
     const down = simulate({ q: 0.5, v: -8 }, field, 5)
     expect(Math.abs(down.q - 0)).toBeLessThan(1e-6)
+  })
+})
+
+describe('hopImpulse (the dial keyboard ratchet)', () => {
+  // Dial default tuning: 8 detents, k=50, c=6 — the values Dial.tsx ships.
+  const field = composeFields(detentField(8, 50), damping(6))
+
+  it('one kick from rest advances exactly one well', () => {
+    const kick = hopImpulse(field, STEP)
+    const settled = simulate({ q: 0, v: kick }, field, 4)
+    expect(Math.round(settled.q / STEP)).toBe(1)
+  })
+
+  it('is symmetric: a negative kick lands one well the other way', () => {
+    const kick = hopImpulse(field, STEP)
+    const settled = simulate({ q: 0, v: -kick }, field, 4)
+    expect(Math.round(settled.q / STEP)).toBe(-1)
+  })
+
+  it('under the bisected minimum, the body falls back home', () => {
+    const kick = hopImpulse(field, STEP)
+    // margin is 1.25, so 60% of the returned kick sits well below the barrier
+    const settled = simulate({ q: 0, v: kick * 0.6 }, field, 4)
+    expect(Math.round(settled.q / STEP)).toBe(0)
+  })
+
+  it('adapts to stiffer tuning without skipping wells', () => {
+    const stiff = composeFields(detentField(12, 140), damping(9))
+    const spacing = (Math.PI * 2) / 12
+    const kick = hopImpulse(stiff, spacing)
+    const settled = simulate({ q: 0, v: kick }, stiff, 4)
+    expect(Math.round(settled.q / spacing)).toBe(1)
   })
 })

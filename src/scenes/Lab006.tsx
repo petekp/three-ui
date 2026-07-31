@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
 import { Surface } from '../primitives/Surface'
-import { FocusGroup, useFocusSceneEvents, type GroupFocusState } from '../primitives/FocusScene'
+import {
+  FocusGroup,
+  useFocusScene,
+  useFocusSceneEvents,
+  type GroupFocusState,
+} from '../primitives/FocusScene'
+import { Dial } from '../primitives/controls/Dial'
 import { arcLayout, type ArcSlot } from '../lib/arcLayout'
 import {
   buildPanels,
@@ -60,6 +66,7 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
   const camera = useThree((s) => s.camera)
   const controls = useThree((s) => s.controls as unknown as OrbitLike | null)
   const gl = useThree((s) => s.gl)
+  const focus = useFocusScene()
 
   const tween = useRef<{
     fromPos: THREE.Vector3
@@ -140,6 +147,10 @@ function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
       controls.target.copy(tw.toTarget)
       controls.enabled = true
       controls.update()
+      // Tween-settle is the sanctioned proxy-rect sync point (docs/focus.md:
+      // on demand, never per frame) — AT reads geometry from wherever the
+      // camera came to rest.
+      focus?.syncProxyRects()
     }
   })
 
@@ -168,6 +179,10 @@ function WorkPanel({
   const drag = useRef({ active: false, lastX: 0, lastY: 0, angle: 0, radius: 0 })
   const [hover, setHover] = useState(false)
   const [focus, setFocus] = useState<GroupFocusState>('none')
+  const focusScene = useFocusScene()
+  // The live source root, for satellite controls that paint into the panel
+  // (the dial's readout is real DOM — that's the point).
+  const sourceRoot = useRef<HTMLElement | null>(null)
 
   const approachNow = () => {
     const g = group.current
@@ -225,6 +240,8 @@ function WorkPanel({
     d.active = false
     ;(e.target as Element).releasePointerCapture?.(e.pointerId)
     if (controls) controls.enabled = true
+    // The panel (and its satellite dial) came to rest somewhere new.
+    focusScene?.syncProxyRects()
   }
 
   return (
@@ -243,12 +260,38 @@ function WorkPanel({
           html={spec.html}
           width={PANEL_W}
           height={PANEL_H}
-          onSource={spec.feed}
+          onSource={(root) => {
+            sourceRoot.current = root
+            const cleanup = spec.feed?.(root)
+            return () => {
+              sourceRoot.current = null
+              cleanup?.()
+            }
+          }}
           onDoubleClick={approach}
           castShadow
         >
           <planeGeometry args={[W3, H3]} />
         </Surface>
+        {/* Satellite knob: a WebGL leaf in the SAME focus group — Tab flows
+            from the panel's last button onto it (lab 007's mixed-group
+            proof). Its detents paint the panel's readout: physics in the
+            scene, consequence in the document. */}
+        {spec.dial && (
+          <Dial
+            position={[W3 / 2 + 0.46, -H3 * 0.12, 0.14]}
+            scale={0.72}
+            detents={spec.dial.detents}
+            initialDetent={spec.dial.initialDetent}
+            focusLabel={spec.dial.label}
+            valueText={(i) => spec.dial!.values[i]}
+            onDetent={(i) => {
+              const el = sourceRoot.current?.querySelector('[data-cutoff]')
+              if (el) el.textContent = spec.dial!.values[i]
+            }}
+            castShadow
+          />
+        )}
         {/* Grab handle: the one part of a panel that is matter, not screen.
             Doubles as the focus lamp — unit selection glows it steady,
             interior engagement brightens it. */}

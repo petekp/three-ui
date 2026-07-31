@@ -33,8 +33,51 @@ camera home. Implementation decisions layered on this contract:
   tabbables keeps unit focus but still emits `cause: 'descend'` —
   read-only panels are zoomed into to *read*; camera reactions key on
   the commitment, not on whether the DOM had an input.
-- **Arrows, ARIA proxies for leaves, and the announcer are NOT in yet**
-  — next increment, per the sections below.
+- **Spatial arrows, the announcer, and page-edge handoff are NOT in
+  yet** — later increments, per the sections below.
+
+**Implementation status (increment 2, shipped 2026-07-30):** the leaf
+half of the model, proven in lab 006 as a synth-style mixed group — the
+`filter — voice a` Surface plus a `<Dial>` satellite sharing ONE
+FocusGroup traversal, browser-verified with real CDP keys: Tab continues
+from the last wave button onto the knob's slider proxy; arrows ratchet
+the physics one detent per press; Home/End settle-to-extreme; Shift+Tab
+re-enters the panel at its *last* tabbable; Tab past the knob exits
+upward to the next unit; interior memory restores onto the leaf and
+Escape still clears it. Idle contract held on-screen (33 surfaces ·
+0 paints/s between feed ticks). Decisions layered on this contract:
+
+- **One imperative proxy layer** (`FocusScene.registerLeaf`): plain DOM
+  appended beside the canvas. Inside the r3f reconciler a react-dom
+  portal can't reach, so no React touches proxies at all — which also
+  closes react-three-a11y's root-per-proxy crash class by construction.
+  Proxy rects re-project on focus transitions plus `syncProxyRects()` at
+  camera tween-settle and drag-end — never per frame.
+- **Member boundaries are the manager's; composite interiors stay the
+  browser's.** `interiorBoundary` (focusTree.ts, vitest-pinned) turns
+  per-member element sequences into native / move / exit / ascend.
+- **Registration order is a trap the tree now absorbs.** React child
+  effects run bottom-up, so members register BEFORE their FocusGroup —
+  and a Surface's composite registers LATE (its source element is
+  async). `registerMember` creates the group record implicitly, and
+  unordered members default to composites-first-then-leaves so mount
+  timing can't reorder a designed device; explicit `order` is the
+  escape hatch. The silent-drop version of this shipped and cost a
+  browser session to find: the dial sat in the proxy layer but not in
+  its group's traversal.
+- **Announce per detent crossing; settle stays authoritative.** The
+  strict rest threshold fires ~2.7s after an arrow kick (the ringdown
+  must decay first) — correct physics, unacceptable AT latency.
+  `aria-valuenow` lands at each crossing (a handful of writes/s,
+  paint-free per probe 6) and once more at true rest.
+- **Keyboard-as-force is calibrated by simulation**: `hopImpulse`
+  bisects the actual integrator (flipImpulse's idiom) so one press from
+  rest is exactly one detent at any tuning; key repeat compounds
+  impulses into momentum, as designed.
+- **Leaf-only groups fall back to proxy-as-unit** (a free-standing
+  control is its own stop). Implemented; not yet browser-exercised.
+- **Disposing a focused proxy hands focus up first** (own unit, else
+  the canvas) before removal — never a silent drop to `<body>`.
 
 **Thesis tie-in.** The library's claim is that the DOM is load-bearing,
 not a texture. Until focus works, that claim is mouse-only. The goal is
@@ -246,7 +289,9 @@ default; it's our tween-on-focus).
   `aria-valuetext` for human units, `aria-orientation` when vertical.
   Switch: `role="switch"`, `aria-checked`, Space (Enter optional).
   Update `aria-valuenow` at settle (or throttled), not per physics
-  frame.
+  frame — measured in increment 2: settle-only announces ~2.7s late
+  after a kick, so the shipped rule is *per detent crossing* plus an
+  authoritative settle write.
 - **Keyboard input as force:** arrows inject impulses into the 1-DOF
   integrator (reuse `flipImpulse`-style calibration); the dial ratchets
   detent-to-detent with momentum under key repeat. Keyboard a11y that

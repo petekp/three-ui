@@ -112,3 +112,29 @@ export function flipImpulse(field: Field, span: number, margin = 1.5): number {
   }
   return hi * margin
 }
+
+/**
+ * flipImpulse's sibling for periodic fields: the minimum impulse that carries
+ * a body from one well center past the barrier into the next well (the
+ * dial's keyboard ratchet — one arrow press, one detent). Same bisection
+ * against the actual integrator; returns a positive speed, caller signs it.
+ * margin keeps single presses decisive; key-repeat compounds impulses into
+ * momentum by design, so margin stays small enough not to skip a second
+ * well from rest (pinned by test).
+ */
+export function hopImpulse(field: Field, wellSpacing: number, margin = 1.25): number {
+  const landsNext = (v0: number) => {
+    const body: Body1D = { q: 0, v: v0 }
+    for (let i = 0; i < 4 * 120; i++) step(body, field, 1 / 120, 2)
+    return body.q > wellSpacing / 2
+  }
+  let lo = 0
+  let hi = 1
+  while (!landsNext(hi) && hi < 1024) hi *= 2
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2
+    if (landsNext(mid)) hi = mid
+    else lo = mid
+  }
+  return hi * margin
+}

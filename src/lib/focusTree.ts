@@ -95,16 +95,28 @@ export function createFocusTree<T>(): FocusTree<T> {
 
   return {
     registerGroup(id, label) {
-      if (!groups.has(id)) {
-        groups.set(id, { id, label, seq: seq++, members: new Map(), memory: createMemoryStack() })
+      const existing = groups.get(id)
+      if (existing) {
+        // Members may have arrived first (see registerMember) — adopt the
+        // implicit record rather than dropping its members.
+        existing.label = label
+        return
       }
+      groups.set(id, { id, label, seq: seq++, members: new Map(), memory: createMemoryStack() })
     },
     unregisterGroup(id) {
       groups.delete(id)
     },
     registerMember(groupId, member) {
-      const g = groups.get(groupId)
-      if (!g) return
+      // React child effects run bottom-up: a group's members register BEFORE
+      // the group itself. Silently dropping them was a real bug (the lab-006
+      // dial vanished from its group's traversal); create the group record
+      // implicitly and let registerGroup fill in the label when it arrives.
+      let g = groups.get(groupId)
+      if (!g) {
+        g = { id: groupId, seq: seq++, members: new Map(), memory: createMemoryStack() }
+        groups.set(groupId, g)
+      }
       g.members.set(member.id, { ...member, seq: seq++ })
     },
     unregisterMember(groupId, memberId) {
@@ -127,7 +139,16 @@ export function createFocusTree<T>(): FocusTree<T> {
       const ordered = all
         .filter((m) => m.order !== undefined)
         .sort((a, b) => (a.order! - b.order!) || (a.seq - b.seq))
-      const unordered = all.filter((m) => m.order === undefined).sort((a, b) => a.seq - b.seq)
+      // Unordered default: composites before leaves, registration order
+      // within each kind. This is docs/focus.md's interior contract ("the
+      // Surface's own tabbables ... then satellite leaves") made immune to
+      // mount timing — composites register LATE (their source element is
+      // created async), so raw seq would put every satellite ahead of its
+      // panel. Explicit `order` remains the author's escape hatch.
+      const rank = (m: MemberInfo<T>) => (m.kind === 'composite' ? 0 : 1)
+      const unordered = all
+        .filter((m) => m.order === undefined)
+        .sort((a, b) => rank(a) - rank(b) || a.seq - b.seq)
       return [...ordered, ...unordered]
     },
     remember(groupId, memberId) {
@@ -148,6 +169,42 @@ export function createFocusTree<T>(): FocusTree<T> {
       groups.get(groupId)?.memory.clear()
     },
   }
+}
+
+// ---------------------------------------------------------------------------
+// Interior traversal across a group's members (docs/focus.md "Tab model"):
+// inside a composite member the BROWSER owns Tab; the manager owns every
+// member boundary — a composite's edge, and both sides of a leaf proxy
+// (proxies live in the shared portal layer, so native Tab order around them
+// is meaningless). Pure decision: given each member's element sequence (a
+// composite's tabbables in DOM order; a leaf's single proxy) and the active
+// element, what does this Tab press do?
+
+export type BoundaryAction<E> =
+  | { type: 'native' } // mid-composite: let the browser move focus
+  | { type: 'move'; to: E } // crossing a member boundary: focus this element
+  | { type: 'exit' } // past the last member: leave to the next unit
+  | { type: 'ascend' } // Shift+Tab before the first member: up to own unit
+
+export function interiorBoundary<E>(
+  seqs: readonly (readonly E[])[],
+  active: E,
+  dir: 1 | -1,
+): BoundaryAction<E> {
+  const flat: { el: E; member: number }[] = []
+  seqs.forEach((seq, member) => {
+    for (const el of seq) flat.push({ el, member })
+  })
+  const idx = flat.findIndex((f) => f.el === active)
+  // Unknown element (click-focused something outside the computed sequence):
+  // never fight the browser from a position we can't reason about.
+  if (idx === -1) return { type: 'native' }
+  const j = idx + dir
+  if (j < 0) return { type: 'ascend' }
+  if (j >= flat.length) return { type: 'exit' }
+  return flat[j].member === flat[idx].member
+    ? { type: 'native' }
+    : { type: 'move', to: flat[j].el }
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createFocusTree,
   createMemoryStack,
+  interiorBoundary,
   readingOrder,
   type MemberInfo,
   type OrderRect,
@@ -216,5 +217,85 @@ describe('readingOrder — Flutter band algorithm', () => {
       r('short2', 150, 200, 100, 100),
     ]
     expect(readingOrder(rects)).toEqual(['tall', 'short1', 'short2'])
+  })
+})
+
+describe('interiorBoundary (member-boundary Tab routing)', () => {
+  // seqs model a group's members: a composite contributes its tabbables in
+  // DOM order, a leaf contributes its single proxy. Elements are strings —
+  // the decision is identity-based, never DOM-based.
+
+  it('single composite: native mid-sequence, exit past last, ascend before first', () => {
+    const seqs = [['a', 'b', 'c']]
+    expect(interiorBoundary(seqs, 'a', 1)).toEqual({ type: 'native' })
+    expect(interiorBoundary(seqs, 'b', 1)).toEqual({ type: 'native' })
+    expect(interiorBoundary(seqs, 'c', 1)).toEqual({ type: 'exit' })
+    expect(interiorBoundary(seqs, 'a', -1)).toEqual({ type: 'ascend' })
+    expect(interiorBoundary(seqs, 'c', -1)).toEqual({ type: 'native' })
+  })
+
+  it('composite then leaf: Tab continues from last tabbable onto the proxy', () => {
+    const seqs = [['a', 'b'], ['dial']]
+    expect(interiorBoundary(seqs, 'b', 1)).toEqual({ type: 'move', to: 'dial' })
+    expect(interiorBoundary(seqs, 'dial', 1)).toEqual({ type: 'exit' })
+    expect(interiorBoundary(seqs, 'dial', -1)).toEqual({ type: 'move', to: 'b' })
+    expect(interiorBoundary(seqs, 'a', -1)).toEqual({ type: 'ascend' })
+  })
+
+  it('leaf-only group: every press is a boundary decision', () => {
+    const seqs = [['p'], ['q']]
+    expect(interiorBoundary(seqs, 'p', 1)).toEqual({ type: 'move', to: 'q' })
+    expect(interiorBoundary(seqs, 'q', 1)).toEqual({ type: 'exit' })
+    expect(interiorBoundary(seqs, 'q', -1)).toEqual({ type: 'move', to: 'p' })
+    expect(interiorBoundary(seqs, 'p', -1)).toEqual({ type: 'ascend' })
+  })
+
+  it('empty members (a read-only panel) are skipped, not stumbled on', () => {
+    const seqs: string[][] = [['a'], [], ['dial']]
+    expect(interiorBoundary(seqs, 'a', 1)).toEqual({ type: 'move', to: 'dial' })
+    expect(interiorBoundary(seqs, 'dial', -1)).toEqual({ type: 'move', to: 'a' })
+  })
+
+  it('composite, leaf, composite: boundaries on both proxy sides', () => {
+    const seqs = [['a'], ['dial'], ['b', 'c']]
+    expect(interiorBoundary(seqs, 'a', 1)).toEqual({ type: 'move', to: 'dial' })
+    expect(interiorBoundary(seqs, 'dial', 1)).toEqual({ type: 'move', to: 'b' })
+    expect(interiorBoundary(seqs, 'b', 1)).toEqual({ type: 'native' })
+    expect(interiorBoundary(seqs, 'c', 1)).toEqual({ type: 'exit' })
+    expect(interiorBoundary(seqs, 'b', -1)).toEqual({ type: 'move', to: 'dial' })
+    expect(interiorBoundary(seqs, 'c', -1)).toEqual({ type: 'native' })
+  })
+
+  it('unknown active element never fights the browser', () => {
+    expect(interiorBoundary([['a']], 'ghost', 1)).toEqual({ type: 'native' })
+    expect(interiorBoundary([], 'ghost', -1)).toEqual({ type: 'native' })
+  })
+})
+
+describe('registration order tolerance (React child effects run bottom-up)', () => {
+  it('members registered before their group survive registerGroup', () => {
+    const t = createFocusTree<null>()
+    t.registerMember('g', member('dial'))
+    t.registerGroup('g', 'Synth')
+    expect(t.members('g').map((m) => m.id)).toEqual(['dial'])
+    expect(t.groups()).toEqual([{ id: 'g', label: 'Synth' }])
+  })
+
+  it('unordered members sort composites first regardless of arrival time', () => {
+    const t = createFocusTree<null>()
+    t.registerGroup('g')
+    // The satellite dial registers at child-effect time; the Surface's
+    // composite arrives late (its source element is created async).
+    t.registerMember('g', { id: 'dial', kind: 'leaf', data: null })
+    t.registerMember('g', { id: 'panel', kind: 'composite', data: null })
+    expect(t.members('g').map((m) => m.id)).toEqual(['panel', 'dial'])
+  })
+
+  it('explicit order overrides the composite-first default', () => {
+    const t = createFocusTree<null>()
+    t.registerGroup('g')
+    t.registerMember('g', { id: 'dial', kind: 'leaf', order: 0, data: null })
+    t.registerMember('g', { id: 'panel', kind: 'composite', order: 1, data: null })
+    expect(t.members('g').map((m) => m.id)).toEqual(['dial', 'panel'])
   })
 })

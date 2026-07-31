@@ -10,10 +10,21 @@
 // A panel spec is markup plus an optional `feed(root)` — attached via
 // Surface's onSource — that owns its timers and returns cleanup.
 
+/** A satellite WebGL dial that joins the panel's focus group as a LEAF
+ *  member — physical matter in the same Tab traversal as the panel's DOM. */
+export interface DialSpec {
+  label: string
+  detents: number
+  initialDetent: number
+  /** aria-valuetext + the panel's readout strings, by detent index. */
+  values: string[]
+}
+
 export interface PanelSpec {
   id: string
   html: string
   feed?: (root: HTMLElement) => () => void
+  dial?: DialSpec
 }
 
 export const PANEL_W = 420
@@ -349,6 +360,41 @@ function deployPanel(): PanelSpec {
   }
 }
 
+// The mixed-group proof (lab 007 increment 2): DOM tabbables and a WebGL
+// dial in ONE focus traversal. Tab walks the wave buttons, continues onto
+// the knob (a leaf proxy carries real focus), arrows ratchet it through the
+// physics, and the readout below is live DOM painted by the dial's detents.
+const CUTOFFS = ['110 Hz', '220 Hz', '440 Hz', '880 Hz', '1.2 kHz', '2.4 kHz', '4.8 kHz', '9.6 kHz']
+
+function synthPanel(): PanelSpec {
+  const body = `
+    <div class="row" data-waves>
+      <button class="p6-btn" data-wave="saw" data-selected="1">saw</button>
+      <button class="p6-btn" data-wave="square">square</button>
+      <button class="p6-btn" data-wave="sine">sine</button>
+    </div>
+    <div class="row" style="align-items:baseline"><span style="font-size:12px;color:#64748b">cutoff</span>
+      <span class="big" data-cutoff>${CUTOFFS[3]}</span></div>
+    <div class="fill"></div>
+    <div class="status">voice a · the knob beside me is in my tab order</div>`
+  return {
+    id: 'synth',
+    html: shell('filter — voice a', 'mixed group', body),
+    dial: { label: 'Cutoff', detents: 8, initialDetent: 3, values: CUTOFFS },
+    feed: (root) => {
+      const waves = root.querySelector<HTMLElement>('[data-waves]')!
+      const onWave = (e: Event) => {
+        const btn = (e.target as HTMLElement).closest('[data-wave]')
+        if (!btn) return
+        root.querySelectorAll('[data-wave]').forEach((b) => b.removeAttribute('data-selected'))
+        btn.setAttribute('data-selected', '1')
+      }
+      waves.addEventListener('click', onWave)
+      return () => waves.removeEventListener('click', onWave)
+    },
+  }
+}
+
 function prPanel(): PanelSpec {
   const body = `
     <p style="font-size:12.5px;color:#cbd5e1">#61 · Surface: upload-on-paint contract</p>
@@ -466,8 +512,8 @@ export function buildPanels(): PanelSpec[] {
   const roster: PanelSpec[] = [
     // row 0 (bottom)
     docs[0], docs[1], metricsPanel(), docs[2], docs[3], prPanel(), docs[4], docs[5], calendarPanel(), docs[6], docs[7],
-    // row 1 (eye level)
-    docs[8], docs[9], ciPanel(), docs[10], emailPanel(), notesPanel(), deployPanel(), docs[11], errorsPanel(), docs[12], docs[13],
+    // row 1 (eye level) — synth sits mid-arc where its knob is reachable
+    docs[8], docs[9], ciPanel(), docs[10], emailPanel(), notesPanel(), deployPanel(), synthPanel(), errorsPanel(), docs[12], docs[13],
     // row 2 (top)
     docs[14], docs[15], docs[16], docs[17], diffPanel(), kanbanPanel(), docs[18], chatPanel(), docs[19], docs[20], docs[21],
   ]
