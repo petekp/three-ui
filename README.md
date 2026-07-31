@@ -914,3 +914,49 @@ mode, the spec's `auto` philosophy (view nudges before focus moves),
 the announcer, page-edge handoff — and an authored 2D lattice stays
 rejected-for-now (decision #15) until the geometric pick has earned
 its keep on its own.
+
+## lab 008 — consolidation: the rig becomes a primitive (in progress)
+
+Seven labs of findings, and the load-bearing camera knowledge still
+lived in a scene file. Lab 006's `CameraRig` earned each of its 240
+lines in browser traces — great-circle gaze against the whip, pose
+pre-clamping against the settle yank, live-aim publishing against
+fast-Tab snaps — and lab 007 wired its grammar by hand: a
+`useFocusSceneEvents` block every consumer would have to re-type, and
+hand-copied contracts are where drift starts. Lab 008 is the
+consolidation lab: extract the rig as a primitive, re-seat lab 006 on
+it, then prove the public surface by building a new scene that imports
+nothing else — with a VoiceOver script ready for the first real
+assistive-tech session.
+
+**Increment 1 shipped — `FocusOrbitRig`, and the event that carries
+its own object.** The one genuine design question: the grammar needs
+each event's `Object3D` (approach parks `approachDistance` in front of
+`getWorldPosition` along `getWorldDirection`), but the id→group map
+was scene state — exporting the wiring meant exporting the
+bookkeeping. Inverted instead: `FocusSceneEvent` now carries `object`,
+resolved once at the notify chokepoint from the registry the manager
+already keeps. A rig subscribes and needs no map; a scene supplies
+poses (`home`, `approachDistance`) and nothing else. Lab006.tsx
+dropped from 663 lines to 377, its grammar block now a comment saying
+the contract moved.
+
+The proof is a ledger, not a diff review: same entry (Tab×2 → pr),
+same approach (3.05 from the panel, exact, interior engaged), same
+release — position home, view holding the released unit; pr's held aim
+matches the hand-computed 1.601 to the millimeter, and far-left doc-8
+released to a hard-left hold at x=−3.33 — Tab resuming the authored
+ring (pr→doc-4, doc-21→doc-8), arrows column-true through the walk
+(doc-4→deploy→synth→errors→doc-12→doc-13), the right-edge press
+yaw-nudging the view with the camera position byte-stable, the top
+row a clean no-op with the view pinned at the polar band's elevation
+floor, and scene-Escape's bare home landing [0, 1.6, 0] exact from a
+hard-right aim. Idle contract intact: 29 of 33 sources flat through
+the whole session; only the four live feeds painted. 149/149 vitest,
+tsc clean. Two of my own ledger expectations turned out wrong — Tab
+RESUMES a parked ring rather than re-running entry, and pitch-up room
+at the top row is already spent (maxPolarAngle keeps the camera above
+the target plane, so the view can never rise past −2.2°) — both
+dissolved by reading the emitter and recomputing the fingerprints by
+hand. The lesson increment 4 taught, again: the report is data; the
+code is the verdict.

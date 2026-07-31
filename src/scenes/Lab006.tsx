@@ -1,26 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { useThree, useFrame, type ThreeEvent } from '@react-three/fiber'
+import { useThree, type ThreeEvent } from '@react-three/fiber'
 import { Surface } from '../primitives/Surface'
-import {
-  FocusGroup,
-  useFocusNavPolicy,
-  useFocusReframe,
-  useFocusScene,
-  useFocusSceneEvents,
-  type GroupFocusState,
-} from '../primitives/FocusScene'
+import { FocusGroup, useFocusScene, type GroupFocusState } from '../primitives/FocusScene'
+import { FocusOrbitRig, type FocusRigApi } from '../primitives/FocusOrbitRig'
 import { Dial } from '../primitives/controls/Dial'
 import { arcLayout, type ArcSlot } from '../lib/arcLayout'
-import {
-  clampOrbitPose,
-  clampViewElevation,
-  gazeAt,
-  gazeTween,
-  viewPitchRoom,
-  type GazeTween,
-  type OrbitLimits,
-} from '../lib/cameraPose'
 import {
   buildPanels,
   injectLab006Styles,
@@ -55,267 +40,12 @@ const ROW_YS = [0.78, 2.36, 3.94]
 const LOOK_TARGET = new THREE.Vector3(0, 1.7, 0)
 const HOME_POS = new THREE.Vector3(0, 2.0, 3.4)
 const HOME_TARGET = new THREE.Vector3(0, 1.6, 0)
-const WORLD_UP = new THREE.Vector3(0, 1, 0)
 const APPROACH_DIST = 3.05 // ≥ OrbitControls minDistance so the tween's end pose survives
 
-interface OrbitLike extends OrbitLimits {
+// All this lab needs from OrbitControls directly: the drag handlers pause it
+// while a panel is being repositioned. Camera mechanics live in FocusOrbitRig.
+interface OrbitLike {
   enabled: boolean
-  target: THREE.Vector3
-  update: () => void
-}
-
-type MotionMode = 'animated' | 'instant' | 'auto'
-
-interface RigApi {
-  approach: (center: THREE.Vector3, facing: THREE.Vector3) => void
-  /** Return the position home; with `lookToward`, HOLD that point in view
-   *  from there (release grammar — the same framing Tab gave it) instead of
-   *  restoring the default aim, which loses edge panels off-screen. */
-  home: (lookToward?: THREE.Vector3) => void
-  /** 'auto' (default) follows prefers-reduced-motion; 'instant' jump-cuts
-   *  every camera move to its end pose. */
-  setMotion: (mode: MotionMode) => void
-}
-
-// ---------------------------------------------------------------------------
-// CameraRig: owns the approach/home tween. OrbitControls is disabled for the
-// duration; any pointer/wheel input cancels the tween where it stands and
-// hands the pose back to the user.
-
-function CameraRig({ api }: { api: React.RefObject<RigApi | null> }) {
-  const camera = useThree((s) => s.camera)
-  const controls = useThree((s) => s.controls as unknown as OrbitLike | null)
-  const gl = useThree((s) => s.gl)
-  const focus = useFocusScene()
-
-  const tween = useRef<{
-    fromPos: THREE.Vector3
-    toPos: THREE.Vector3
-    toTarget: THREE.Vector3
-    /** Gaze rides the great circle between the two aims (cameraPose.ts):
-     *  lerping the target POINT can sweep it past the camera and lookAt
-     *  whips — browser-measured 1.13 rad in one frame on a corner-to-
-     *  corner ride. Angular interpolation makes that impossible. */
-    gaze: GazeTween
-    t: number
-    dur: number
-  } | null>(null)
-  const curTarget = useRef(new THREE.Vector3())
-  const motion = useRef<MotionMode>('auto')
-
-  // Home pose on mount (App's Canvas camera default belongs to other labs).
-  useEffect(() => {
-    if (!controls) return
-    camera.position.copy(HOME_POS)
-    controls.target.copy(HOME_TARGET)
-    controls.update()
-  }, [camera, controls])
-
-  const instantNow = () =>
-    motion.current === 'auto'
-      ? (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false)
-      : motion.current === 'instant'
-
-  // Every camera move funnels through here. The pose is pre-clamped to the
-  // controls' polar/distance limits BEFORE arming: settle hands the pose to
-  // OrbitControls, whose update() re-satisfies clamps by MOVING THE POSITION
-  // — a last-frame pop otherwise (cameraPose.ts; vitest-pinned: every top-
-  // and middle-row approach pose violated the polar limit). Instant mode
-  // applies the same end pose as one jump-cut.
-  const armTween = (toPosRaw: THREE.Vector3, toTarget: THREE.Vector3, dur: number) => {
-    if (!controls) return
-    const toPos = clampOrbitPose(toPosRaw, toTarget, controls)
-    if (instantNow()) {
-      tween.current = null
-      camera.position.copy(toPos)
-      controls.target.copy(toTarget)
-      curTarget.current.copy(toTarget)
-      controls.enabled = true
-      controls.update()
-      focus?.syncProxyRects()
-      return
-    }
-    controls.enabled = false
-    // Seed the live aim now — cancel can fire before the first tween frame.
-    curTarget.current.copy(controls.target)
-    tween.current = {
-      fromPos: camera.position.clone(),
-      toPos,
-      toTarget: toTarget.clone(),
-      gaze: gazeTween(camera.position, controls.target, toPos, toTarget),
-      t: 0,
-      dur,
-    }
-  }
-
-  const impl: RigApi = {
-    approach: (center, facing) =>
-      armTween(center.clone().addScaledVector(facing, APPROACH_DIST), center.clone(), 0.9),
-    home: (lookToward) => {
-      let toTarget = HOME_TARGET.clone()
-      if (lookToward && controls) {
-        const d = lookToward.clone().sub(HOME_POS)
-        if (d.lengthSq() > 1e-8) {
-          clampViewElevation(d.normalize(), controls)
-          toTarget = HOME_POS.clone().addScaledVector(d, HOME_POS.distanceTo(HOME_TARGET))
-        }
-      }
-      armTween(HOME_POS.clone(), toTarget, 0.9)
-    },
-    setMotion: (mode) => {
-      motion.current = mode
-    },
-  }
-  const implRef = useRef(impl)
-  implRef.current = impl
-
-  useEffect(() => {
-    api.current = {
-      approach: (center, facing) => implRef.current.approach(center, facing),
-      home: (lookToward) => implRef.current.home(lookToward),
-      setMotion: (mode) => implRef.current.setMotion(mode),
-    }
-    return () => {
-      api.current = null
-    }
-  }, [api])
-
-  // Reframe fulfiller (docs/focus.md "Reframe bridge"): the rig claims
-  // visibility, standing the library's bare-camera truck down. 'descend' is
-  // ignored — the approach ride already centers that target. Fulfillment is
-  // a HEAD-TURN, not a truck: in an arc workspace you survey by turning in
-  // place, and screen-space pixel deltas linearize catastrophically for far
-  // panels (a box straddling the camera plane projects to absurd rects —
-  // browser-verified runaway to x≈−1000). The angular form is exact for any
-  // panel direction, minimal (rotates only to the comfort-cone edge), and
-  // bounded by π.
-  useFocusReframe((req) => {
-    if (req.cause === 'descend' || !controls) return
-    if (!(camera instanceof THREE.PerspectiveCamera)) return
-    const camPos = camera.position
-    const panelPos = new THREE.Vector3().setFromMatrixPosition(req.object.matrixWorld)
-    // controls.target carries the LIVE aim even mid-tween (useFrame syncs it
-    // every frame), so a fast Tab re-aims from the rendered view, and the
-    // radius clamp guards mid-flight distances the lerp path can produce.
-    const dist = THREE.MathUtils.clamp(
-      controls.target.distanceTo(camPos),
-      controls.minDistance ?? 0,
-      controls.maxDistance ?? Infinity,
-    )
-    const d = controls.target.clone().sub(camPos).normalize()
-    const dStar = panelPos.clone().sub(camPos).normalize()
-    const fovRad = THREE.MathUtils.degToRad(camera.fov)
-    const hFov = Math.atan(Math.tan(fovRad / 2) * (req.viewport.w / req.viewport.h))
-    // Inside ~72% of the tighter half-angle reads as comfortably framed.
-    const allow = Math.min(fovRad / 2, hFov) * 0.72
-    const between = d.angleTo(dStar)
-    if (between <= allow) return
-    const axis = new THREE.Vector3().crossVectors(d, dStar)
-    if (axis.lengthSq() < 1e-10) return // dead astern — no unique turn
-    axis.normalize()
-    // The head-turn keeps the POSITION sacred, so legality comes from
-    // bending the view elevation, not the pose clamp (cameraPose.ts).
-    const dNew = clampViewElevation(d.applyAxisAngle(axis, between - allow), controls)
-    armTween(
-      camPos.clone(),
-      camPos.clone().addScaledVector(dNew, dist),
-      // Big turns get a little more time; nudges stay snappy.
-      THREE.MathUtils.clamp(0.3 + (between - allow) * 0.3, 0.3, 0.8),
-    )
-  })
-
-  // No-candidate ladder (docs/focus.md "Directional navigation"): an arrow
-  // with nothing in its direction may nudge the VIEW one increment instead —
-  // the same head-turn grammar as the fulfiller, so "looking further that
-  // way" and "being steered to a panel" read as one body. Yaw is unbounded
-  // (no azimuth clamps on this orbit); pitch is bounded by the polar band,
-  // and viewPitchRoom is the honest predicate — at the band edge the press
-  // is a no-op rather than a dead-feeling half-tween.
-  useFocusNavPolicy({
-    canMove: (dir) => {
-      if (!controls) return false
-      if (dir === 'left' || dir === 'right') return true
-      const d = controls.target.clone().sub(camera.position).normalize()
-      const room = viewPitchRoom(d, controls)
-      return (dir === 'up' ? room.up : room.down) > 1e-3
-    },
-    nudge: ({ dir }) => {
-      if (!controls) return
-      const camPos = camera.position
-      const dist = THREE.MathUtils.clamp(
-        controls.target.distanceTo(camPos),
-        controls.minDistance ?? 0,
-        controls.maxDistance ?? Infinity,
-      )
-      const d = controls.target.clone().sub(camPos).normalize()
-      const NUDGE = 0.35 // rad — one comfortable head-turn increment
-      if (dir === 'left' || dir === 'right') {
-        // Positive yaw about +Y turns the view leftward (counter-clockwise
-        // seen from above).
-        d.applyAxisAngle(WORLD_UP, dir === 'left' ? NUDGE : -NUDGE)
-      } else {
-        const room = viewPitchRoom(d, controls)
-        const amt = Math.min(NUDGE, dir === 'up' ? room.up : room.down)
-        if (amt < 1e-4) return
-        // d × UP is the rightward horizontal axis; positive rotation about
-        // it pitches the view UP. Degenerate only when looking straight
-        // down — an extreme user-orbited pose; skip rather than guess.
-        const axis = new THREE.Vector3().crossVectors(d, WORLD_UP)
-        if (axis.lengthSq() < 1e-10) return
-        axis.normalize()
-        d.applyAxisAngle(axis, dir === 'up' ? amt : -amt)
-        clampViewElevation(d, controls)
-      }
-      armTween(camPos.clone(), camPos.clone().addScaledVector(d.normalize(), dist), 0.35)
-    },
-  })
-
-  // A grab of the controls mid-tween should win instantly.
-  useEffect(() => {
-    const el = gl.domElement
-    const cancel = () => {
-      const tw = tween.current
-      if (!tw || !controls) return
-      tween.current = null
-      controls.target.copy(curTarget.current)
-      controls.enabled = true
-      controls.update()
-    }
-    el.addEventListener('pointerdown', cancel)
-    el.addEventListener('wheel', cancel)
-    return () => {
-      el.removeEventListener('pointerdown', cancel)
-      el.removeEventListener('wheel', cancel)
-    }
-  }, [gl, controls])
-
-  useFrame((_, delta) => {
-    const tw = tween.current
-    if (!tw || !controls) return
-    tw.t = Math.min(1, tw.t + delta / tw.dur)
-    const k = tw.t * tw.t * (3 - 2 * tw.t) // smoothstep
-    camera.position.lerpVectors(tw.fromPos, tw.toPos, k)
-    gazeAt(tw.gaze, camera.position, k, curTarget.current)
-    // Publish the live aim every frame (controls are disabled — no fight).
-    // Arming a NEW tween mid-flight reads controls.target as "where am I
-    // looking"; without this it held the stale settle-time value, and fast
-    // Tab snapped the view back to it — instantaneous jank by construction.
-    controls.target.copy(curTarget.current)
-    camera.lookAt(curTarget.current)
-    if (tw.t >= 1) {
-      tween.current = null
-      camera.position.copy(tw.toPos)
-      controls.target.copy(tw.toTarget)
-      controls.enabled = true
-      controls.update()
-      // Tween-settle is the sanctioned proxy-rect sync point (docs/focus.md:
-      // on demand, never per frame) — AT reads geometry from wherever the
-      // camera came to rest.
-      focus?.syncProxyRects()
-    }
-  })
-
-  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -333,7 +63,7 @@ function WorkPanel({
   spec: PanelSpec
   slot: ArcSlot
   order: number
-  rig: React.RefObject<RigApi | null>
+  rig: React.RefObject<FocusRigApi | null>
   register: (id: string, group: THREE.Group | null) => void
 }) {
   const group = useRef<THREE.Group>(null)
@@ -488,7 +218,7 @@ function WorkPanel({
 // ---------------------------------------------------------------------------
 
 export function Lab006() {
-  const rig = useRef<RigApi | null>(null)
+  const rig = useRef<FocusRigApi | null>(null)
   const groups = useRef(new Map<string, THREE.Group>())
   const panels = useMemo(buildPanels, [])
   const slots = useMemo(
@@ -499,31 +229,11 @@ export function Lab006() {
   useEffect(() => injectLab006Styles(), [])
 
   // Keyboard grammar (docs/focus.md × this lab): Tab SELECTS a panel (glow
-  // only — the ring is for surveying, not travel). Enter is the commitment
-  // gesture: descend fires whether or not the panel's DOM has focusables
-  // (most are read-only — you zoom in to READ), and that's the zoom-in
-  // moment. Escape's last rung (interior → unit → scene → here) steps the
-  // camera home. Mouse keeps its own grammar: double-click approaches, and
-  // 'pointer'-caused focus never moves the camera.
-  useFocusSceneEvents((e) => {
-    if (e.cause === 'descend' && e.groupId) {
-      const g = groups.current.get(e.groupId)
-      if (g && rig.current) {
-        rig.current.approach(
-          g.getWorldPosition(new THREE.Vector3()),
-          g.getWorldDirection(new THREE.Vector3()),
-        )
-      }
-    } else if (e.cause === 'release') {
-      // Escape released an ENGAGED panel — the matching un-commit gesture.
-      // The position comes home but the view HOLDS the released panel (the
-      // framing Tab gave it); a bare home() lost edge panels off-screen.
-      const g = e.groupId ? groups.current.get(e.groupId) : undefined
-      rig.current?.home(g?.getWorldPosition(new THREE.Vector3()))
-    } else if (e.level === 'scene' && e.cause === 'escape') {
-      rig.current?.home()
-    }
-  })
+  // only), Enter is the commitment gesture (zoom in), Escape's last rung
+  // steps home. All of it — descend→approach, release→home-holding-the-
+  // panel, scene-escape→home — is FocusOrbitRig's contract now; this scene
+  // only supplies the poses. Mouse keeps its own grammar: double-click
+  // approaches, and 'pointer'-caused focus never moves the camera.
 
   // Automation hooks: deterministic camera moves for agent-browser runs.
   useEffect(() => {
@@ -564,7 +274,11 @@ export function Lab006() {
       <pointLight position={[0, 4.5, 0]} intensity={26} color="#7dd3fc" distance={14} />
       <pointLight position={[-6, 1.5, 3]} intensity={12} color="#38bdf8" distance={10} />
 
-      <CameraRig api={rig} />
+      <FocusOrbitRig
+        home={{ position: HOME_POS, target: HOME_TARGET }}
+        approachDistance={APPROACH_DIST}
+        apiRef={rig}
+      />
 
       {/* Floor doubles as the "step back" affordance. */}
       <mesh

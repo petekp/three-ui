@@ -73,6 +73,11 @@ export interface FocusSceneEvent {
   level: FocusLevel
   groupId?: string
   cause: FocusCause
+  /** The registered focus object for `groupId` (FocusGroup objectRef, else
+   *  the first member object) — resolved at emit time so camera rigs can
+   *  fulfill the descend/release grammar without keeping their own
+   *  id→object map. Absent for scene/page-level events. */
+  object?: THREE.Object3D | null
 }
 
 // Reframe bridge (docs/focus.md, ratified 2026-07-30). The DOM's focus()
@@ -559,6 +564,7 @@ export function FocusScene({
       // directional trail — Tab, Enter, Escape, clicks, external moves,
       // disposals. One chokepoint covers Flutter's whole invalidation row.
       if (e.cause !== 'directional') history.clear()
+      if (e.groupId && e.object === undefined) e.object = groupObject(e.groupId)
       onFocusChangeRef.current?.(e)
       for (const fn of subscribers) fn(e)
     }

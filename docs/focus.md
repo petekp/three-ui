@@ -483,6 +483,18 @@ camera-distance threshold (no ambiguous mid-zoom band). Mouse users who
 dollied in manually get the entry heuristic: first Tab enters the group
 dominating the viewport.
 
+**Packaged rig (lab 008).** Everything this section asks of a scene —
+approach/home tweens with pose legality, the reframe fulfiller's
+head-turn, the no-candidate nudge ladder, motion modes, live-aim
+publishing — ships as one primitive, `FocusOrbitRig` (`home`,
+`approachDistance`, `nudgeAngle`, `comfortFraction`, `apiRef`). The
+grammar wiring (descend→approach, release→home-holding-the-unit,
+scene-escape→home) lives inside it, fed by `FocusSceneEvent.object`:
+resolved at the notify chokepoint from the registry the manager
+already keeps, so a consumer supplies poses and nothing else. Lab 006
+is the first consumer — the hand-rolled rig it replaced is the same
+code, relocated.
+
 **Reframe bridge (shipped increment 3).** DOM `focus()` carries an
 implicit obligation — the scroll container brings the element into view
 (WCAG 2.4.11's floor). Our `preventScroll:true` suppresses the page's
