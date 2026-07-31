@@ -137,6 +137,61 @@ because it is not part of what gets replayed.
 offsets inside the subtree. Assume broken until probed; route media around
 the DOM path (see authoring.md).
 
+## A `layoutSubtree` canvas is a containing block, not a viewport (2026-07-31, lab 009)
+
+A parked source root establishes the **containing block for `position:
+fixed` descendants** — and that is the *only* thing about it that is
+canvas-local. Everything that asks "how big is the viewport" still answers
+with the page.
+
+Probe: a 360×460 source canvas on a 1280×720 page, measuring the same
+constructs inside the parked subtree and on the page.
+
+| Construct | Inside a 360×460 Surface | On the page |
+|---|---|---|
+| `position: fixed; inset: 0` | **360×460** — the slab | 1280×720 |
+| `width: 100vw; height: 100vh` | 1280×720 | 1280×720 |
+| `100dvw` / `100dvh` | 1280×720 | 1280×720 |
+| `width: 100%` (control) | 360×460 | 1280×720 |
+| `@media (min-width: 900px)` | matches | matches |
+| `matchMedia('(max-width: 500px)')` | `false` | `false` |
+| `innerWidth` / `innerHeight` | 1280 / 720 | 1280 / 720 |
+| `documentElement.clientWidth` / `clientHeight` | 1280 / 720 | 1280 / 720 |
+| `visualViewport` | 1280×720 | 1280×720 |
+
+This is the ordinary CSS distinction between a **containing block** and the
+**viewport**. For `position: fixed` those are normally the same object,
+which is why the two ideas get conflated — a `layoutSubtree` canvas pries
+them apart. Nothing here is special-cased for the origin trial: `contain:
+layout`, `filter`, and `transform` all establish fixed-positioning
+containing blocks the same way. The canvas is just another one.
+
+**What it buys.** A whole category of "chrome" component needs no plumbing
+at all, because it was already written against the containing block:
+
+- sonner's `<Toaster>` doesn't portal — it renders inline and pins itself
+  `position: fixed` with corner offsets. Mount it in a Surface and it pins
+  to *that slab*: measured at 24px from the slab's right and bottom edges,
+  its default offset, with zero coordinate math ([decisions.md
+  #21](decisions.md)).
+- Radix's `DialogOverlay` is `fixed inset-0` — it fills the slab exactly.
+- `DialogContent`'s `top-50% left-50%` centres on the slab.
+
+**What it costs.** Viewport-relative *authoring* silently means the page.
+See [authoring.md](authoring.md): `vw`/`vh` and every Tailwind responsive
+variant (`sm:`, `md:`) resolve against the browser window, not the Surface
+they are inside.
+
+**It also explains an earlier mystery.** In lab 009 increment 2 a Radix
+`Select` measured 568px tall inside a 460px panel. Radix computes
+`--radix-select-content-available-height` in **JavaScript**, from
+`window.innerHeight` — page-global by the table above, while the slab it
+was sizing itself into is canvas-local. Anything that measures the viewport
+*in JS* rather than declaring itself *in CSS* inherits that gap. In the
+vendored shadcn set exactly two files consume available-height —
+`select.tsx:71` and `dropdown-menu.tsx:45` — and there are no `vh`/`vw`
+literals anywhere.
+
 ## Scale (probe results, 2026-07-29)
 
 Harness: `?probe=N&live=1&anim=K&w=&h=` + `window.__probe.run(seconds)` —

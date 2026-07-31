@@ -8,7 +8,9 @@ import {
   type ReactNode,
 } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import type { Group, Mesh } from 'three'
+import { useFrame, useThree } from '@react-three/fiber'
+import type { Group, Mesh, PerspectiveCamera } from 'three'
+import { toast } from 'sonner'
 import { FocusGroup, Surface } from '../index'
 import { useAnimationConductor } from '../primitives/useAnimationConductor'
 import { Badge } from '@/components/ui/badge'
@@ -54,6 +56,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { Toaster } from '@/components/ui/sonner'
 
 // Lab 009 — shadcn as matter. The components below are byte-verbatim from
 // the shadcn registry (new-york-v4); nothing about them knows it is being
@@ -71,6 +74,15 @@ const H3 = PANEL_H / PX
 // separate slab (its own shadow, its own specular) without breaking the
 // illusion that it belongs to the card.
 const LAYER_LIFT = 0.13
+
+// Viewer chrome. A modal and a toast stack are not attached to any object in
+// the scene — they belong to whoever is looking. The slab is sized in source
+// pixels like any other Surface, and placed at CHROME_DISTANCE so it spans
+// the frustum: at that pose one source pixel is one screen pixel, so
+// `position: fixed` inside it means what it says on a page.
+const CHROME_W = 1280
+const CHROME_H = 720
+const CHROME_DISTANCE = 1.15
 
 interface FlightSample {
   t: number
@@ -132,6 +144,104 @@ function SurfaceApp({
   )
 }
 
+// Chrome that follows the eye.
+//
+// The obvious implementation is to parent the children to the camera, and it
+// does not work: r3f's default camera is NOT in the scene graph (measured —
+// `camera.parent === null`). three would compute correct world matrices for
+// its children and then never draw them, because the render list is built by
+// walking `scene`. Rather than mutate a shared object, this copies the
+// camera's pose onto an ordinary scene-level group each frame and pushes it
+// forward along the view axis. Same semantics, nothing shared is touched.
+//
+// Not a frame stale: drei's OrbitControls updates at priority -1 and r3f
+// renders after every default-priority callback has run, so the pose this
+// writes is the pose that gets drawn.
+function CameraChrome({ children, distance = CHROME_DISTANCE }: {
+  children: ReactNode
+  distance?: number
+}) {
+  const group = useRef<Group>(null)
+  useFrame(({ camera }) => {
+    const g = group.current
+    if (!g) return
+    g.position.copy(camera.position)
+    g.quaternion.copy(camera.quaternion)
+    g.translateZ(-distance)
+  })
+  return <group ref={group}>{children}</group>
+}
+
+// The chrome slab: one transparent Surface hanging in front of the viewer,
+// holding everything that belongs to the viewport rather than to a panel.
+//
+// Why this is viable at all: `hitTest="content"` (decisions.md #20). A
+// full-frustum quad in front of everything would otherwise swallow every ray
+// in the scene — the panels behind it would become untouchable, which is the
+// increment-2b bug at the largest possible scale. Content-gated, the slab is
+// reachable exactly where the DOM painted something and transparent to the
+// pointer everywhere else. When a modal IS open its scrim covers the slab and
+// blocks the scene, which is precisely what a modal is supposed to do.
+//
+// The toast stack needs no plumbing whatsoever. Sonner does not portal (zero
+// createPortal in its dist) — its Toaster renders inline and pins itself with
+// `position: fixed` + corner offsets, and a layoutSubtree canvas IS the
+// containing block for fixed descendants (platform.md). So a toaster mounted
+// here pins to this slab's corners on its own. `toast()` is a global
+// imperative call, so anything anywhere in the scene can raise one.
+function ChromeLayer({ onHost }: { onHost: (el: HTMLElement | null) => void }) {
+  const { camera, size } = useThree()
+
+  // Span the frustum at the chrome distance, so one source pixel lands on
+  // one screen pixel. Recomputed on aspect change only — never per frame.
+  const [w3, h3] = useMemo(() => {
+    const cam = camera as PerspectiveCamera
+    const h = 2 * Math.tan(((cam.fov ?? 45) * Math.PI) / 360) * CHROME_DISTANCE
+    return [h * (CHROME_W / CHROME_H), h]
+  }, [camera, size.width, size.height])
+
+  // The host is built INSIDE mount, not hoisted into a useMemo. A hoisted
+  // node is the right shape for the panel's layer, which is only ever a
+  // portal target — but this one also owns a React root, and a remount would
+  // then call createRoot on a container whose previous root is still waiting
+  // on its unmount microtask. React throws, the throw lands inside
+  // CanvasImpl, r3f tears the canvas down, and the GL context goes with it.
+  const mount = useCallback(
+    (el: HTMLElement) => {
+      const host = document.createElement('div')
+      host.className = 'ui-layer'
+      host.style.width = `${CHROME_W}px`
+      host.style.height = `${CHROME_H}px`
+      el.appendChild(host)
+      const root = createRoot(host)
+      root.render(<Toaster position="bottom-right" />)
+      onHost(host)
+      return () => {
+        onHost(null)
+        host.remove()
+        queueMicrotask(() => root.unmount())
+      }
+    },
+    [onHost],
+  )
+
+  return (
+    <CameraChrome>
+      <Surface
+        label="lab009-chrome"
+        width={CHROME_W}
+        height={CHROME_H}
+        html=""
+        onSource={mount}
+        transparent
+        hitTest="content"
+      >
+        <planeGeometry args={[w3, h3]} />
+      </Surface>
+    </CameraChrome>
+  )
+}
+
 // The classic shadcn "Create project" card — recognizable on sight, which
 // is the point. React state lives inside the texture: Deploy commits a
 // setState, the DOM mutates, the compositor paints, the material updates.
@@ -170,10 +280,17 @@ function DeployCard() {
       </CardContent>
       <CardFooter className="mt-auto justify-between">
         <Button variant="outline">Cancel</Button>
+        {/* One click, two destinations: setState mutates THIS texture, and
+            `toast()` raises a notice in the viewer's chrome slab — a
+            different Surface, a different pose, no coordinate shared. The
+            card knows nothing about where a toast lives. */}
         <Button
-          onClick={() =>
-            setDeployed(`Deploying ${nameRef.current?.value || 'untitled'}…`)
-          }
+          id="l9-deploy"
+          onClick={() => {
+            const name = nameRef.current?.value || 'untitled'
+            setDeployed(`Deploying ${name}…`)
+            toast.success('Deployment queued', { description: name })
+          }}
         >
           Deploy
         </Button>
@@ -186,13 +303,21 @@ function DeployCard() {
 // verbatim shadcn markup; the only addition is `container`, which aims each
 // portal at the scene's floating layer instead of document.body.
 //
-// Dialog is deliberately left alone. It is not anchored to anything — a
-// modal belongs to the camera, not to a panel — so it stays portaled to
-// document.body as the visible "before", and inc 3 gives it real chrome.
-// Every component here is uncontrolled — the scene knows nothing about what
-// is open. That is the claim: `container` is the only addition, and the
-// layer figures out the rest by watching itself.
-function FloatingCard({ container }: { container: HTMLElement }) {
+// Dialog aims at a DIFFERENT container from the rest, and that difference is
+// the whole content of increment 3. A popover is anchored — it belongs to the
+// trigger, so it belongs to the panel, so it goes in the panel's layer. A
+// modal is anchored to nothing: it belongs to whoever is looking. So it
+// portals into the viewer's chrome slab instead, where `fixed inset-0` scrim
+// fills the view and `top-50% left-50%` centres on the eye. Same one-line
+// lever, aimed one object further out.
+//
+// Every component here is still uncontrolled — the scene knows nothing about
+// what is open. That is the claim: `container` is the only addition, and the
+// layers figure out the rest by watching themselves.
+function FloatingCard({ container, chrome }: {
+  container: HTMLElement
+  chrome: HTMLElement | null
+}) {
   const [applied, setApplied] = useState(360)
   const onApply = () => setApplied((w) => w + 20)
 
@@ -255,17 +380,24 @@ function FloatingCard({ container }: { container: HTMLElement }) {
                 variant="secondary"
                 className="w-full"
               >
-                Open dialog (unplumbed)
+                Open dialog
               </Button>
             </DialogTrigger>
-            <DialogContent id="l9-dialog-content">
+            <DialogContent id="l9-dialog-content" container={chrome}>
               <DialogHeader>
                 <DialogTitle>Are you sure?</DialogTitle>
                 <DialogDescription>
-                  This dialog is portaled to document.body.
+                  This modal hangs in front of the viewer, not the panel.
                 </DialogDescription>
               </DialogHeader>
-              <DialogFooter showCloseButton />
+              <DialogFooter showCloseButton>
+                <Button
+                  id="l9-dialog-confirm"
+                  onClick={() => toast.success('Project deleted.')}
+                >
+                  Delete
+                </Button>
+              </DialogFooter>
             </DialogContent>
           </Dialog>
 
@@ -300,9 +432,10 @@ function FloatingCard({ container }: { container: HTMLElement }) {
 // then only when its contents change. What it buys: real depth. The popover
 // is a slab in front of the card — it casts a shadow on it, catches its own
 // specular, and occludes it from the side.
-function FloatingPanel({ position, rotation }: {
+function FloatingPanel({ position, rotation, chrome }: {
   position: [number, number, number]
   rotation: [number, number, number]
+  chrome: HTMLElement | null
 }) {
   const panelGroup = useRef<Group>(null)
   const layerGroup = useRef<Group>(null)
@@ -406,7 +539,7 @@ function FloatingPanel({ position, rotation }: {
       <FocusGroup id="shadcn-floating" order={1} objectRef={panelGroup}>
         <SurfaceApp
           content={
-            <FloatingCard container={layerHost} />
+            <FloatingCard container={layerHost} chrome={chrome} />
           }
           label="lab009-floating"
           width={PANEL_W}
@@ -443,6 +576,9 @@ function FloatingPanel({ position, rotation }: {
 
 export function Lab009() {
   const group = useRef<Group>(null)
+  // The chrome slab's portal container, published once it mounts. Everything
+  // viewer-owned aims here: the Dialog's portal, and (implicitly) any toast.
+  const [chrome, setChrome] = useState<HTMLElement | null>(null)
 
   return (
     <>
@@ -470,7 +606,13 @@ export function Lab009() {
         </FocusGroup>
       </group>
 
-      <FloatingPanel position={[2.05, 1.5, 0.25]} rotation={[0, -0.45, 0]} />
+      <FloatingPanel
+        position={[2.05, 1.5, 0.25]}
+        rotation={[0, -0.45, 0]}
+        chrome={chrome}
+      />
+
+      <ChromeLayer onHost={setChrome} />
     </>
   )
 }

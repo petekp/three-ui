@@ -48,6 +48,39 @@ strictly better native equivalent:
 Glow/pulse effects stay in markup — as **paint** properties (the lab-004
 tip pulses `background` + `box-shadow`, not `opacity`).
 
+## "Viewport" means the page — except for `position: fixed`
+
+A Surface's source canvas is the **containing block** for `position: fixed`
+descendants, but it is **not a viewport**. Exactly one construct is
+Surface-local; everything else still measures the browser window
+([platform.md](platform.md) has the probe table).
+
+| In Surface markup | Resolves against |
+|---|---|
+| `position: fixed`, `inset`, `top/right/bottom/left` | ✅ **the Surface** |
+| `vw` `vh` `dvw` `dvh` `svh` `lvh` | ⚠️ the page |
+| `@media (min-width: …)`, so every `sm:` `md:` `lg:` variant | ⚠️ the page |
+| `matchMedia`, `innerWidth/Height`, `visualViewport` (JS) | ⚠️ the page |
+| `%`, `em`, `rem`, `cq*` units | ✅ normal, as anywhere |
+
+So a 360px-wide Surface on a 1280px page is styled as though it were
+1280px wide: `md:flex-row` applies, `w-[50vw]` is 640px and overflows the
+slab four times over. The fix is **container queries**, which ask the
+element instead of the window — put `@container` on the content root and
+use `@sm:`/`@md:` variants. That is the element-relative mechanism the
+responsive variants only approximate.
+
+This cuts the other way too, and it's the good half: anything already
+written against the containing block lands inside the slab for free. A
+toast stack pinned `fixed bottom-4 right-4` pins to the *Surface's* bottom
+right. A modal overlay at `fixed inset-0` covers exactly that Surface. No
+coordinate plumbing, no measurement — see [decisions.md #21](decisions.md).
+
+Watch for libraries that measure the viewport **in JavaScript** rather than
+declaring themselves in CSS: they get the page number and size themselves
+wrong. Radix's `--radix-*-content-available-height` is the live example
+(`select.tsx`, `dropdown-menu.tsx`).
+
 ## Media
 
 Don't route video through `drawElementImage` — the compositor owns those

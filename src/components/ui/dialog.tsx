@@ -51,12 +51,21 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  // three-ui port deviation: see popover.tsx — `container` is the only
+  // lever Radix gives for the portal target, and document.body is outside
+  // every rasterized subtree. A modal is anchored to nothing, so a caller
+  // aims this at the VIEWER's chrome Surface rather than a panel's layer:
+  // the overlay's `fixed inset-0` then fills the view (a layoutSubtree
+  // canvas is the containing block for fixed descendants — platform.md)
+  // and the content's `top-50% left-50%` centres on the eye.
+  container,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
+  container?: React.ComponentProps<typeof DialogPrimitive.Portal>["container"]
 }) {
   return (
-    <DialogPortal data-slot="dialog-portal">
+    <DialogPortal data-slot="dialog-portal" container={container}>
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"

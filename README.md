@@ -1375,3 +1375,112 @@ reported destination computes as *inside* Radix's hull. It predates this
 work (before today, every exit closed it), so it's not a regression, but
 it isn't explained either. It goes to the floating-layer kit, along with
 dismissal, stacking, and focus arbitration.
+
+### Increment 3 — a modal that is actually modal
+
+Increment 2 gave a popover its own Surface floating off the panel it
+belongs to. That's the right answer for anything *anchored*. Toasts and
+modals are anchored to nothing. A toast isn't about the card you clicked,
+and a confirmation dialog isn't about any object in the scene — they
+belong to whoever is looking. So they get a Surface at the eye: a group
+that copies the camera's pose every frame, holding one 1280×720 slab sized
+to span the frustum exactly, so a source pixel is a screen pixel.
+
+Building that taught me something about r3f I had assumed the other way.
+Parenting the chrome to the camera produces perfectly correct world
+matrices and draws absolutely nothing. The reason is that a three.js scene
+is walked *twice* by two different traversals, and only one of them starts
+where you'd think: transforms propagate down the parent graph, but the
+render list is built by walking `scene`. r3f's default camera isn't in
+`scene` — `camera.parent === null`. Anything hanging off it is positioned
+correctly in a world nobody renders. Copying the pose onto a scene-level
+group is the whole fix, and it's never a frame stale, because drei's
+OrbitControls writes at `useFrame` priority −1 and r3f renders after the
+priority-0 callbacks.
+
+Then the toast needed no plumbing whatsoever, which took a minute to
+believe. sonner doesn't portal — it renders inline and pins itself with
+`position: fixed` and corner offsets. And it turns out a `layoutSubtree`
+canvas is the **containing block** for fixed descendants. So `<Toaster>`
+mounted inside the chrome Surface pinned to *that slab*: measured 24px
+from its right and bottom edges, which is simply sonner's own default
+offset, arriving correctly with no coordinate math on our side. The Deploy
+button in the card now has two destinations — `setState` mutates its own
+texture, `toast()` raises a notice in a different Surface at a different
+pose — and the card knows nothing about where a toast lives.
+
+That containing-block fact is sharper than it first looks, so I probed the
+boundary properly. Exactly **one** thing about a source canvas is
+canvas-local: the fixed-positioning containing block. Everything that asks
+"how big is the viewport" still answers with the page — `vw`/`vh`,
+`dvw`/`dvh`, media queries and therefore every Tailwind `sm:`/`md:`
+variant, `matchMedia`, `innerWidth`. It's the ordinary CSS distinction
+between a containing block and the viewport, which nobody has to think
+about because for `fixed` they're normally the same object. A canvas pries
+them apart. It also retroactively explains the weirdest measurement of
+increment 2, where a `Select` came out 568px tall inside a 460px panel:
+Radix computes its available height *in JavaScript* from
+`window.innerHeight`. Declare yourself in CSS and you get the slab; measure
+the viewport in JS and you get the page.
+
+The dialog went to the same slab, through the same one-line lever as the
+popover — `container`, aimed one object further out. Overlay filled the
+slab, content centred on the eye, both to the pixel. And then the part I
+had flagged as the increment's real risk: Radix's modal sets
+`body { pointer-events: none }`, which sounded like it would make the
+entire scene unclickable.
+
+I was wrong about it twice, in opposite directions, and only measuring
+settled it. First guess: the lockout kills the WebGL canvas and nothing in
+the scene can be touched. Measured — the canvas computes `pointer-events:
+auto`; the lockout doesn't reach it. Second guess: fine, but then it must
+at least block the *dialog*, sitting as it does inside a parked subtree
+under a locked-out body. Also wrong, and for a much more interesting
+reason: the forwarder never consults the browser's hit test at all. It
+resolves a hit by walking the subtree with `getBoundingClientRect`. The
+lockout isn't overcome, it's simply *not in the path*.
+
+Which should have been alarming — a modal whose containment mechanism is a
+no-op — except nothing at all is lost. The overlay is `fixed inset-0` on a
+slab that spans the frustum, so it is a real object standing in front of
+the entire scene. I aimed a click at the Deploy button on the card behind
+it. The overlay caught it, dismissed the dialog, and the card never heard
+a thing. Closed the dialog, clicked the identical coordinate, and the card
+fired its toast.
+
+That inversion is my favourite thing in this lab so far. On a page, an
+overlay cannot actually block anything. It's a sibling element painted on
+top; hit-testing would fall straight through it. So the platform grew a
+lockout to *simulate* obstruction, and every modal on the web ships that
+simulation. Here the obstruction is real, because the overlay is matter
+standing between the eye and everything else. The CSS mechanism turns out
+to be scaffolding for a limitation this medium doesn't have.
+
+None of which would work without increment 2b. A quad spanning the whole
+view is exactly the wall that increment was about — without content
+gating, viewer chrome would make the scene permanently untouchable.
+Measured with the chrome empty, a raycast at the Deploy button returns
+three hits, the card nearest, and the chrome slab **absent entirely**. It
+becomes solid precisely where the DOM painted something, which for `fixed
+inset-0` is everywhere, exactly when it should be.
+
+The remaining side effects all landed right, which after the last two
+increments I no longer assume. Radix's `aria-hidden` walk hid the whole
+visual scene and *spared* the canvas holding the dialog — correct modal
+semantics for free, since the visible copy lives in the hidden GL canvas
+and the accessible copy is the parked DOM. `Escape` closes with no
+forwarding at all, because native focus is already inside the parked
+subtree and the keydown bubbles to the document listener on its own.
+Paints go flat the moment the open transition ends (chrome 215 → 215 over
+three seconds).
+
+One context loss paid for along the way: the chrome host owns a React
+root, and hoisting it into a `useMemo` the way the panel's layer does
+means a remount calls `createRoot` on a container whose previous root is
+still waiting on its unmount microtask. React throws, the throw lands
+inside r3f's canvas, and the GL context goes with it. Hosts that own a
+root get built inside `mount`.
+
+Open, and going to the floating-layer kit: the chrome is a single layer,
+so two stacked modals — or a modal that ought to sit above the toast
+stack — have no z-arbitration yet.

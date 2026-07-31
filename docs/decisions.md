@@ -609,3 +609,88 @@ paints flat. 182 tests. **Known edge, pre-existing:** the two-hop transit
 first frame, even though the reported destination computes as inside the
 hull. Not a regression — before this change every exit closed it — and it
 belongs to the floating-layer kit (#36).
+
+## 21. Viewer chrome is a Surface at the eye; modality is occlusion (2026-07-31, lab 009)
+
+**Context.** #16 gave a popover its own Surface on an overlay plane — right
+for anything *anchored* to a panel. Toasts and modals are anchored to
+nothing. They don't belong to an object in the scene; they belong to
+whoever is looking at it.
+**Decision.** A `CameraChrome` group copies the camera's position and
+quaternion each frame and pushes itself `CHROME_DISTANCE` down the view
+axis. It carries one `Surface` authored at 1280×720 source pixels, with its
+quad sized to span the frustum at exactly that distance — so one source
+pixel lands on one screen pixel, and `position: fixed` inside it means what
+it says on a page. Same one-line lever as #16 (`container`, now also on
+`DialogContent`), aimed one object further out: a panel's layer for
+anchored things, the viewer's chrome for unanchored ones.
+**Why a scene-level group and not `camera.add()`.** r3f's default camera is
+**not in the scene graph** — measured `camera.parent === null`. Children
+parented to it compute correct world matrices and never draw, because the
+render list is built by walking `scene`. Copying the pose onto a
+scene-level group is the fix. It is never a frame stale: drei's
+OrbitControls updates at `useFrame` priority −1 and r3f renders after all
+priority-0 callbacks, so a pose written at default priority lands in the
+same frame that reads it.
+**The toast half needed no plumbing at all.** sonner doesn't portal — it
+renders inline and pins itself `position: fixed`. A `layoutSubtree` canvas
+is the containing block for fixed descendants (platform.md), so `<Toaster>`
+mounted in the chrome Surface measured `[900, 622, 356, 74]` in the 1280×720
+slab: 24px from the slab's right and bottom, its own default offset, with
+zero coordinate math. The overlay lands the same way — `fixed inset-0`
+measured `[0, 0, 1280, 720]`, and `DialogContent`'s `top-50% left-50%`
+measured `[384, 286, 512, 148]`, symmetric on both axes.
+**The finding: modality survives, but not by the mechanism it was written
+for.** Radix's modal `DismissableLayer` sets `body { pointer-events: none }`.
+Inside a Surface that is a **no-op** — the forwarder resolves hits by
+walking the subtree with `getBoundingClientRect` (#20), so it never
+consults the browser's hit test and never sees the lockout. Nothing is
+lost, because the overlay is a full-frustum slab that *physically occludes*
+the scene. Measured with the dialog open: a click aimed at the card's
+Deploy button behind it was caught by the overlay
+(`chrome:pointerdown → DIV`), dismissed the dialog, and left the card
+untouched; with the dialog closed the identical click reached the card and
+fired its toast.
+
+That is worth naming, because it inverts the usual relationship. On a page
+an overlay cannot actually block anything — it is a sibling painted on
+top, and hit-testing would fall straight through it — so the platform
+needs a lockout to *simulate* obstruction. Here the obstruction is real.
+The CSS lockout was always emulating something we have natively.
+**`hitTest="content"` is what makes a full-frustum slab admissible.**
+Without #20 a quad spanning the whole view would make the entire scene
+untouchable. Measured with the chrome empty: a raycast at the Deploy button
+returned three hits with the card mesh nearest (d=3.65) and the chrome slab
+**absent entirely**. The slab is only present where the DOM painted
+something — which, for `fixed inset-0`, is everywhere, exactly when it
+should be.
+**Side effects, all landing correctly.** Radix's `aria-hidden` ancestor
+walk hid `#root` (the whole visual scene) and the other three parked
+canvases, and **spared** the canvas holding the dialog — correct modal
+semantics for free, since the visual copy lives in the hidden GL canvas and
+the accessible copy is the parked DOM. `Escape` closes: native focus is
+inside the parked subtree, so the keydown bubbles to the document listener
+with no forwarding. Paints settle dead flat (chrome `215 → 215` over 3s) —
+the tw-animate `fade-in`/`zoom-in-95` keyframes run on *descendants* of the
+drawn root, so they rasterize (platform.md) and cost paints for the
+duration of the transition only. No conductor needed for correctness here;
+#17 is still the answer at scale.
+**The host is built inside `mount`, not hoisted into a `useMemo`.** A
+hoisted node is right for a panel's layer, which is only ever a portal
+target — but this one also owns a React root, and a remount would call
+`createRoot` on a container whose previous root is still waiting on its
+unmount microtask. React throws, the throw lands inside `CanvasImpl`, r3f
+tears the canvas down, and the GL context goes with it. Cost one context
+loss to learn.
+**Rejected.** (a) *Parent the chrome to the camera object* — computes fine,
+never renders. (b) *Render chrome as HTML above the canvas* — abandons the
+premise; it wouldn't occlude, light, or accept depth like the rest of the
+scene. (c) *Proxy `body { pointer-events: none }` into the forwarder so
+Radix's lockout takes effect* — re-implements obstruction in software when
+the geometry already performs it, and would wrongly kill Surfaces the
+overlay doesn't actually cover.
+**Consequence.** `CameraChrome` stays in the lab pending promotion to
+`src/primitives/`, on the FocusOrbitRig precedent (build it in a scene,
+extract it once a second consumer exists). **Known gap:** the chrome slab
+is a single layer, so two stacked modals — or a modal that should sit above
+the toast stack — have no z-arbitration yet. That is #36.
