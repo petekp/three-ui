@@ -989,3 +989,18 @@ verification stall was my own script, twice over: `agent-browser
 type` takes a selector before the text, and I'd passed text alone —
 the CLI sat waiting for an element named after my payload. The app
 never had a bug; the harness did.
+
+**Increment 3 shipped — the VoiceOver script, written before the
+session.** `docs/voiceover.md` is a ~30-minute manual protocol with
+its expectations split honestly: **EXPECT** rows are grounded in ARIA
+we set (the dial proxy's slider role and valuetext, native inputs
+announcing as inputs) where a miss is a bug; **OPEN** rows are genuine
+unknowns we are measuring — what VO says at the role-less unit roots
+and the bare canvas stop, whether silent DOM mutations stay silent,
+what order the VO cursor reads parked sources in, and whether the
+rotor lists the dial proxy at all. The known-weak spots are flagged as
+the announcer kit's design input, not papered over: the point of the
+session is to let VoiceOver, not spec-reading, decide what the unit
+stop should say. Lab 008 closes here — the rig is a primitive, the
+barrel is honest, and the next accessibility increment waits on a
+human ear.
