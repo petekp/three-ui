@@ -1481,6 +1481,33 @@ still waiting on its unmount microtask. React throws, the throw lands
 inside r3f's canvas, and the GL context goes with it. Hosts that own a
 root get built inside `mount`.
 
+The last thing I expected to have to build turned out to need nothing at
+all. Radix's `FocusScope` and our `FocusScene` both want Tab and Escape
+while a modal is open, and I had that filed as the increment's real
+integration work. Instrumenting a document listener behind FocusScene's
+own, with the dialog open: interior Tabs arrive unclaimed and FocusScene
+stands down, because the focus contract from lab 007 routes interior Tab
+to native and the browser walks the dialog's tab order itself. The *wrap*
+Tab arrives claimed, by FocusScope moving focus by hand. Escape arrives
+claimed, by `DismissableLayer`, so our ascend ladder never runs. Arrows
+arrive unclaimed and move nothing, by the same interior rule. Focus went
+confirm → Close → X → confirm across six presses and never once left the
+dialog.
+
+So modality holds by three entirely independent mechanisms — occlusion for
+the pointer, `FocusScope` for Tab, interior routing for arrows — none of
+which know about each other. What lets them compose is the
+`defaultPrevented` gate we put at the front of FocusScene's key handler
+back in lab 007, for unrelated reasons. That's the second time this
+increment that a thing built for one purpose turned out to be the load-
+bearing piece of another, which I'm choosing to read as the design being
+roughly right rather than as luck.
+
+One risk I'll name rather than discover later: all of that rests on Radix
+moving focus *into* the dialog when it opens. A modal that suppressed
+that would leave focus at scene level, where our arrows own the keys and
+would happily move selection out from under an open modal.
+
 Open, and going to the floating-layer kit: the chrome is a single layer,
 so two stacked modals — or a modal that ought to sit above the toast
 stack — have no z-arbitration yet.

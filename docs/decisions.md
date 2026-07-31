@@ -675,6 +675,24 @@ the tw-animate `fade-in`/`zoom-in-95` keyframes run on *descendants* of the
 drawn root, so they rasterize (platform.md) and cost paints for the
 duration of the transition only. No conductor needed for correctness here;
 #17 is still the answer at scale.
+**Focus arbitration needed no code, and that was measured rather than
+assumed.** Radix's `FocusScope` and our `FocusScene` both want Tab and
+Escape while a modal is open. Instrumenting a document listener registered
+*after* FocusScene's, with the dialog open: interior Tabs arrive
+`defaultPrevented: false` (FocusScene sees them and stands down, because
+the lab-007 contract routes interior Tab to native — the browser walks the
+dialog's own tab order); the **wrap** Tab arrives `true`, claimed by
+FocusScope moving focus manually; Escape arrives `true`, claimed by
+`DismissableLayer`, so FocusScene's ascend/home ladder never runs. All four
+arrow keys arrive `false` and move nothing — same interior rule. Focus
+cycled confirm → Close → X → confirm across six Tabs without once leaving
+the dialog. So modality holds by three independent mechanisms — occlusion
+for the pointer, FocusScope for Tab, interior routing for arrows — and the
+`defaultPrevented` gate is what lets them compose. **Named risk:** all of
+this rests on Radix moving focus *into* the dialog on open. A modal that
+suppressed that (`onOpenAutoFocus` prevented) would leave focus at scene
+level, where FocusScene's arrows own the keys and would move selection out
+from under an open modal. Untested, and it belongs to #36.
 **The host is built inside `mount`, not hoisted into a `useMemo`.** A
 hoisted node is right for a panel's layer, which is only ever a portal
 target — but this one also owns a React root, and a remount would call
