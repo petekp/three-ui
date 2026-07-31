@@ -22,7 +22,7 @@ npm install
 npm run dev
 ```
 
-To test the HTML-in-canvas path, run Chrome 148–150 with the flag enabled
+To test the HTML-in-canvas path, run Chrome 148–151 with the flag enabled
 (`chrome://flags/#canvas-draw-element`, or launch with
 `--enable-features=CanvasDrawElement`). Without it the form panel falls back
 to drei's `<Html transform>` (CSS3D overlay).
@@ -915,7 +915,7 @@ the announcer, page-edge handoff — and an authored 2D lattice stays
 rejected-for-now (decision #15) until the geometric pick has earned
 its keep on its own.
 
-## lab 008 — consolidation: the rig becomes a primitive (in progress)
+## lab 008 — consolidation: the rig becomes a primitive
 
 Seven labs of findings, and the load-bearing camera knowledge still
 lived in a scene file. Lab 006's `CameraRig` earned each of its 240
@@ -1004,3 +1004,86 @@ session is to let VoiceOver, not spec-reading, decide what the unit
 stop should say. Lab 008 closes here — the rig is a primitive, the
 barrel is honest, and the next accessibility increment waits on a
 human ear.
+
+## lab 009 — the port: shadcn/ui as physical matter (in progress)
+
+The demo direction is decided, and it wasn't one of the three concepts
+on the scorecard. Pete's call: the world's most popular component
+library, in full 3D — with the note that the engineering problems it
+forces (the floating-family re-plumb, the animation dialect, the
+layout oracle) are worth solving whatever the demo becomes. That
+second clause is what makes the call cheap to commit to: the seams are
+infrastructure for *any* demo, and the benched referent concepts (a
+configurator is the obvious one) would be built FROM this kit anyway.
+The corollary discipline still applies — a static shadcn page floating
+in space is fakeable with CSS perspective, so every increment has to
+bank something perspective can't fake: real typing into the material,
+real occlusion between floating layers, modals that are camera
+grammar. Virality is a distribution property; the port has to stay an
+interaction-paradigm claim.
+
+**Increment 1 shipped — verbatim shadcn leaves painting as matter.**
+The word "verbatim" is load-bearing: Button, Card, Input, Label, and
+Badge came from the shadcn registry by `curl`
+(`ui.shadcn.com/r/styles/new-york-v4/*.json`), written to
+`src/components/ui/` byte-identical, imports from the unified
+`radix-ui` package and `@/lib/utils` resolved by alias rather than
+edited. shadcn's copy-into-your-repo model is what makes this
+legitimate rather than a fork — vendoring IS the install path. The
+Tailwind side (`src/styles/ui.css`) replaces the generated globals
+with exactly three deviations, each one a dialect rule of DOM-as-
+matter: `tw-animate-css` is refused (opacity/transform keyframes are
+compositor-owned and never rasterize — motion belongs to the mesh),
+the `body` base rule is scoped to `.ui-root` (the host page owns
+body; Surface-mounted trees get the class), and the `hover`/`active`
+variants are overridden to also match `[data-hover]`/`[data-active]`
+— one `@custom-variant` line that makes every `hover:` utility in
+untouched shadcn code work through the texture, because forwardEvents
+already mirrors pointer state as data attributes. The scene mounts the
+classic Create-project card through a small `SurfaceApp` adapter: a
+second React root rendered into the parked source subtree, state and
+event delegation running in real DOM, every commit just another paint
+the Surface uploads.
+
+The one bug of the increment was mine, and it minted a house rule.
+First render showed the card in the top-left of the panel with a
+black L-shaped band right and below — which read as the LOD ghost
+until the ratios said otherwise. The parked source element measured
+232×400 with no inline styles: `createDomTextureSource`'s element is
+content-sized, every previous lab sized its content root in its own
+CSS (`.p8{width:320px;height:220px}`), and my host div's `100%` chain
+resolved against a shrink-to-fit `position:fixed` ancestor — down to
+the card's natural size. 232/360 = 0.64 and 400/460 = 0.87, exactly
+the band proportions on screen: the texture was faithfully showing a
+small element on a big canvas. The rule, now explicit in the adapter:
+**the content root declares its own pixel size; Surface's
+width/height size only the canvas.**
+
+The ledger, all through the untouched components: hover twin proven
+numerically (`data-hover` flips the Deploy button's computed
+background from `oklch(0.21 0.006 285.885)` to the `/90` composite —
+and the probe's own attribute flips each cost a paint, the counter
+accounting for themselves); React state committed inside the texture
+(Deploy's `onClick` → `setState` → one paint, 4→5); "Nebula" typed
+natively into the shadcn Input and redeployed as "Deploying Nebula…";
+idle flat at 69→69 across 2.5s once blurred (caret blink paints while
+focused, as it always has); and the focus spine composed for free —
+Tab selected the unit, Enter descended with native focus landing on
+the Input, Escape ascended, the `data-focus` outline riding the card
+via one dialect selector in ui.css. Zero edits to any component
+source. The leaf set turned out animation-free, so the compositor
+rule cost nothing here — that bill arrives with the floating family,
+which is increment 2's whole subject.
+
+The other risk of the increment — Tailwind's preflight reset landing
+on eight labs of pre-Tailwind CSS — resolved to nothing: a scripted
+sweep across labs 001–008 (plus a direct lab-002 recheck after a
+mid-sweep reload ate its first pass) found every panel styled exactly
+as before, chips green throughout. The labs' CSS always set its
+properties explicitly, so the reset had nothing to reset. One
+distribution fact worth recording while it's true: the origin trial
+runs M148–M151 and stable Chrome is 151 *today*, so a token'd live
+URL reaches plain-Chrome users for only a few more weeks — the
+public-push moment that actually matters is the API's estimated
+late-2026 stable ship, and until then the demo travels as video with
+the live URL as a bonus.

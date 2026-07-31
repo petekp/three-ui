@@ -8,12 +8,13 @@ import { Lab004 } from './scenes/Lab004'
 import { Lab005 } from './scenes/Lab005'
 import { Lab006, Lab006Hud } from './scenes/Lab006'
 import { Lab008 } from './scenes/Lab008'
+import { Lab009 } from './scenes/Lab009'
 import { ProbeScaleApp } from './scenes/ProbeScale'
 import { ProbeFocusApp } from './scenes/ProbeFocus'
 import { FocusScene } from './primitives/FocusScene'
 import { detectHtmlInCanvas } from './lib/htmlInCanvas'
 
-type LabId = '001' | '002' | '003' | '004' | '005' | '006' | '008'
+type LabId = '001' | '002' | '003' | '004' | '005' | '006' | '008' | '009'
 
 // ?probe=N mounts the scale probe instead of the labs (see ProbeScale.tsx).
 function probeParams() {
@@ -85,6 +86,8 @@ export default function App() {
               <Lab005 />
             ) : lab === '008' ? (
               <Lab008 />
+            ) : lab === '009' ? (
+              <Lab009 />
             ) : (
               <Lab006 />
             )}
@@ -105,7 +108,7 @@ export default function App() {
         <h1>three-ui / lab {lab}</h1>
         <p className="sub">a component library made of real materials</p>
         <div className="tabs">
-          {(['001', '002', '003', '004', '005', '006', '008'] as const).map((id) => (
+          {(['001', '002', '003', '004', '005', '006', '008', '009'] as const).map((id) => (
             <button
               key={id}
               data-active={lab === id}
@@ -126,7 +129,7 @@ export default function App() {
         {!support.drawElementImage && (
           <p className="hint">
             HTML-in-canvas unavailable — lab 002's Surface needs it. Chrome
-            148–150 with <code>chrome://flags/#canvas-draw-element</code>.
+            148–151 with <code>chrome://flags/#canvas-draw-element</code>.
           </p>
         )}
       </div>
@@ -144,7 +147,9 @@ export default function App() {
                   ? 'flick the dial · tap the toggles · throw the slider — one integrator, three force fields'
                   : lab === '008'
                     ? 'Tab surveys · Enter approaches · Escape steps home — every import from the public barrel'
-                    : 'double-click a panel to approach · double-click the floor to step back · drag a title bar · click into text and type'}
+                    : lab === '009'
+                      ? 'verbatim shadcn/ui painted as matter · click into a field and type · press Deploy'
+                      : 'double-click a panel to approach · double-click the floor to step back · drag a title bar · click into text and type'}
       </div>
       {lab === '006' && <Lab006Hud />}
     </div>

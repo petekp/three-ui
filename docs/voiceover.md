@@ -18,7 +18,7 @@ Two kinds of checkpoints below:
 
 ## Setup (5 min)
 
-1. Chrome 148–150 with the origin-trial flag
+1. Chrome 148–151 with the origin-trial flag
    (`chrome://flags/#canvas-draw-element` or the usual
    `--enable-features=CanvasDrawElement` launch). Dev server at
    `http://localhost:5173`, **lab 008** tab. Confirm the HUD chip
