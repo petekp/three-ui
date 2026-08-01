@@ -100,6 +100,19 @@ export {
   type PanePose,
 } from './lib/layoutOracle'
 
+// ── The style bridge ─────────────────────────────────────────────────────
+// CSS custom properties as mesh channels (decisions #28). A registered
+// property transitions as real CSS — timed, eased, zero paints — and the
+// scene polls the eased value per frame. Tailwind variants (`[--depth:0.5]`,
+// `hover:[--depth:1]`, `transition-[--depth]`) become mesh state.
+export { useStyleChannel } from './primitives/useStyleChannel'
+export {
+  createStyleChannel,
+  ensureChannelRegistered,
+  type StyleChannel,
+  type StyleChannelOptions,
+} from './lib/styleChannel'
+
 // ── Below the r3f layer ──────────────────────────────────────────────────
 // `Surface` is the react-three-fiber wrapper; this is the engine underneath
 // it, and it is framework-agnostic. Reach for it to check whether the trial

@@ -1116,3 +1116,53 @@ not a sort key, they're a tree (isolation, transforms, opacity all spawn
 them); any partial implementation lies in exactly the cases that matter.
 (b) *Constraining chrome DOM order to match paint order* — fights every
 library's portal habits and breaks byte-verbatim vendoring.
+
+## 28. The style bridge — custom properties are mesh channels (2026-08-01, #52)
+
+**Context.** The library's standing doctrine is that the DOM is the
+authority and the mesh performs (#17 conducted motion, #25 layout oracle).
+But scene *state* — how lifted a card is, how open a drawer is, how warm a
+glow is — still lived only in scene code, unreachable by the cascade. CSS
+authors express exactly this kind of state as variants and transitions;
+Tailwind ships the whole grammar (`[--depth:0.5]`, `hover:[--depth:1]`,
+`transition-[--depth]`). The missing piece was a way for the scene to
+*hear* it.
+**Decision.** `createStyleChannel(el, property)` /
+`useStyleChannel(property)` read a registered custom property as a number
+channel. Registration (`CSS.registerProperty`, syntax `<number>`) is what
+makes it work: a registered property is interpolable, so
+`transition: --depth 600ms ease` runs a genuine CSSTransition — timed,
+eased, and staged by the style engine — while painting **nothing**,
+because a custom property no paint rule consumes never invalidates a
+paint record. `getComputedStyle` mid-transition returns the eased
+intermediate synchronously: the style engine is the interpolation oracle,
+and no easing math exists in our code. The scene polls the getter in
+`useFrame` and moves matter.
+**Measured** (style probe, Chrome 150, trusted input): a full 600ms
+`--depth` 0→1 transition = **0 paints, 0 uploads** on the card's source,
+33 mid-flight samples all eased (82% progress at 30% time — the authored
+`cubic-bezier(0.22,1,0.36,1)`, not a ramp), mesh z tracking `depth × lift`
+every frame. The full transition event lifecycle
+(`transitionrun`/`start`/`end`) fires for custom properties with
+`propertyName` set, both directions. And the hover twin closes the loop:
+a trusted pointer over the mesh → forwarded move → `[data-hover]` on the
+card root → variant flips `--depth` → mesh lifts on CSS's curve; leave
+reverses it. Hover-driven *mesh* motion with zero per-frame paints —
+the thing #17 could not give the drawn root — falls out for free.
+**The push half.** `observe()` exists for consumers without a frame loop
+(notably `frameloop="demand"`, which needs `invalidate()` on change):
+transition events bound an rAF sampling window — the #25 motion-window
+shape — and a MutationObserver catches discrete, untransitioned flips
+with one coalesced settle sample. The hook itself only polls; polling a
+clean computed style is cheap and always correct.
+**One-element contract.** A channel's value, transition, and variants
+must be authored on the element the channel watches. Transition events
+do not descend from ancestors — an inherited value would move and nobody
+would hear it. `inherits: false` is the registration default for the
+same reason.
+**Rejected.** (a) *Watching keyframe animations too* — that's #17's
+conductor; a channel is state, not choreography, and the two shapes
+compose (a variant can flip a channel that a spring then chases).
+(b) *A push-only API* — a subscription that misses its first event
+before React commits reads stale forever; the pull getter is
+self-healing by construction.

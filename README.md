@@ -2005,3 +2005,52 @@ What's left of #36 is exactly one item: ray-based dismissal for
 hover-driven *detached* layers — which has no consumer until Lab 010
 hangs a hover card off a chat message, and gets built when that scene
 exists to measure it. Decisions #26 and #27 carry the autopsies.
+
+## the bridge — CSS custom properties as mesh channels
+
+The last board item before Lab 010 was #52, and it closes a loop the
+library has been circling since the conductor. Doctrine so far: the DOM
+declares, the mesh performs — keyframes conducted to the mesh (#17),
+layout read back as poses (#25). But scene *state* — how lifted, how
+open, how warm — still lived only in scene code, deaf to the cascade.
+Which is backwards, because CSS authors already have a grammar for
+exactly this: variants and transitions. Tailwind will happily write
+`hover:[--depth:1] transition-[--depth]` on a card today. Nothing was
+listening.
+
+Now something is. `useStyleChannel('--depth')` returns a getter the
+scene polls in `useFrame`. The whole trick is property registration:
+a registered `<number>` custom property is *interpolable*, so its
+transition is a genuine CSSTransition — the style engine stages it,
+times it, eases it — while painting nothing at all, because a custom
+property that no paint rule consumes never invalidates a paint record.
+And `getComputedStyle` mid-transition returns the eased intermediate,
+synchronously. The style engine is the interpolation oracle. There is
+no easing math anywhere in our code; there is a question, asked once
+per frame, that the browser answers with the authored curve.
+
+The probe (`?styleprobe=1`) measured all three claims at once. A full
+600ms `--depth` transition: zero paints, zero uploads, thirty-three
+mid-flight samples all riding the authored bezier (82% of the distance
+at 30% of the time — that's `cubic-bezier(0.22,1,0.36,1)`, not a ramp),
+mesh z locked to `depth × lift` every frame. Then the hover twin closed
+the loop end to end: trusted pointer over the mesh, forwarded move sets
+`[data-hover]` on the card root, the variant flips `--depth`, and the
+*mesh* glides up on CSS's own curve — hover-driven motion at zero
+per-frame paints, the exact thing the drawn root's frozen paint record
+(#1) could never give us. The card lifts off its own texture. The
+texture never repaints. That's the demo sentence for the whole library,
+and it costs nothing.
+
+One contract came out of the measurement: a channel lives on ONE
+element. Transition events don't descend from ancestors, so the value,
+the transition, and the variants must be authored on the element the
+channel watches — an inherited value would move and nobody would hear
+it. Registration defaults to `inherits: false` for the same reason.
+Decisions #28 has the full autopsy, including why `observe()` (the push
+half, for `frameloop="demand"` consumers) is transition-event-bounded
+rAF sampling rather than a poll loop, and why the pull getter is the
+primary API: a subscription can miss its first event; a live read
+cannot be stale.
+
+The board is clear. Lab 010 is next.
