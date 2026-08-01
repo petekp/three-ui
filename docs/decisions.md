@@ -693,6 +693,14 @@ this rests on Radix moving focus *into* the dialog on open. A modal that
 suppressed that (`onOpenAutoFocus` prevented) would leave focus at scene
 level, where FocusScene's arrows own the keys and would move selection out
 from under an open modal. Untested, and it belongs to #36.
+**Refuted 2026-08-01:** the trap, not the autofocus, is the wall. With the
+dialog open, script-focusing the trigger, the canvas, anything — focus is
+yanked back into the dialog before the focus() call even returns (Radix's
+trapped FocusScope acts on `focusin`, synchronously). Focus parked at
+`body` reads as page level, where FocusScene stands down; every route to
+scene/unit altitude runs through a focus move the trap intercepts. Arrows
+under an open modal move nothing by any reachable path, autofocus
+prevented or not.
 **The host is built inside `mount`, not hoisted into a `useMemo`.** A
 hoisted node is right for a panel's layer, which is only ever a portal
 target — but this one also owns a React root, and a remount would call
@@ -947,6 +955,13 @@ the untrusted probe path would stay wrong regardless.
 popover moves nothing — unclaimed (`defaultPrevented` false after full
 propagation), unacted. Pre-existing, orthogonal to the mirror, filed under
 the #36 umbrella with the two-hop tooltip transit.
+**Resolved 2026-08-01:** re-measured with a preventDefault stack trace —
+the Tab IS claimed, by Radix's own FocusScope (Popover hardcodes
+`loop: true` even non-modal), and the popover holds exactly one tabbable,
+so `first === last === focused` and the wrap lands on itself: visually
+inert, behaviourally identical to the same DOM on a flat page. Injecting
+a second tabbable made Tab cycle both, through trusted keys, inside the
+parked canvas. Not a seam; nothing to fix.
 
 ## 25. The DOM is the layout authority — a hidden rig, read back as poses (2026-08-01, layout oracle)
 
@@ -1058,3 +1073,46 @@ ours; every hover library that reasons about document-level move
 coordinates (HoverCard next) would need the same patch. (c) *Silencing
 mousemove too* — nothing measured listens to it at document; widen only
 on evidence.
+
+## 27. The hit test speaks paint order — elementsFromPoint is the arbiter (2026-08-01, lab 009 / #36)
+
+**Context.** `deepestElementAt` resolved a forwarded pointer by walking the
+source subtree in DOM order, later siblings winning — which is paint order
+only until `z-index` says otherwise. The chrome slab broke it for real:
+sonner's toaster is the FIRST child of the chrome layer at z 999999999,
+the dialog overlay a LATER sibling at z 50. A live toast paints above the
+open dialog's dim, exactly as on a page — and the walk handed a click on
+the visible toast to the overlay underneath it, dismissing the dialog the
+user never aimed at. Measured: at the toast's centre,
+`document.elementsFromPoint` said toast LI, the walk said overlay.
+**Decision.** Ask the browser. `deepestElementAt` now consults
+`document.elementsFromPoint(x, y)` first — the engine's own hit test, with
+stacking contexts, `pointer-events`, visibility and zero-size resolved
+natively — and takes the first element of the stack inside the source
+root. Parked sources all share the viewport origin, so the stack holds
+every overlapping source's elements; filtering to the root keeps our
+subtree's internal order and skips foreign sources. Verified it DOES see
+parked canvas-fallback subtrees (Chrome 150). Same doctrine as the layout
+oracle (#25): the style engine already solves this; reimplementing
+stacking contexts in a walker is the losing move.
+**The walk stays as fallback**, for the two places the browser can't
+answer: a point outside the visual viewport (elementsFromPoint clamps —
+a source taller than the window still forwards, DOM-order-approximate),
+and layoutless test environments (happy-dom). When a real stack simply
+holds nothing of the root, walker and browser agree the answer is null
+(clear glass), so the fallthrough is harmless by construction.
+**Verified** (lab 009, trusted CDP input): toast raised, dialog opened,
+trusted click at the toast's projected screen point — forwarded
+pointerdown targets the toast LI, dialog stays open. Regression sweep
+after the change: tooltip two-hop transit, dialog open via forwarded
+click, select layer open/Escape, input focus + native typing all intact.
+**Scope.** This also answers the stacked-modal half of the #21/#23 gap:
+two dialogs portaled into the same chrome source stack by CSS, and the
+pointer now follows what CSS painted; focus already stacks (Radix pauses
+the outer scope). Cross-surface arbitration was never CSS's — it is
+depth, and the raycaster already speaks it.
+**Rejected.** (a) *Teaching the walker z-index* — stacking contexts are
+not a sort key, they're a tree (isolation, transforms, opacity all spawn
+them); any partial implementation lies in exactly the cases that matter.
+(b) *Constraining chrome DOM order to match paint order* — fights every
+library's portal habits and breaks byte-verbatim vendoring.

@@ -568,3 +568,52 @@ describe('silencing the trusted canvas move', () => {
     expect(nativeMoveThrough(1)).toBe(1)
   })
 })
+
+describe('stacking order (z-index) in the hit test', () => {
+  // The geometric walk can only see DOM order — later siblings win. Real
+  // paint order is decided by z-index and stacking contexts, which only the
+  // browser can resolve: measured in lab 009, a sonner toast (z 999999999,
+  // FIRST child) painted above the dialog overlay (z 50, later sibling), and
+  // the walk handed the pointer to the overlay under the visible toast.
+  // deepestElementAt must consult document.elementsFromPoint — the browser's
+  // own hit test — and only fall back to the walk when the environment
+  // cannot answer (no layout, point outside the viewport).
+
+  afterEach(() => {
+    delete (document as { elementsFromPoint?: unknown }).elementsFromPoint
+  })
+
+  it('prefers the browser paint-order stack over DOM order', () => {
+    // toaster first, overlay later — both covering the same point.
+    const toast = document.createElement('div')
+    const overlay = document.createElement('div')
+    root.append(toast, overlay)
+    box(toast, 200, 300, 340, 360)
+    box(overlay, 0, 0, 360, 460)
+    // The browser says the toast paints on top at this point.
+    ;(document as { elementsFromPoint?: unknown }).elementsFromPoint = () => [
+      toast,
+      overlay,
+      root,
+      document.body,
+      document.documentElement,
+    ]
+    expect(deepestElementAt(root, 270, 330)).toBe(toast)
+  })
+
+  it('returns null when the browser stack holds nothing of this root', () => {
+    // Clear glass: the stack exists (environment can answer) but nothing of
+    // ours is hittable at the point — and the walk agrees (no painted box).
+    ;(document as { elementsFromPoint?: unknown }).elementsFromPoint = () => [
+      document.body,
+      document.documentElement,
+    ]
+    expect(deepestElementAt(root, 1, 1)).toBe(null)
+  })
+
+  it('falls back to the geometric walk when the environment cannot answer', () => {
+    ;(document as { elementsFromPoint?: unknown }).elementsFromPoint = () => []
+    const on = uvOf(...TRIGGER_BOX)
+    expect(deepestElementAt(root, on.x, on.y)).toBe(trigger)
+  })
+})

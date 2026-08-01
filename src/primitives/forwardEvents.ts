@@ -34,6 +34,39 @@ const FOCUSABLE = 'input, textarea, select, button, [tabindex], [contenteditable
  * the source element; without that every element here would read as clear.
  */
 export function deepestElementAt(root: Element, x: number, y: number): Element | null {
+  // The browser's own hit test first: document.elementsFromPoint returns the
+  // real paint-order stack — z-index and stacking contexts resolved, with
+  // pointer-events, visibility and zero-size handled natively — and it DOES
+  // see parked canvas-fallback subtrees (measured, Chrome 150). The geometric
+  // walk below can only see DOM order, which paint order is allowed to
+  // contradict: measured in lab 009, a sonner toast (z 999999999, FIRST
+  // child of the chrome layer) painted above the dialog overlay (z 50, later
+  // sibling), and the walk handed the pointer to the overlay underneath the
+  // visible toast. Every parked source shares the viewport origin, so the
+  // stack holds elements of every overlapping source — filtering to `root`
+  // keeps our own subtree's order intact.
+  //
+  // The browser can only answer inside the visual viewport (elementsFromPoint
+  // clamps), and a layoutless environment answers with nothing useful — both
+  // fall through to the walk. When the stack is real but holds nothing of
+  // this root, the walk agrees by construction (nothing hittable paints
+  // there), so falling through is also the null verdict, just derived twice.
+  const doc = root.ownerDocument
+  const view = doc.defaultView
+  if (
+    typeof doc.elementsFromPoint === 'function' &&
+    view &&
+    x >= 0 &&
+    y >= 0 &&
+    x < view.innerWidth &&
+    y < view.innerHeight
+  ) {
+    const stack = doc.elementsFromPoint(x, y)
+    if (stack.length > 0) {
+      for (const el of stack) if (root.contains(el)) return el
+      return null
+    }
+  }
   let best: Element | null = null
   const walk = (node: Element) => {
     const r = node.getBoundingClientRect()

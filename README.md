@@ -1961,3 +1961,47 @@ an orbit drag dragged straight across the panel still orbits. Decisions
 content-move first" isn't enough — tearing down its tracker is a React
 state update, and the trusted move slips through the still-attached
 listener microseconds later.
+
+## the ledger — three debts measured, two dead on arrival
+
+With the transit fixed, the rest of the floating-layer kit's ledger (#36)
+got the same treatment: measure first, build only what the measurement
+demands. Two of the three remaining debts dissolved under instrumentation.
+
+The "trusted Tab is inert in the detached popover" anomaly — filed when a
+Tab arrived unclaimed and unacted — re-measured as neither. A
+preventDefault stack trace shows Radix's own FocusScope claiming it:
+Popover hardcodes `loop: true`, the popover holds exactly one tabbable,
+and a loop of one wraps onto itself. Inject a second tabbable and Tab
+cycles both, through trusted keys, inside the parked canvas. The same DOM
+does the same thing on a flat page. Not a seam.
+
+The onOpenAutoFocus risk — "a modal that prevents autofocus leaves focus
+at scene level, where FocusScene's arrows would move selection under it"
+— refuted outright. The wall was never the autofocus; it's the trap.
+Script-focus the trigger, the canvas, anything, while the dialog is open:
+Radix's trapped FocusScope acts on `focusin` and yanks focus back before
+the call returns. Every route to scene altitude runs through a focus move
+the trap intercepts; focus abandoned at `body` reads as page level, where
+FocusScene already stands down.
+
+The third debt was real and is now paid. The forwarder resolved hits by
+walking the source subtree in DOM order — later siblings win — which
+matches paint order right up until `z-index` disagrees. The chrome slab
+disagrees hard: sonner's toaster is the chrome layer's *first* child at
+z 999999999, the dialog overlay a *later* sibling at z 50. Toast up,
+dialog open, click the toast you can plainly see: the walk forwarded it
+to the overlay underneath and dismissed the dialog. The fix is the layout
+oracle's doctrine applied to hit testing — stop reimplementing the style
+engine, ask it. `deepestElementAt` now consults
+`document.elementsFromPoint`, the browser's own paint-order stack
+(which, measured, sees straight into parked canvas-fallback subtrees),
+filtered to the source's root; the DOM-order walk survives only as the
+fallback for points the browser can't answer. Same click now lands on
+the toast, dialog stays open — and stacked modals inherit the answer for
+free, because whatever CSS paints on top, the pointer now follows.
+
+What's left of #36 is exactly one item: ray-based dismissal for
+hover-driven *detached* layers — which has no consumer until Lab 010
+hangs a hover card off a chat message, and gets built when that scene
+exists to measure it. Decisions #26 and #27 carry the autopsies.
