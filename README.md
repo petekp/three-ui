@@ -1649,3 +1649,119 @@ under its own position would be worse.
 Open: N detached surfaces bring back the reading-order problem from lab
 007 across parked canvases, and `side`/`align`/`avoidCollisions` are
 silently ignored in detached mode rather than warned about.
+
+## the seam — separating the library from the labs, and a pass over what's left
+
+Everything above was written as one project. `src/` held the primitives,
+`app/scenes/` held nine labs, and the labs reached into `src/` on relative
+paths because there was no reason not to. That's fine right up until you
+want to know what the library actually *is*, and discover the honest answer
+is "whatever the labs happen to import."
+
+So: `src/` is three-ui, `app/` is an application that consumes it, and the
+only specifiers `app/` may use are `three-ui` and `three-ui/style.css` — the
+exact strings a published package would expose, aliased in `vite.config.ts`
+and `tsconfig.app.json`. A test walks the tree and fails on any violation in
+either direction, and I proved it bites by injecting one. The value isn't
+tidiness. It's that a gap in the barrel now shows up as a broken lab, which
+is a thing you can't ignore, instead of as a relative path quietly reaching
+around it, which is a thing nobody ever notices.
+
+Drawing the line found four things that had been sitting in Lab009 as scene
+code and were plainly library: the second-React-root adapter (`SurfaceApp`),
+the panel-local floating layer (`AnchoredSurface`), the frustum-spanning slab
+at the eye (`ViewerSurface`), and the pose it rides on (`CameraChrome`). None
+of them were *written* as scene code — they'd just never been asked where they
+lived. All four turned out to want the same DOM plumbing underneath, which is
+now `useSourceHost`, and every hard-won rule in it — build the container
+inside `mount` and never hoist it, declare the size rather than let layout
+find it, one childList observer for occupancy, a `mount` identity that never
+changes — is paid for exactly once instead of four times.
+
+Then a pass over the primitives themselves, which is where the interesting
+part is.
+
+**The viewer slab had a size, and it should never have had one.** It took
+`width`/`height` props, authored at 1280×720, and drew itself at the
+frustum's cross-section. Those are two different rectangles the moment the
+window isn't 16:9, and at 1000×800 the slab spanned x ∈ [−211, 1211] — 1422
+pixels of quad in a 1000-pixel viewport, 42% too wide, with a toast that
+believed it was 24px from the right edge sitting at x=1184. The fix is to
+delete the props: the viewer surface has no size of its own, it *is* the
+viewport, and both its quad and its source pixels derive from `size`.
+
+One subtlety made it a two-attempt fix. The obvious aspect source is
+`camera.aspect`, and it's wrong — r3f writes that in a layout effect that
+runs *after* the render which observed the new `size`, and mutating a camera
+doesn't re-render React, so a memo reading it on resize gets the previous
+frame's value and then keeps it until some unrelated render wanders past.
+`size` is the earlier and more honest source. Verified across five viewports
+on one page without a reload — 1.25, 2.3333, 0.9111, 1.6, 2.0 — source, quad
+and canvas aspects equal at every stop, slab corners landing on window
+corners, two paints per resize. A real sonner toast at 1600×800 projected its
+bottom-right to (1576, 776): exactly 24px in from the corner, which is what
+it was asking for all along.
+
+**`Surface`'s creation effect was a teardown wearing a dependency array.**
+That effect destroys a live DOM subtree and everything living inside it —
+focus, form values, selection, any second React root a scene mounted in
+there. `width` and `height` had already been pulled out of it during the
+detached-surface work. Three more were still in: `mirrorU`, `resolution`,
+`paint`. Same class of bug each time, and `paint` is the one that makes the
+shape of the mistake obvious — the creation effect doesn't even read it. A
+flag consulted once per frame in `useFrame` was destroying and rebuilding a
+live subtree because it happened to be listed. The effect's deps are now
+`[html]`, with a comment enumerating where each other prop is handled, and
+the read-a-prop-without-depending-on-it idiom is a named hook (`useLatest`)
+whose docstring carries the reasoning, so the next person to add a prop finds
+the argument rather than the pattern.
+
+**The focus manager was three documents wearing one filename.** 1200 lines:
+a contract, a state machine, and four consumer hooks. The linter had been
+saying so the whole time via `only-export-components`, which reads like style
+advice until you notice what it costs — Fast Refresh gives up entirely on a
+module that mixes components with anything else, so the file you iterate on
+most reloaded the page on every keystroke and threw away the focus state you
+were in the middle of inspecting. Three files now, and the knock-on is the
+better half: `Surface` reads one context object to auto-register, and had
+been importing 1200 lines of state machine to get it. So had `Dial`.
+
+I did *not* decompose the state machine, and that's a decision rather than
+laziness. Those 800 lines are about fifteen mutually recursive closures over
+one shared `tree`/`runtimes`/`camera`/`gl` — genuinely coupled, not layered.
+Splitting coupled code into files makes it look organized and read worse, and
+this particular subsystem is verifiable only in a browser, which is the worst
+possible place to discover you've broken something subtle. The file-level
+split earns its risk because the linter points at it and it fixes HMR. Cutting
+the machine itself would be churn on measured code, and I'd be doing it at one
+in the morning with no user awake to catch me.
+
+Which is also why I stashed the branch mid-verification. A leaf ARIA proxy
+read 34679×7198px and my first instinct was that the `proxyLayer` hoist had
+broken projection. It hadn't — that's just what projecting an off-screen
+object looks like after the reframe fulfiller has trucked the camera away
+from it, and I'd been Tabbing around for a minute before I looked. Measured
+the baseline at the home pose, restored, measured again: 171×118 at
+(1229,178) both times, identical. It cost four minutes and it's the
+difference between knowing and assuming. (Left as noted debt: that
+projection probably ought to clamp. It predates this pass, and inventing a
+fix mid-refactor muddies the diff.)
+
+The rest of the verification was the ladder itself, because a refactor of a
+focus manager that typechecks proves nothing. Canvas → `scene`, Tab → `unit`,
+Enter descends into all four groups that have tabbable interiors and
+correctly does nothing on the twenty-nine that don't, interior Tab wraps at
+the boundary instead of escaping to the page, Escape ascends and disengages,
+re-descent restores memory, arrows move between units. Eight labs sweep with
+every source painted and zero errors.
+
+One number worth writing down, since I measured it on the way past. Opening
+and closing the Select on the anchored layer costs about two paints per
+transition — the conductor doing its job. The same gesture on the detached
+surface costs nineteen, each way. That's one paint and one upload per frame
+of a 150ms entrance at 120Hz, and it's precisely what `FloatingSurface` not
+being routed through the conductor looks like. It shipped with "measure
+first" attached to it; measuring is done, the number is 19 versus 2, and it
+lands on the `fit="content"` texture-realloc path, which is the riskiest code
+in the floating family. That makes it its own increment, not a rider on a
+cleanup pass.
