@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ThreeElements } from '@react-three/fiber'
+import type { Group, Mesh } from 'three'
 import { Surface } from '../Surface'
 import { useSourceHost } from '../useSourceHost'
+import { useAnimationConductor } from '../useAnimationConductor'
+import { useLatest } from '../useLatest'
+import type { MotionValue } from '../../lib/motionSamples'
 
 // <FloatingSurface> — the floating family's third pose: its own object.
 //
@@ -51,6 +55,12 @@ export interface FloatingSurfaceProps
    * into a quad. 200 is the house default.
    */
   px?: number
+  /**
+   * Diagnostics: the pose the mesh just wore, once per frame of a flight.
+   * The house pattern for browser-verifying motion — a probe can read the
+   * flight back without racing the render loop.
+   */
+  onFlight?: (value: MotionValue, done: boolean) => void
   /** Extra scene content parented to the surface (SurfaceLayer, UVAnchor…). */
   children?: ReactNode
 }
@@ -80,6 +90,7 @@ export function FloatingSurface({
   onHost,
   label = 'floating',
   px = 200,
+  onFlight,
   children,
   ...groupProps
 }: FloatingSurfaceProps) {
@@ -118,7 +129,7 @@ export function FloatingSurface({
   const roRef = useRef<ResizeObserver | null>(null)
   useEffect(() => () => roRef.current?.disconnect(), [])
 
-  const { mount } = useSourceHost({
+  const { mount, host } = useSourceHost({
     width: w,
     height: h,
     className: 'ui-layer ui-detached',
@@ -134,6 +145,36 @@ export function FloatingSurface({
     },
   })
 
+  // The entrance flight belongs on the mesh, same as `AnchoredSurface` — left
+  // in the DOM those keyframes cost one paint and one upload per frame
+  // (measured 2026-08-01: 19 per 150ms transition, versus 2 through the
+  // conductor). The apply is the anchored one with the pivot arithmetic
+  // collapsed: `.ui-detached` pins the content to the canvas origin and the
+  // canvas is sized to hug it, so the content's centre IS the mesh's centre
+  // and scaling about either is the same motion. No pivot term also means no
+  // `getBoundingClientRect` here — which would be wrong anyway once outside a
+  // flight (see the header note), and the conductor can call apply after the
+  // element is gone.
+  //
+  // This sits ON the size-hugging path, and deliberately does not touch it:
+  // the conductor parks the DOM at its fully-materialized pole, and `measure`
+  // reads `offsetWidth`, which never saw the transform in the first place —
+  // so a mid-flight remeasure (a menu filtering itself down) still lands on
+  // the layout box.
+  const flightGroup = useRef<Group>(null)
+  const onFlightRef = useLatest(onFlight)
+  useAnimationConductor(host, (v, done) => {
+    const g = flightGroup.current
+    if (!g) return
+    g.scale.setScalar(v.scale)
+    g.position.set(v.x / px, -v.y / px, 0) // DOM y grows down; world y up
+    g.traverse((o) => {
+      const mat = (o as Mesh).material
+      if (mat && !Array.isArray(mat)) mat.opacity = v.opacity
+    })
+    onFlightRef.current?.(v, done)
+  })
+
   return (
     <group {...groupProps}>
       {/* Empty means invisible, not unmounted: tearing the Surface down would
@@ -141,7 +182,7 @@ export function FloatingSurface({
           still has content to show. `hitTest="content"` already makes an empty
           layer inert to the raycaster, so this is purely about not drawing a
           transparent quad nobody can see. */}
-      <group visible={size !== null}>
+      <group ref={flightGroup} visible={size !== null}>
         <Surface
           label={label}
           width={w}

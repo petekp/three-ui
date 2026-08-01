@@ -1747,6 +1747,58 @@ difference between knowing and assuming. (Left as noted debt: that
 projection probably ought to clamp. It predates this pass, and inventing a
 fix mid-refactor muddies the diff.)
 
+## the flight debt — the detached surface joins the conductor
+
+The seam pass left one number on the table: opening the popover on the
+detached surface cost 19 paints a transition where the anchored layer's
+Select cost 2, because `FloatingSurface` had never been routed through the
+animation conductor. The change itself is the anchored apply with the
+arithmetic collapsed. `AnchoredSurface` pivot-corrects because CSS scales
+about the content's box, up near the trigger, while a group scales about
+its own origin at the panel's centre. On a detached layer there is nothing
+to correct: `.ui-detached` pins the content to the canvas origin and the
+canvas is sized to hug it, so the content's centre *is* the mesh's centre
+and the pivot term is identically zero. Scale, translate, opacity-traverse,
+done — and no `getBoundingClientRect`, which the file's own header warns
+about for other reasons.
+
+The verification is where the evening went. With the conductor
+demonstrably flying — 35 frames of trace wearing the sampled curve,
+entrance from scale 0.955 / y −7.2 / opacity 0.1, exit landing at 0.95 /
+0 / 0 — the paint counter still read 19. Enumerating
+`document.getAnimations()` mid-flight told it straight: the `enter`
+animation on the content sat `paused` (the conductor's signature), and
+next to it *six CSS transitions* ran on the Apply button. Border colours
+to `--ring`, box-shadow from `none` to a 3px ring, outline-width 3→1px,
+all at 150ms. That's the focus ring materializing. Radix autofocuses the
+first tabbable on open — the Apply button — and shadcn's Button carries
+`transition-all`, so the ring *fades in*, one paint per frame, for
+exactly the duration of the entrance it was hiding under. Two per-frame
+paint sources sharing a 150ms window count once per frame; seizing the
+keyframes changed the measurement by nothing at all.
+
+Suppress that one transition and the A/B comes clean under an otherwise
+identical probe: 19 open / 21 close before, **3 / 4** after, right in the
+anchored layer's band. Content resize while open (the size-hugging
+realloc path this shipped worrying about) is untouched — the conductor
+parks the DOM at its fully-materialized pole and `measure` reads
+`offsetWidth`, which never saw a transform in the first place. Apply
+mid-open still bumps `width 360 → 380`, zero source errors, clean close.
+The detached surface also gained the `onFlight` diagnostics prop, and the
+lab's `__lab009` hook a `detachedTrace`, so the next probe can read a
+flight back without racing the render loop.
+
+The ring itself stays, noted as its own seam. It isn't a probe artifact:
+forwarded pointer events are untrusted, so Chrome's input-modality
+heuristic doesn't hear them, treats Radix's script autofocus as
+keyboard-ish, and `:focus-visible` matches — every popover open pays ~18
+frames of ring fade on a page that would only pay them for keyboard
+users. That's shadcn behaving correctly downstream of a modality signal
+the forwarder doesn't yet speak. Whether it *should* — whether a
+forwarded pointerdown ought to count as pointer modality for the focus
+that follows — is a real question about the event bridge, not a paint
+bug, and it goes in the queue rather than in this diff.
+
 The rest of the verification was the ladder itself, because a refactor of a
 focus manager that typechecks proves nothing. Canvas → `scene`, Tab → `unit`,
 Enter descends into all four groups that have tabbable interiors and

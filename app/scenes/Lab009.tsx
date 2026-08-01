@@ -79,7 +79,26 @@ interface FlightSample {
   done: boolean
 }
 type Lab009Window = Window & {
-  __lab009?: { recording: boolean; trace: FlightSample[] }
+  __lab009?: {
+    recording: boolean
+    trace: FlightSample[]
+    detachedTrace: FlightSample[]
+  }
+}
+
+// Append a flight frame to one of the hook's traces, if a probe is listening.
+function recordInto(key: 'trace' | 'detachedTrace') {
+  return (v: MotionValue, done: boolean) => {
+    const hook = (window as Lab009Window).__lab009
+    if (!hook?.recording) return
+    hook[key].push({
+      t: performance.now(),
+      scale: v.scale,
+      y: v.y,
+      opacity: v.opacity,
+      done,
+    })
+  }
 }
 
 // The classic shadcn "Create project" card — recognizable on sight, which
@@ -279,19 +298,13 @@ function FloatingPanel({ position, rotation, chrome, detached }: {
   // the layer mesh actually wore, frame by frame, so a probe can read a
   // flight back without racing the render loop.
   useEffect(() => {
-    ;(window as Lab009Window).__lab009 = { recording: false, trace: [] }
+    ;(window as Lab009Window).__lab009 = {
+      recording: false,
+      trace: [],
+      detachedTrace: [],
+    }
   }, [])
-  const record = (v: MotionValue, done: boolean) => {
-    const hook = (window as Lab009Window).__lab009
-    if (!hook?.recording) return
-    hook.trace.push({
-      t: performance.now(),
-      scale: v.scale,
-      y: v.y,
-      opacity: v.opacity,
-      done,
-    })
-  }
+  const record = recordInto('trace')
 
   return (
     <group position={position} rotation={rotation} ref={panelGroup}>
@@ -377,6 +390,7 @@ export function Lab009() {
       <FloatingSurface
         label="lab009-detached"
         onHost={setDetached}
+        onFlight={recordInto('detachedTrace')}
         position={[-1.02, 1.02, 0.5]}
         rotation={[0, 0.34, 0]}
       />
