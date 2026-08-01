@@ -11,6 +11,7 @@ import { Lab008 } from './scenes/Lab008'
 import { Lab009 } from './scenes/Lab009'
 import { ProbeScaleApp } from './scenes/ProbeScale'
 import { ProbeFocusApp } from './scenes/ProbeFocus'
+import { ProbeLayoutApp } from './scenes/ProbeLayout'
 import { detectHtmlInCanvas, FocusScene } from 'three-ui'
 
 type LabId = '001' | '002' | '003' | '004' | '005' | '006' | '008' | '009'
@@ -53,9 +54,14 @@ export default function App() {
     () => new URLSearchParams(window.location.search).get('focusprobe') === '1',
     [],
   )
+  const layoutProbe = useMemo(
+    () => new URLSearchParams(window.location.search).get('layoutprobe') === '1',
+    [],
+  )
   const [lab, setLab] = useState<LabId>('006')
 
   if (focusProbe) return <ProbeFocusApp />
+  if (layoutProbe) return <ProbeLayoutApp />
   if (probe) return <ProbeScaleApp {...probe} />
 
   return (

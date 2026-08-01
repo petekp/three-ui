@@ -82,6 +82,23 @@ export { Slider, type SliderProps } from './primitives/controls/Slider'
 
 // ── Layout ───────────────────────────────────────────────────────────────
 export { arcLayout, type ArcSlot, type ArcLayoutOptions } from './lib/arcLayout'
+// The layout oracle: author panel arrangement as real CSS in a hidden rig,
+// and the scene wears the boxes. DOM stays the layout authority.
+export {
+  DomLayout,
+  LayoutSlot,
+  type DomLayoutProps,
+  type LayoutSlotProps,
+  type LayoutSlotBox,
+} from './primitives/DomLayout'
+export {
+  createLayoutOracle,
+  paneWorldPose,
+  type LayoutOracle,
+  type LayoutOracleOptions,
+  type PaneRect,
+  type PanePose,
+} from './lib/layoutOracle'
 
 // ── Below the r3f layer ──────────────────────────────────────────────────
 // `Surface` is the react-three-fiber wrapper; this is the engine underneath

@@ -947,3 +947,64 @@ the untrusted probe path would stay wrong regardless.
 popover moves nothing — unclaimed (`defaultPrevented` false after full
 propagation), unacted. Pre-existing, orthogonal to the mirror, filed under
 the #36 umbrella with the two-hop tooltip transit.
+
+## 25. The DOM is the layout authority — a hidden rig, read back as poses (2026-08-01, layout oracle)
+
+**Context.** A scene of panels needs the answers a 2D app gets from CSS:
+column widths, gap arithmetic, what collapses when room runs out. Every
+consumer already speaks flex/grid, and the style engine is the best
+layout solver ever shipped. Reinventing it in world units (constraint
+solvers, hand-rolled flex) would be worse *and* different — a port of a
+2D app would lay out almost-but-not-quite like the page it came from.
+**Decision.** `createLayoutOracle` parks a hidden container at the house
+parking spot (fixed, origin, `z-index:-1`) with one deliberate difference
+from a texture source: `visibility: hidden`. A source must PAINT, so it
+parks visibly; the rig must only LAY OUT, and visibility suppresses
+painting alone — layout runs, `offsetWidth` answers, transitions tick
+and fire events, zero pixels produced. Panes are marked `data-pane="id"`
+(shadcn owns `data-slot`), measured by `offsetWidth`/`offsetHeight` and
+offsetParent-chain walking (never `getBoundingClientRect` — #22's
+transform-baking trap), and projected center-origin/y-up by
+`paneWorldPose`. `<DomLayout html width height px>` wears the rig in
+r3f; `<LayoutSlot pane>` renders its box as a positioned group and hands
+children the CSS-px size (→ `SurfaceApp width/height`) plus world size
+(→ geometry).
+**Change detection is three signals**, none of them the banned kind (#3
+bans repaint-loop machinery in Surface's paint path; these answer "what
+exists / how big", which no paint signal reports, and the rig repaints
+nothing by construction):
+ResizeObserver on rig + panes (almost every reflow resizes something);
+MutationObserver childList/class/style (position-only reflows —
+`justify-content` moves panes without resizing any — and pane
+add/remove); transition/animation events keying an rAF sampling window
+(a transitioned layout property moves boxes every frame with no discrete
+signal; `transitionrun`→`end`/`cancel` bounds the loop, so idle rigs
+cost nothing).
+**The responsive mechanism is container queries.** The rig is NOT a
+viewport — `vw`/`@media` stay page-global (the same platform fact as
+#21's canvas) — so the rig declares `container-type: size` and
+`@container` (and Tailwind v4's `@sm:`/`@lg:` variants) resolve against
+the rig's authored size. A pane a query `display:none`s reads as a zero
+box and is reported ABSENT: its slot renders no panel, the mesh
+dematerializes.
+**Verified** (layoutprobe, Chrome 150): four-pane app shell — pixel-exact
+box↔pose parity (main column = 1280−240−320−48gap−64pad = 608, nested
+offsets accumulate); sidebar collapse under `transition: width 350ms` =
+39 distinct poses streamed, main pane growing by exactly the released
+168px; **cost model: resizing panes pay ~1 paint+upload/frame (the
+content genuinely rewraps — that's the payoff, not a defect), panes the
+reflow doesn't touch pay 0, position-only motion is free (group
+transform)**; rig 1280→900 hides the log pane by container query with
+`window.innerWidth` untouched, back to 1280 rematerializes it; idle = 0
+paints on every pane, 0 errors.
+**Rejected.** (a) *World-unit layout DSL* — a second layout language that
+diverges from the one the ported components were written against. (b)
+*Reading boxes from the texture source itself* — sources are per-panel
+and already laid out; the arrangement BETWEEN panels is precisely what no
+single source knows. (c) *rAF-polling the rig permanently* — the
+transition-event window does the same job only while something moves.
+**Open.** Animated pane *resizing* costs a GL texture realloc per frame
+per resizing pane (immutable storage, decisions #10). Fine at app-shell
+scale (3 panes at 120Hz measured clean); a wall of resizing panels would
+want a during-motion strategy (scale the mesh, re-raster at settle) —
+deferred until a scene actually hits it.

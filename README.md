@@ -1876,3 +1876,48 @@ first" attached to it; measuring is done, the number is 19 versus 2, and it
 lands on the `fit="content"` texture-realloc path, which is the riskiest code
 in the floating family. That makes it its own increment, not a rider on a
 cleanup pass.
+
+## the oracle — CSS lays out the room
+
+Board item #49, the oldest unstarted seam on the list, and the one the
+Lab 010 handoff says everything else leans on. The question it answers:
+when a scene holds a sidebar, a main column, a composer and a log, who
+decides where they go? Every answer we could hand-roll in world units is
+a worse copy of the one shipping in the style engine — and a ported 2D
+app would lay out *almost* like the page it came from, which is the
+uncanny valley of ports.
+
+So the DOM stays the layout authority, literally. `createLayoutOracle`
+parks a hidden container at the house parking spot with one deliberate
+difference from a texture source: `visibility: hidden`. A source must
+paint, so it parks visibly behind the page; the rig must only lay out,
+and visibility suppresses exactly the painting half — layout runs,
+`offsetWidth` answers, transitions tick, zero pixels ever produced. You
+author the arrangement as markup — flex, grid, gap, the whole engine —
+mark each panel's spot `data-pane="side"`, and `<LayoutSlot pane="side">`
+wears the resulting box in the scene: positioned at the pane's centre,
+children handed the CSS-px size for their Surface and the world size for
+their geometry.
+
+The probe banked four findings. Parity is pixel-exact — the main column
+measured 1280−240−320−48−64 = 608 and the mesh stood at precisely that
+centre. A `transition: width 350ms` on the sidebar streamed 39 distinct
+poses: the collapse is a *glide*, panels sliding and the freed 168px
+flowing into the main column frame by frame. The cost model came out the
+way you'd want: panes the reflow resizes pay one paint per frame —
+because their content is genuinely rewrapping, which is the payoff —
+and panes it doesn't touch pay zero; pure position moves are free, being
+group transforms. And the responsive story: the rig is not a viewport
+(`vw` and `@media` stay page-global, the same platform fact the viewer
+slab hit), so the rig declares `container-type: size` and CONTAINER
+queries are the mechanism — shrink the rig to 900 and the log pane's
+`@container` rule `display:none`s it, the oracle reports it absent, and
+its panel dematerializes from the scene while `window.innerWidth` never
+moves. Tailwind v4 speaks this natively as `@sm:`/`@lg:` variants, so a
+responsive 3D layout is authored in the same vocabulary as a responsive
+page.
+
+Decisions #25 has the full argument. The one open cost: an animated
+*resize* pays a GL realloc per frame per resizing pane — clean at
+app-shell scale, deferred as a during-motion strategy until a wall of
+panels actually hits it.
