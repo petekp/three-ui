@@ -51,6 +51,8 @@ export interface DomTextureSource {
   repaint: () => void
   /** Current texture scale (backing-store px per CSS px). */
   scale: () => number
+  /** Current CSS size of the subtree's layout box. */
+  size: () => readonly [number, number]
   /**
    * Re-rasterize the subtree at `width×k`/`height×k` backing-store pixels.
    * drawElementImage replays paint records — vector draw commands — so this
@@ -61,6 +63,15 @@ export interface DomTextureSource {
    * plumbing.
    */
   setScale: (k: number) => void
+  /**
+   * Re-layout the subtree at a new CSS size, moving the canvas's CSS box and
+   * its backing store together so the effective raster scale is unchanged.
+   * Unlike `setScale` this DOES relayout the subtree — that is the point: a
+   * content-fitted Surface hugs whatever the DOM measured. Rides the same
+   * onpaint path, so callers holding a texture must mark the realloc exactly
+   * as they do for `setScale` (decisions #10).
+   */
+  setSize: (w: number, h: number) => void
   /** True once at least one paint has succeeded. */
   painted: () => boolean
   /**
@@ -184,6 +195,7 @@ export function createDomTextureSource(
     element,
     repaint: () => canvas.requestPaint(),
     scale: () => scale,
+    size: () => [width, height] as const,
     setScale: (k: number) => {
       const next = clampScale(k)
       if (next === scale) return
@@ -194,6 +206,23 @@ export function createDomTextureSource(
       // the requested paint below completes with the fresh raster.
       canvas.width = Math.max(1, Math.round(width * next))
       canvas.height = Math.max(1, Math.round(height * next))
+      canvas.requestPaint()
+    },
+    // Note `width = w` / `height = h`: the parameters are the closed-over
+    // source of truth that setScale multiplies, so a resize that fails to move
+    // them is silently undone by the very next LOD tier swap (measured — the
+    // canvas snapped back to its birth size while its CSS box stayed put, and
+    // the two stayed diverged for good).
+    setSize: (w: number, h: number) => {
+      const nw = Math.max(1, Math.round(w))
+      const nh = Math.max(1, Math.round(h))
+      if (nw === width && nh === height) return
+      width = nw
+      height = nh
+      canvas.style.width = `${nw}px`
+      canvas.style.height = `${nh}px`
+      canvas.width = Math.max(1, Math.round(nw * scale))
+      canvas.height = Math.max(1, Math.round(nh * scale))
       canvas.requestPaint()
     },
     painted: () => ok,

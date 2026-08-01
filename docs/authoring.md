@@ -81,6 +81,33 @@ declaring themselves in CSS: they get the page number and size themselves
 wrong. Radix's `--radix-*-content-available-height` is the live example
 (`select.tsx`, `dropdown-menu.tsx`).
 
+## Where a portaled thing goes: three containers
+
+Floating content is aimed with one lever — the `container` prop — and the
+choice of container is the whole decision. Nothing else changes.
+
+| Aim it at | Idiom | Use for |
+|---|---|---|
+| a panel's layer (`.ui-layer` on an overlay plane) | **anchored** — a decal in front of the panel it belongs to | Select, Tooltip, DropdownMenu: anything whose meaning is "attached to this control" |
+| `CameraChrome`'s slab | **at the eye** — spans the frustum, one source px per screen px | Toasts, modals: anything anchored to the viewer rather than to an object |
+| a `FloatingSurface` | **detached** — its own object at its own pose in the room | content that should be furniture: orbit-able, occluding, casting shadows |
+
+The first two keep the positioner's answer, because their canvas shares an
+origin with the thing being positioned against. A `FloatingSurface`
+**revokes** it (`.ui-detached` in `ui.css`) and takes the pose from the
+scene graph instead, so `side` / `align` / `sideOffset` / `avoidCollisions`
+are still authored and are silently ignored. Its canvas is sized to the
+content, so the content root's size is written for it — this is the one
+place you do *not* declare your own pixel size ([decisions.md
+#22](decisions.md)).
+
+Dismissal survives detachment for click-driven layers, because
+pointer-down-outside is a containment question about the DOM tree and
+detaching doesn't touch the DOM tree. **Hover**-driven layers reason about
+the swept region between trigger and content in page coordinates; that
+region is meaningless once the two are separate meshes, so don't detach a
+tooltip or a hover menu yet.
+
 ## Media
 
 Don't route video through `drawElementImage` — the compositor owns those

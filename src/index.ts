@@ -8,6 +8,10 @@
 // every constant they hide was measured before it was hidden.
 
 export { Surface, type SurfaceProps } from './primitives/Surface'
+export {
+  FloatingSurface,
+  type FloatingSurfaceProps,
+} from './primitives/FloatingSurface'
 export { SurfaceLayer, type SurfaceLayerProps } from './primitives/SurfaceLayer'
 export { MomentumCard } from './primitives/MomentumCard'
 

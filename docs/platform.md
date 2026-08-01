@@ -192,6 +192,42 @@ vendored shadcn set exactly two files consume available-height —
 `select.tsx:71` and `dropdown-menu.tsx:45` — and there are no `vh`/`vw`
 literals anywhere.
 
+## The drawn root is rasterized at its own layout box (2026-07-31, lab 009)
+
+`ctx.drawElementImage(element, x, y)` rasterizes `element`'s paint record at
+`element`'s size. That sounds obvious and is easy to satisfy by accident —
+a `<div>` full of ordinary flow content grows to fit it, and every Surface
+content root in this repo happens to declare `style.width`/`style.height`
+anyway (the house rule in [authoring.md](authoring.md)).
+
+It stops being automatic the moment the subtree is **out of flow**. The
+section above says a parked canvas is the containing block for `position:
+fixed` descendants — so those descendants lay out against the *canvas*, and
+contribute **nothing** to their DOM parent's box. A drawn root whose
+children are all `position: fixed` measures `0` high no matter how much is
+inside it, and rasterizes an empty rectangle.
+
+Measured on the detached floating layer: the container held a fully laid
+out 288×122 popover, the canvas reported **21 clean paints and zero
+errors**, and every pixel of the source canvas read `[0, 0, 0, 0]`. There is
+no error signal for this — `drawElementImage` did exactly what it was asked
+and drew a zero-size element. Everything downstream (mesh visible, material
+fine, texture uploaded at the right dimensions) looks perfectly healthy.
+
+**Rule.** Any element you hand to `drawElementImage` must carry explicit
+pixel dimensions. For a normal content root that is house style; for a
+portal container it is load-bearing, and the size has to be *declared* from
+whatever measured the content rather than *derived* from layout — there is
+nothing in flow to derive it from ([decisions.md #22](decisions.md)).
+
+**Corollary for measurement.** Measure that content with
+`offsetWidth`/`offsetHeight`, not `getBoundingClientRect()`. The rect
+includes transforms, and a floating layer's first frame is mid-entrance:
+measured at frame 0 under `zoom-in-95` + `slide-in-from-top-2`, the rect
+read `273.6 × 115.9` against a layout box of `288 × 122`. Sizing a canvas
+from the rect bakes the animation's first frame into the texture
+permanently.
+
 ## Scale (probe results, 2026-07-29)
 
 Harness: `?probe=N&live=1&anim=K&w=&h=` + `window.__probe.run(seconds)` —

@@ -1511,3 +1511,141 @@ would happily move selection out from under an open modal.
 Open, and going to the floating-layer kit: the chrome is a single layer,
 so two stacked modals — or a modal that ought to sit above the toast
 stack — have no z-arbitration yet.
+
+### Increment 4 — furniture, not decals
+
+There were two places a portaled thing could go, and both of them were
+somebody else's coordinate system. Increment 2 gave a popover its own
+Surface on an overlay plane in front of the panel, which works because of
+a coincidence I've since come to distrust: the layer canvas is the same
+size and origin as the panel's, so Floating UI's page coordinates are
+*already* panel-local and land in exactly the right place with no math.
+Increment 3 aimed the same one-line lever at the viewer instead. Both are
+decals. Everything either one holds is pinned to a plane it didn't choose.
+
+This increment is the third place: the room. A popover that stands a foot
+in front of its card, that you can orbit around, that occludes the card
+from the side and casts a shadow on the floor. Not a layer on an object —
+an object.
+
+The way to get there is to stop asking the positioner for help. There is
+no 2D offset that could be right once the trigger and the content are
+separate meshes at arbitrary poses, so the answer isn't a better offset,
+it's revoking placement entirely:
+
+```css
+.ui-detached > * {
+  position: fixed !important;
+  inset: 0 auto auto 0 !important;
+  transform: none !important;
+}
+```
+
+Three lines of CSS, and the content falls to its canvas's origin. Then
+size the canvas to hug it, and where the thing *goes* becomes an ordinary
+question about where you put a mesh. I checked the first half before
+building anything: zeroing the wrapper moved the content from canvas
+(36,133) to (0,0), a magenta dye read `[255,0,255,255]` at the origin and
+`[0,0,0,0]` where it used to be, and the move cost exactly one paint. It's
+a paint-record change, so upload-on-paint carries it for free.
+
+The `!important` is doing real work in two directions. Radix rebuilds the
+popper wrapper on every open, so anything written inline once doesn't
+survive a close and reopen; and Floating UI rewrites its inline transform
+on every `autoUpdate` tick, which is to say continuously. With the rule
+active the inline style reads `translate(36px, 133px)` and the computed
+style reads `none`, which is a fairly satisfying way to lose an argument
+with a library. Note it targets the *wrapper*, not the content — the
+entrance animation transforms the content itself, so it's untouched and
+still gets seized by the animation conductor.
+
+Then I lost an evening to a bug with no error message.
+
+Everything measured perfectly. Container class right, computed transform
+`none`, layout box 288×122, content at canvas (0,0), canvas CSS 288×122,
+backing 432×183, quad 1.44×0.61, mesh on screen at (127,241), whole parent
+chain visible, material fine, texture uploaded at the right dimensions, 21
+paints, zero errors, no GL errors. And the slab rendered as absolutely
+nothing. When I finally sampled the source canvas itself instead of
+reasoning about the things downstream of it, every pixel read
+`[0,0,0,0]` — the canvas was painting, cleanly and repeatedly, and
+painting nothing.
+
+The cause is a sentence I could have written down two increments ago and
+hadn't: `drawElementImage` rasterizes an element at *its own layout box*.
+Every child of a detached layer is `position: fixed`, so every child is out
+of flow, so the container measures zero high no matter what's inside it.
+The compositor did exactly what I asked and drew a zero-size element,
+which is not an error and has no signal. Every other Surface in the repo
+happens to declare `style.width`/`style.height` on its content root as a
+matter of house style; this is the first place where that style is
+load-bearing, and the fix is one line each way — write the host's size in
+the same breath as measuring the content. Here the size is a *declaration
+for the rasterizer*, not a consequence of layout, because there is nothing
+in flow to derive it from.
+
+The measurement itself has a trap I did fall into and caught early, which
+felt like a small victory. `getBoundingClientRect()` includes transforms.
+A floating layer's first frame is mid-entrance, and at frame 0 the rect
+read 273.6 × 115.9 against a real layout box of 288 × 122 — `zoom-in-95`
+and `slide-in-from-top-2`, about to be baked into the canvas size
+permanently. That ships as "popovers are sometimes five percent small,"
+intermittently, forever. `offsetWidth`/`offsetHeight` are the
+transform-immune layout box and are the only correct measure here.
+
+Fitting a canvas to measured content meant Surface's `width`/`height` had
+to become live, and specifically had to become a *re-layout* rather than a
+*teardown*. They'd been sitting in the creation effect's dependency array,
+so changing either one destroyed the source and built a new one — taking
+focus, form values, selection, and any second React root mounted inside it
+along with it. Fine for a size you author once; catastrophic for a size
+that's measured and therefore changes constantly.
+
+Underneath that was the one bug in this increment that genuinely scared
+me, because it hid. `createDomTextureSource` closes over `width` and
+`height`, and the LOD tier ladder's `setScale` multiplies *those*, not the
+canvas attributes. So a resize that moved only `canvas.width` and
+`canvas.style.width` looked completely correct — until the next tier swap,
+whenever that happened to be, at which point the backing store snapped
+back to its birth size against a CSS box that had moved on, and the two
+stayed diverged for good. An intermittent corruption whose trigger is the
+camera moving. `setSize` has to move the closed-over parameters, and
+there's now a test called `a resize SURVIVES a subsequent tier swap` that
+I proved by deleting the two assignments and watching four tests go red.
+
+What I'd budgeted the most time for turned out to need nothing at all,
+for the second increment running. The plan said detachment forces us to
+own dismissal, because Radix's grace polygon and hull reason in page
+coordinates and those stop meaning anything once the trigger and content
+are separate objects. All three cases already work. Click empty space:
+nothing was hit, so Surface never stops the canvas's own `pointerdown`,
+and it reaches Radix's document listener → dismissed. Click a *different*
+Surface: the forwarded synthetic `pointerdown` is dispatched on that
+Surface's parked DOM, bubbles to `document`, target is outside the content
+→ dismissed. Click inside the detached popover: stays open, and the button
+fires — `width 360` became `width 380`, with `data-hover` and
+`data-active` landing on it through the mesh.
+
+The reason is worth keeping. *Containment* dismissal asks a question about
+the DOM tree, and detaching a layer doesn't touch the DOM tree — the
+content is still inside the container it was portaled into, wherever that
+container's pixels ended up in the world. *Geometric* dismissal — the
+swept region between a trigger and its content — asks a question about the
+plane, and detaching destroys the plane. Click-driven layers are all
+containment. So the ray-based answer is still owed, but only by hover-driven
+detached layers, which narrows it from "a thing this increment must
+build" to "a thing the floating-layer kit should build."
+
+Last thing, because it rides the riskiest path in the codebase: I grew the
+content at runtime to watch the whole chain re-fit. Content 288×122 →
+288×234, canvas backing 432×183 → 432×351, quad 1.44×0.61 → 1.44×1.17,
+texture image dimensions moving with it, the new region rasterizing
+correctly out of storage that had to be reallocated after the fact — in
+two paints. A plane grows from its centre, so a detached surface that
+gains content expands both ways rather than downward. I think that's
+right: the pose is the object's centre, and furniture that grew out from
+under its own position would be worse.
+
+Open: N detached surfaces bring back the reading-order problem from lab
+007 across parked canvases, and `side`/`align`/`avoidCollisions` are
+silently ignored in detached mode rather than warned about.

@@ -39,10 +39,25 @@ in `docs/` — **read `docs/platform.md` before touching
   `pointer-events: none` with `auto` on its children — `.ui-layer > *` in
   `ui.css` — and note `createDomTextureSource` re-roots the cascade to
   `auto`, because the parking canvas's `none` inherits (decisions.md #20).
+- **Every element handed to `drawElementImage` must declare explicit pixel
+  dimensions.** It rasterizes an element at its *own layout box*, and a
+  container whose children are all `position: fixed` (any portal target, so
+  every floating layer) has nothing in flow to size it — it measures zero
+  and draws an empty rectangle with clean paints and no error. Measure the
+  content with `offsetWidth`/`offsetHeight`, never
+  `getBoundingClientRect()`: the rect includes the entrance transform and
+  bakes `zoom-in-95` into the texture (platform.md, decisions.md #22).
+- **`createDomTextureSource`'s `setSize` must move the closed-over
+  `width`/`height`, not just the canvas attributes** — `setScale` multiplies
+  the closed-over pair, so a resize that skips them is silently reverted by
+  the next LOD tier swap and stays diverged. Guarded by
+  `htmlInCanvas.test.ts` (decisions.md #22).
 - **Don't add repaint loops, MutationObservers, or dirty-flag heuristics
   to `Surface`.** `paint="auto"` is passive on purpose: the compositor's
   self-firing `onpaint` is the change signal (`paintCount`). Measured
-  alternatives were all worse (decisions.md #3).
+  alternatives were all worse (decisions.md #3). (`FloatingSurface`'s
+  observers are not this: they answer *what exists* and *how big*, which the
+  compositor never reports, and neither one triggers a repaint.)
 - **Drag math: `e.ray` ∩ drag-plane, never `e.point`; handlers on a
   static object**, moving parts only gate drag-start (decisions.md #4).
 - **Media never goes through `drawElementImage`** — use a
@@ -59,7 +74,10 @@ in `docs/` — **read `docs/platform.md` before touching
   `AGENT_BROWSER_EXECUTABLE_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`
   headed, `--args "--enable-features=CanvasDrawElement,--disable-backgrounding-occluded-windows,--disable-renderer-backgrounding"`.
   Check the HUD chips (`drawElementImage ✓`) before trusting results —
-  the daemon relaunches Chrome *without* flags if the window closes.
+  the daemon relaunches Chrome *without* flags if the window closes. Pass
+  `--session <name>` on **every** call (right after `agent-browser`), or
+  another client sharing the daemon will steal the tab mid-run. Multi-line
+  probes go in via `eval --stdin < probe.js`; there is no `--file`.
 - Perf: `?probe=N&live=1&anim=K&w=&h=` + `await __probe.run(5)`.
   Idle Surfaces must stay at 0 paints/s; budget ~64–96 concurrently
   painting sources at 120Hz.

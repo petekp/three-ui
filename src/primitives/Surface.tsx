@@ -178,6 +178,12 @@ export function Surface({
   hitTestRef.current = hitTest
   const mirrorURef = useRef(mirrorU)
   mirrorURef.current = mirrorU
+  // Size is read through refs at creation so it can stay OUT of the
+  // creation effect's deps — see the setSize effect below for why.
+  const widthRef = useRef(width)
+  widthRef.current = width
+  const heightRef = useRef(height)
+  heightRef.current = height
 
   /**
    * The hit region. With `hitTest="content"` the quad is only intersected
@@ -260,7 +266,7 @@ export function Surface({
   }, [texture])
 
   useEffect(() => {
-    const source = createDomTextureSource(html, width, height, {
+    const source = createDomTextureSource(html, widthRef.current, heightRef.current, {
       label,
       // Fixed resolution starts at its final scale; auto/range starts at
       // the ladder tier nearest 1× and lets the first LOD evaluations
@@ -313,7 +319,7 @@ export function Surface({
       setTexture(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [html, width, height, mirrorU, paint])
+  }, [html, mirrorU, paint])
 
   // Fixed-resolution changes re-raster in place — never recreate the source
   // (that would destroy live DOM state: focus, form values, selection).
@@ -326,6 +332,27 @@ export function Surface({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolution, texture])
+
+  // Size changes re-LAYOUT in place, for the same reason resolution re-rasters
+  // in place: `width`/`height` used to sit in the creation effect's deps, so
+  // resizing a Surface tore its source down and built a new one — and with it
+  // went focus, form values, selection, and any second React root mounted
+  // inside. A Surface whose size is *measured* rather than authored resizes
+  // constantly, so that had to stop being a teardown.
+  //
+  // The realloc mark is the same one setScale uses: three allocates
+  // CanvasTexture storage immutably at first-upload dimensions, so any change
+  // to the backing store needs a dispose on the first upload after the
+  // post-resize paint lands (decisions #10).
+  useEffect(() => {
+    const source = sourceRef.current
+    if (!source || !texture) return
+    const [prevW, prevH] = source.size()
+    source.setSize(width, height)
+    const [nextW, nextH] = source.size()
+    if (nextW !== prevW || nextH !== prevH) reallocAfterRef.current = source.paintCount()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [width, height, texture])
 
   useFrame(() => {
     const source = sourceRef.current

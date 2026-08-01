@@ -11,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { useFrame, useThree } from '@react-three/fiber'
 import type { Group, Mesh, PerspectiveCamera } from 'three'
 import { toast } from 'sonner'
-import { FocusGroup, Surface } from '../index'
+import { FloatingSurface, FocusGroup, Surface } from '../index'
 import { useAnimationConductor } from '../primitives/useAnimationConductor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -314,9 +314,10 @@ function DeployCard() {
 // Every component here is still uncontrolled — the scene knows nothing about
 // what is open. That is the claim: `container` is the only addition, and the
 // layers figure out the rest by watching themselves.
-function FloatingCard({ container, chrome }: {
+function FloatingCard({ container, chrome, detached }: {
   container: HTMLElement
   chrome: HTMLElement | null
+  detached: HTMLElement | null
 }) {
   const [applied, setApplied] = useState(360)
   const onApply = () => setApplied((w) => w + 20)
@@ -335,7 +336,14 @@ function FloatingCard({ container, chrome }: {
                 Configure
               </Button>
             </PopoverTrigger>
-            <PopoverContent id="l9-pop-content" container={container}>
+            {/* The one component in this card aimed at a DETACHED surface.
+                Everything else still portals into the anchored layer, so the
+                two idioms stand side by side: the Select and Tooltip are
+                decals on this panel, and this popover is its own object out
+                in the room. The only difference is which container it names —
+                `side`/`align`/`sideOffset` are still authored here and are
+                simply ignored once placement is revoked. */}
+            <PopoverContent id="l9-pop-content" container={detached ?? container}>
               <PopoverHeader>
                 <PopoverTitle>Dimensions</PopoverTitle>
                 <PopoverDescription>Set the layer size.</PopoverDescription>
@@ -432,10 +440,11 @@ function FloatingCard({ container, chrome }: {
 // then only when its contents change. What it buys: real depth. The popover
 // is a slab in front of the card — it casts a shadow on it, catches its own
 // specular, and occludes it from the side.
-function FloatingPanel({ position, rotation, chrome }: {
+function FloatingPanel({ position, rotation, chrome, detached }: {
   position: [number, number, number]
   rotation: [number, number, number]
   chrome: HTMLElement | null
+  detached: HTMLElement | null
 }) {
   const panelGroup = useRef<Group>(null)
   const layerGroup = useRef<Group>(null)
@@ -539,7 +548,11 @@ function FloatingPanel({ position, rotation, chrome }: {
       <FocusGroup id="shadcn-floating" order={1} objectRef={panelGroup}>
         <SurfaceApp
           content={
-            <FloatingCard container={layerHost} chrome={chrome} />
+            <FloatingCard
+              container={layerHost}
+              chrome={chrome}
+              detached={detached}
+            />
           }
           label="lab009-floating"
           width={PANEL_W}
@@ -579,6 +592,11 @@ export function Lab009() {
   // The chrome slab's portal container, published once it mounts. Everything
   // viewer-owned aims here: the Dialog's portal, and (implicitly) any toast.
   const [chrome, setChrome] = useState<HTMLElement | null>(null)
+  // The detached surface's container. It lives at the SCENE root, not inside
+  // the panel — which is the whole claim. An anchored layer is a decal that
+  // has to be parented to the thing it decorates; a detached one is furniture,
+  // and the card that fills it never learns where it ended up.
+  const [detached, setDetached] = useState<HTMLElement | null>(null)
 
   return (
     <>
@@ -610,6 +628,19 @@ export function Lab009() {
         position={[2.05, 1.5, 0.25]}
         rotation={[0, -0.45, 0]}
         chrome={chrome}
+        detached={detached}
+      />
+
+      {/* The detached popover, standing on its own in the room. Its content
+          comes from a card two objects away, through nothing but a container
+          reference — no coordinate, no projection, no parent in common except
+          the scene itself. Move this `position` and the popover moves; the
+          card does not notice. */}
+      <FloatingSurface
+        label="lab009-detached"
+        onHost={setDetached}
+        position={[-1.02, 1.02, 0.5]}
+        rotation={[0, 0.34, 0]}
       />
 
       <ChromeLayer onHost={setChrome} />

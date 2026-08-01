@@ -129,6 +129,35 @@
   }
 }
 
+/* three-ui dialect: a DETACHED floating layer.
+ *
+ * An anchored layer (`.ui-layer`) is the same size and origin as the panel it
+ * belongs to, so a positioner's page coordinates land in exactly the right
+ * place for free — that coincidence is what made the anchored family cheap.
+ * A DETACHED layer gives up the coincidence on purpose: its content is its own
+ * object at its own pose in the scene, so there is no 2D offset that could be
+ * right, and the positioner's answer is not merely unnecessary but wrong.
+ *
+ * So placement is revoked, and the scene graph does it instead. Both mechanisms
+ * a positioner can use are covered: Floating UI writes `transform: translate()`
+ * on a `fixed; left:0; top:0` wrapper, and older/simpler ones write the offsets
+ * directly. Pinned at the origin, the content rasterizes at its canvas's
+ * top-left corner — which is what lets the Surface be sized to hug it.
+ *
+ * `!important` is load-bearing twice over: Radix rebuilds the wrapper on every
+ * open (so a one-shot inline write does not survive a close/reopen), and
+ * Floating UI rewrites its inline transform on every autoUpdate tick. Measured
+ * 2026-07-31: inline read `translate(36px, 133px)` while computed read `none`.
+ *
+ * Note this targets the WRAPPER, not the content — so the entrance animation
+ * (`zoom-in-95`, `slide-in-from-top-2`), which transforms the content itself,
+ * is untouched and still reaches useAnimationConductor. */
+.ui-detached > * {
+  position: fixed !important;
+  inset: 0 auto auto 0 !important;
+  transform: none !important;
+}
+
 /* three-ui dialect: FocusScene stamps data-focus on the unit root (the
  * Surface's source element). Outline, not box-shadow, so the card's own
  * shadow-sm survives; paint properties only. */

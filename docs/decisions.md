@@ -712,3 +712,114 @@ overlay doesn't actually cover.
 extract it once a second consumer exists). **Known gap:** the chrome slab
 is a single layer, so two stacked modals — or a modal that should sit above
 the toast stack — have no z-arbitration yet. That is #36.
+
+## 22. A detached layer revokes placement and is sized to its content (2026-07-31, lab 009)
+
+**Context.** #16 gives an anchored popover its own Surface on an overlay
+plane, and it works by a coordinate coincidence: the layer canvas is the
+same size and origin as the panel's, so a positioner's page coordinates are
+*already* panel-local. That coincidence is exactly what makes the layer a
+decal — everything it holds is pinned to one plane. #21 aimed the same
+one-line lever (`container`) at the viewer instead. What was left is
+content that belongs to neither the panel nor the eye, but to the **room**:
+a popover standing a foot in front of its card, orbiting with the scene,
+occluding it from the side.
+**Decision.** `FloatingSurface` is a portal container plus a Surface sized
+to whatever the container holds. It gives the coincidence up on purpose.
+Placement is **revoked** by a stylesheet rule rather than recomputed by us:
+
+```css
+.ui-detached > * {
+  position: fixed !important;
+  inset: 0 auto auto 0 !important;
+  transform: none !important;
+}
+```
+
+The content falls to the canvas's origin, the canvas is resized to hug it,
+and where the thing actually goes is then an ordinary matter of where you
+put the mesh. Consumers still author `side`/`align`/`sideOffset` — those
+props are simply ignored once placement is revoked, which is documented and
+not enforced.
+**Measured: revoking placement still rasterizes.** Zeroing the wrapper
+dropped content from canvas `(36, 133)` to `(0, 0)`; a magenta dye read
+`[255, 0, 255, 255]` at the origin and `[0, 0, 0, 0]` where it used to be,
+and the move cost **one** paint (`6 → 7`). It is a paint-record change, so
+upload-on-paint carries it with no plumbing.
+**`!important` is load-bearing twice over.** Radix rebuilds the popper
+wrapper on every open, so a one-shot inline write does not survive a
+close/reopen; and Floating UI rewrites the inline transform on every
+`autoUpdate` tick. Measured with the rule active: inline read
+`translate(36px, 133px)` while computed read `none`. The rule targets the
+**wrapper**, not the content — so the entrance animation, which transforms
+the content itself, is untouched and still reaches `useAnimationConductor`
+(#17).
+**The expensive finding: the drawn root must declare its own size.** Every
+child of a detached layer is `position: fixed`, hence out of flow, hence
+contributes nothing to the container's box. Left to layout the container
+measures zero and `drawElementImage` rasterizes an empty rectangle — with
+**21 clean paints, zero errors**, and a fully transparent source canvas.
+Nothing downstream complains, because nothing downstream is wrong. See
+[platform.md](platform.md). So `FloatingSurface` writes
+`host.style.width/height` in the same breath as measuring the content: here
+the size is a *declaration for the rasterizer*, not a consequence of layout.
+**Measure with `offsetWidth`, never `getBoundingClientRect()`.** Caught at
+entrance frame 0: rect `273.6 × 115.9` against a layout box of `288 × 122`,
+under `zoom-in-95` + `slide-in-from-top-2`. Sizing from the rect would have
+shipped as "popovers are sometimes 5% small," intermittently, forever.
+**Surface's `width`/`height` had to become live — and a re-layout, not a
+teardown.** They were in the creation effect's deps, so resizing a Surface
+tore its source down and built a new one, taking focus, form values,
+selection, and any second React root mounted inside it. A Surface sized by
+*measurement* rather than authored resizes constantly, so that had to stop
+being a teardown. `createDomTextureSource` grew `size()` and `setSize()`;
+the latter rides the same realloc mark `setScale` uses (#10), because three
+allocates `CanvasTexture` storage immutably at first-upload dimensions.
+**The trap inside that, which a test now guards.**
+`createDomTextureSource` closes over `width`/`height`, and `setScale`
+multiplies *those*. A resize that moved only `canvas.width` and
+`canvas.style.width` was silently reverted by the very next LOD tier swap:
+backing snapped back to `360×460` against a `274×116` CSS box and the two
+stayed diverged for good. `setSize` must move the closed-over parameters.
+Proven live by deleting the two assignments — four tests fail, including
+`a resize SURVIVES a subsequent tier swap`.
+**The dismissal worry was wrong, and why is the useful part.** The plan
+assumed detachment forces us to own dismissal, since Radix's grace polygon
+and hull reason in page coordinates. Measured, all three cases hold with no
+new machinery: click **empty space** → nothing was hit, so Surface never
+stops the canvas's own `pointerdown` (#18) and it reaches Radix's document
+listener → dismissed; click a **different Surface** → the forwarded
+synthetic `pointerdown` is dispatched on that Surface's parked DOM, bubbles
+to `document` with a target outside the content → dismissed; click **inside
+the detached content** → stays open, and the button fires (`width 360 →
+380`, with `data-hover` and `data-active` landing through the mesh).
+
+The distinction is worth naming: **containment** dismissal asks a question
+about the DOM tree, which detaching does not touch; **geometric** dismissal
+— the swept region between a trigger and its content — asks a question
+about the plane, which detaching destroys. Click-driven layers are all
+containment. The ray-based answer is still owed, but only by *hover*-driven
+detached layers, and it belongs to #36.
+**Growth is symmetric about the pose.** A plane grows from its centre, so a
+detached surface that gains content expands both ways. Measured live:
+content `288×122 → 288×234`, canvas backing `432×183 → 432×351`, quad
+`1.44×0.61 → 1.44×1.17`, texture image dimensions moving with it (storage
+reallocated), the new region rasterizing correctly, all in **two paints**.
+That is the right default for furniture — the pose is the object's centre
+and stays meaningful. An anchor prop is the fix if a "grows downward"
+reading is ever wanted; nothing needs it yet.
+**Rejected.** (a) *Compute the content's pose from the trigger's UV and
+place it at a 3D offset* — reintroduces exactly the coordinate math the
+`container` lever exists to avoid, and re-pins the content to the trigger's
+plane, which is the thing being escaped. (b) *Keep the anchored layer and
+move it* — the layer is panel-sized and panel-parented; moving it moves a
+decal and its host together. (c) *Size the canvas from a repaint loop or a
+dirty flag* — but note what the observers here actually do: `childList`
+answers "what exists" and `ResizeObserver` answers "how big," neither of
+which the compositor ever reports, and neither decides *when* to repaint.
+#3 is intact.
+**Consequence.** `FloatingSurface` ships in `src/primitives/` and the
+public barrel. **Known gaps:** N detached surfaces reintroduce the lab-007
+Tab reading-order problem across parked canvases; `side`/`align`/
+`avoidCollisions` are silently ignored rather than warned about; hover-driven
+detached layers still need the ray answer (#36).
