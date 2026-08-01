@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
+import { useLatest } from './useLatest'
 import {
   decomposeMatrix,
   isStatic,
@@ -94,8 +95,7 @@ export function useAnimationConductor(
     el: HTMLElement | null,
   ) => void,
 ) {
-  const applyRef = useRef(apply)
-  applyRef.current = apply
+  const applyRef = useLatest(apply)
   const flightRef = useRef<Flight | null>(null)
   const lastValueRef = useRef<MotionValue>(REST)
 
@@ -169,7 +169,8 @@ export function useAnimationConductor(
       root.removeEventListener('animationcancel', onCancel)
       flightRef.current = null
     }
-  }, [root])
+    // `applyRef` is identity-stable; only a new root re-subscribes.
+  }, [root, applyRef])
 
   useFrame((_, delta) => {
     const flight = flightRef.current

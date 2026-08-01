@@ -252,8 +252,7 @@ export function Surface({
         : DEFAULT_TIERS
     return clampTiers(ladder, width, height)
   }, [width, height, rangeMin, rangeMax])
-  const tiersRef = useRef(tiers)
-  tiersRef.current = tiers
+  const tiersRef = useLatest(tiers)
   const lodRef = useRef({ tier: 1, proposed: 1, agree: 0, frame: 0 })
   const lodPhase = useMemo(() => lodSeq++ % LOD_EVERY, [])
 
