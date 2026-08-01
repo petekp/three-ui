@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useThree } from '@react-three/fiber'
 import type { ReactNode } from 'react'
-import type { PerspectiveCamera } from 'three'
+import type { Camera, OrthographicCamera, PerspectiveCamera } from 'three'
 import { Surface } from '../Surface'
 import { useSourceHost } from '../useSourceHost'
 import { CameraChrome } from './CameraChrome'
@@ -32,15 +32,19 @@ import { CameraChrome } from './CameraChrome'
 // Nothing is lost, because when a modal IS open its scrim covers this slab
 // and physically occludes the scene. On a page an overlay cannot really block
 // anything, so CSS has to simulate obstruction; here the obstruction is real.
+//
+// There is deliberately no `width`/`height` prop. The slab does not have a
+// size of its own — it IS the viewport, and the source is measured from the
+// canvas for the same reason a page's `100vw` is not something you type in.
+// This used to be a caller-supplied 1280×720 default while the quad spanned
+// the frustum, and the two agreed only because the test window happened to be
+// 1280×720 as well. Measured at 1000×800: the quad still followed the SOURCE
+// aspect and came out 1422px wide inside a 1000px viewport, so a
+// bottom-right-pinned toast landed at x=1184 — 184px past the right edge, on
+// a slab whose height was exact. A knob that can only ever be set wrong is
+// not a knob (decisions #23).
 
 export interface ViewerSurfaceProps {
-  /**
-   * Source size in CSS pixels. The quad is computed to span the frustum at
-   * `distance`, so these are also the pixel dimensions the contents believe
-   * they are laid out in — pick the aspect you want to author against.
-   */
-  width?: number
-  height?: number
   /** World units in front of the eye. */
   distance?: number
   /** Name for this surface in paint-stats diagnostics (window.__threeUI). */
@@ -53,15 +57,58 @@ export interface ViewerSurfaceProps {
   children?: ReactNode
 }
 
+/**
+ * The frustum's cross-section at `distance`, in world units.
+ *
+ * The perspective arm takes its aspect from the canvas rather than from
+ * `camera.aspect` on purpose: r3f writes that in a layout effect *after* the
+ * render that observed the new size, so a memo reading it on resize gets the
+ * previous frame's value and keeps it until some unrelated render happens by.
+ * `size` is the thing r3f derives the aspect from anyway, so reading it
+ * directly is both the earlier and the more honest source.
+ */
+function frustumSize(
+  camera: Camera,
+  distance: number,
+  size: { width: number; height: number },
+): [number, number] {
+  const cam = camera as PerspectiveCamera & OrthographicCamera
+  // An orthographic frustum is a box: same cross-section at every depth, and
+  // its world extent lives on the camera rather than being derivable from the
+  // canvas. (Derived, not measured — every lab here is perspective.)
+  if (cam.isOrthographicCamera) {
+    return [
+      (cam.right - cam.left) / cam.zoom,
+      (cam.top - cam.bottom) / cam.zoom,
+    ]
+  }
+  const h = 2 * Math.tan((cam.fov * Math.PI) / 360) * distance
+  return [h * (size.width / size.height), h]
+}
+
 export function ViewerSurface({
-  width = 1280,
-  height = 720,
   distance = 1.15,
   label = 'viewer',
   onHost,
   content,
   children,
 }: ViewerSurfaceProps) {
+  const camera = useThree((s) => s.camera)
+  const size = useThree((s) => s.size)
+
+  const [quadW, quadH] = useMemo(
+    () => frustumSize(camera, distance, size),
+    [camera, distance, size],
+  )
+
+  // Source pixels, derived from the QUAD rather than from `size` directly, so
+  // that "source aspect === quad aspect" holds by construction instead of by
+  // two expressions agreeing. Under a perspective camera this reduces exactly
+  // to the canvas size and one source px is one screen px; under an
+  // orthographic one it is whatever pixel grid matches that camera's box.
+  const height = Math.max(1, Math.round(size.height))
+  const width = Math.max(1, Math.round(height * (quadW / quadH)))
+
   const { mount } = useSourceHost({
     width,
     height,
@@ -69,20 +116,6 @@ export function ViewerSurface({
     content,
     onHost,
   })
-
-  const camera = useThree((s) => s.camera)
-  const size = useThree((s) => s.size)
-
-  // Span the frustum at `distance`. Recomputed when the aspect or the lens
-  // changes — never per frame.
-  const [quadW, quadH] = useMemo(() => {
-    const cam = camera as PerspectiveCamera
-    const h = 2 * Math.tan(((cam.fov ?? 45) * Math.PI) / 360) * distance
-    return [h * (width / height), h]
-    // `size` is not read directly: it is here because a resize is what
-    // changes the aspect the caller's width/height are meant to match.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camera, distance, width, height, size.width, size.height])
 
   return (
     <CameraChrome distance={distance}>

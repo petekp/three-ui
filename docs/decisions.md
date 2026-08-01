@@ -823,3 +823,62 @@ public barrel. **Known gaps:** N detached surfaces reintroduce the lab-007
 Tab reading-order problem across parked canvases; `side`/`align`/
 `avoidCollisions` are silently ignored rather than warned about; hover-driven
 detached layers still need the ray answer (#36).
+
+## 23. The viewer slab has no size of its own — it *is* the viewport (2026-08-01, primitives pass)
+
+**Context.** #21 built the chrome slab as "a `Surface` authored at 1280×720
+source pixels, with its quad sized to span the frustum" — two independent
+statements about the same rectangle, kept in agreement by the author. The
+quad was computed as `[h * (width / height), h]`: frustum *height* from the
+lens, frustum *width* from the **source** aspect. Those coincide only when
+`width / height === camera.aspect`, and they did, because the browser the
+increment was measured in happened to be 1280×720 too.
+**The failure, measured.** Same scene, window resized to 1000×800 (camera
+aspect 1.25). The slab's height was still exact — corners at y=0 and y=800
+— and its width projected to x ∈ [−211, 1211]: **1422 px of quad inside a
+1000 px viewport**, 42% too wide. A `<Toaster position="bottom-right">`
+pins 24px from *its container's* corner, and that container was now off the
+screen, so the toast landed at x=1184 — 184px past the right edge, invisible,
+with clean paints and no error anywhere. Resize the other way and the same
+formula makes the slab too *narrow*, quietly insetting everything that was
+supposed to hug an edge.
+**Decision.** Delete `width` and `height` from `ViewerSurfaceProps`. The
+slab is not a rectangle that *should match* the viewport, it is the viewport,
+and its source is measured from the canvas for the same reason `100vw` is
+not a number you type in. One `frustumSize()` returns the quad; the source
+is then derived **from the quad's aspect** at the canvas's pixel height, so
+`source aspect === quad aspect` is true by construction rather than by two
+expressions agreeing. Under a perspective camera this reduces exactly to
+`[size.width, size.height]` and one source pixel is one screen pixel,
+literally, which is what #21 claimed and could not guarantee.
+**Read the aspect from `size`, not from `camera.aspect`.** r3f writes
+`camera.aspect` in a layout effect, which runs *after* the render that
+observed the new size — and mutating the camera doesn't re-render React, so
+a `useMemo` reading it on resize gets the previous value and keeps it until
+some unrelated render wanders past. `size` is what r3f derives the aspect
+*from*, so it is both the earlier and the more honest source. (The
+orthographic arm has to read the camera: an ortho frustum's world extent
+lives on `left`/`right`/`top`/`bottom`, and isn't derivable from the canvas
+at all.)
+**Verified live**, one page, no reload, resizing under it: 1000×800,
+1400×600, 820×900, 1280×800, 1600×800 — source, quad and canvas aspects
+equal at every stop (1.25, 2.33, 0.911, 1.6, 2.0), slab corners landing on
+window corners exactly, 2 paints per resize and 0 errors as the in-place
+`setSize` + immutable-storage realloc path (#10) carried each one. A real
+sonner toast at 1600×800 laid out at `[1220, 702, 356, 74]` and projected
+its bottom-right to (1576, 776) — 24px in from (1600, 800).
+**Rejected.** (a) *Keep the props and fix only the formula to `h *
+cam.aspect`* — the quad would span the frustum while the source kept the
+caller's aspect, so the content would simply be stretched instead of
+clipped; a circle becomes an ellipse and nothing warns. (b) *Keep the props
+and letterbox the given aspect inside the frustum* — no overflow, but
+"bottom-right" would stop meaning the screen's bottom-right, which is the
+one property the slab exists to provide. (c) *Keep them for texture
+economy* — that is `resolution`'s job (#12). Density and layout size are
+different questions, and answering the first by lying about the second is
+how this bug happened. A knob that can only ever be set wrong is not a knob.
+**Consequence.** `ViewerSurface` takes `distance`, `label`, `onHost`,
+`content`, `children` and nothing else. This supersedes #21's "authored at
+1280×720"; the rest of #21 stands. Note also that #21's closing line —
+`CameraChrome` "stays in the lab pending promotion" — is stale: both it and
+`ViewerSurface` ship from `src/primitives/floating/` and the public barrel.

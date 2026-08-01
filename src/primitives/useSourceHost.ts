@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { useLatest } from './useLatest'
 
 // The DOM half of a Surface that hosts live UI.
 //
@@ -46,17 +47,15 @@ export function useSourceHost({
   const [occupied, setOccupied] = useState(false)
 
   // Everything `mount` reads is read through a ref, so `mount` never changes
-  // identity. It is handed to `Surface`'s `onSource`, and a caller passing an
-  // inline `content` or an arrow `onHost` would otherwise churn it every
-  // render.
-  const sizeRef = useRef<[number, number]>([width, height])
-  sizeRef.current = [width, height]
-  const classNameRef = useRef(className)
-  classNameRef.current = className
-  const contentRef = useRef(content)
-  contentRef.current = content
-  const onHostRef = useRef(onHost)
-  onHostRef.current = onHost
+  // identity. It is handed to `Surface`'s `onSource` — a lifecycle hook that
+  // runs once and is never re-run — and a caller passing an inline `content`
+  // or an arrow `onHost` would otherwise churn it every render.
+  const widthRef = useLatest(width)
+  const heightRef = useLatest(height)
+  const classNameRef = useLatest(className)
+  const contentRef = useLatest(content)
+  const onHostRef = useLatest(onHost)
+  const onChildListRef = useLatest(onChildList)
   const rootRef = useRef<Root | null>(null)
 
   const mount = useCallback((el: HTMLElement) => {
@@ -70,9 +69,8 @@ export function useSourceHost({
     // draws an empty rectangle, with clean paints and no error anywhere
     // (docs/platform.md, decisions #22). For an ordinary content root the
     // same declaration is merely house style; here it is the whole picture.
-    const [w, h] = sizeRef.current
-    node.style.width = `${w}px`
-    node.style.height = `${h}px`
+    node.style.width = `${widthRef.current}px`
+    node.style.height = `${heightRef.current}px`
     el.appendChild(node)
 
     // The container is built HERE, not hoisted into a `useMemo`, because it
@@ -128,8 +126,6 @@ export function useSourceHost({
   // about Surface's PAINT path, where `onpaint` is already the better change
   // signal. This one answers "what exists", which the compositor never
   // reports, and it never triggers a repaint.
-  const onChildListRef = useRef(onChildList)
-  onChildListRef.current = onChildList
   useEffect(() => {
     if (!host) return
     const sync = () => {

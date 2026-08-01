@@ -6,6 +6,7 @@ import { DEFAULT_TIERS, clampTiers, selectLodTier, tiersInRange } from '../lib/l
 import { clearPointerState, deepestElementAt, forwardPointer, nudgeSelect } from './forwardEvents'
 import { FocusGroupContext } from './FocusScene'
 import { SurfaceContext, type SurfaceContextValue } from './SurfaceContext'
+import { useLatest } from './useLatest'
 
 // <Surface> — the atom of three-ui: a live DOM subtree as the skin of any
 // geometry. Pass geometry as children; the DOM is rasterized into the
@@ -27,9 +28,19 @@ export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children'> {
   width?: number
   height?: number
   children: React.ReactNode
-  /** Fires when focus enters/leaves the live subtree. */
+  /** Fires when focus enters/leaves the live subtree. Always the latest one. */
   onFocusWithin?: (focused: boolean) => void
-  /** Access the live DOM root (attach listeners, mutate). May return cleanup. */
+  /**
+   * Access the live DOM root — attach listeners, mount a React root into it,
+   * mutate it. May return a cleanup function.
+   *
+   * This is a LIFECYCLE hook: called once when the source is created, cleaned
+   * up when it is destroyed, and at no other time. Its identity is
+   * deliberately untracked, because re-running it would mean tearing the
+   * subtree down and taking every bit of live DOM state with it. So an inline
+   * arrow costs nothing here, and a caller who needs current state inside it
+   * should reach for a ref rather than expect a re-run.
+   */
   onSource?: (el: HTMLElement) => void | (() => void)
   /**
    * Texture upload policy. 'auto' (default) uploads only when the canvas
@@ -126,6 +137,14 @@ function applyFilterPolicy(tex: THREE.Texture, tier: number) {
   }
 }
 
+// Horizontal flip, for geometries whose UVs run backwards under the camera
+// (the inside of a cylinder, a back face). Wrapping has to become Repeat for
+// a negative repeat to have anything to wrap into.
+function applyMirror(tex: THREE.Texture, mirrorU: boolean) {
+  tex.wrapS = mirrorU ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping
+  tex.repeat.x = mirrorU ? -1 : 1
+}
+
 // Mount seed for dynamic LOD: the ladder tier nearest 1×. Normally exactly
 // 1, but a range like [2, 4] seeds at 2 so the very first raster is already
 // in-range, and a Surface so wide the 4096 guard removed tier 1 seeds at
@@ -172,18 +191,16 @@ export function Surface({
   // (onpaint can't interleave mid-rAF, so count > mark ⟺ the post-resize
   // paint itself has landed — not some same-frame unrelated self-paint).
   const reallocAfterRef = useRef(-1)
-  const resolutionRef = useRef(resolution)
-  resolutionRef.current = resolution
-  const hitTestRef = useRef(hitTest)
-  hitTestRef.current = hitTest
-  const mirrorURef = useRef(mirrorU)
-  mirrorURef.current = mirrorU
-  // Size is read through refs at creation so it can stay OUT of the
-  // creation effect's deps — see the setSize effect below for why.
-  const widthRef = useRef(width)
-  widthRef.current = width
-  const heightRef = useRef(height)
-  heightRef.current = height
+  // Everything the source-creation effect needs to READ but must not RE-RUN
+  // for. See that effect's dependency note — it is the most consequential
+  // line in this file.
+  const resolutionRef = useLatest(resolution)
+  const hitTestRef = useLatest(hitTest)
+  const mirrorURef = useLatest(mirrorU)
+  const widthRef = useLatest(width)
+  const heightRef = useLatest(height)
+  const onSourceRef = useLatest(onSource)
+  const onFocusWithinRef = useLatest(onFocusWithin)
 
   /**
    * The hit region. With `hitTest="content"` the quad is only intersected
@@ -265,6 +282,27 @@ export function Surface({
     if (texture && materialRef.current) materialRef.current.needsUpdate = true
   }, [texture])
 
+  // Creating the source is a TEARDOWN. It destroys the live DOM subtree and
+  // with it everything that was alive in there: focus, form values, text
+  // selection, scroll offsets, and any second React root a scene mounted
+  // inside. So the dependency list below is the most consequential line in
+  // this file, and a prop belongs in it only if changing that prop genuinely
+  // means "this is different content now". Everything else is handled in
+  // place, and each of these was learned the same way — by watching a
+  // Surface go dead mid-interaction:
+  //
+  //   width/height  → re-layout in place (the setSize effect below)
+  //   resolution    → re-raster in place (the setScale effect below)
+  //   mirrorU       → a texture wrap setting (the mirror effect below)
+  //   paint         → read only inside useFrame; there is nothing to rebuild
+  //   hitTest       → read through a ref by the raycaster
+  //   onFocusWithin → called through a ref, so the listeners stay current
+  //   onSource      → a lifecycle hook by contract (see its prop doc)
+  //   label         → baked into the stats entry at creation; birth-only
+  //
+  // `html` is the one real dependency: new markup IS different content, and
+  // rebuilding is the only way to be sure nothing from the old tree — a
+  // listener a scene attached in `onSource`, say — survives into it.
   useEffect(() => {
     const source = createDomTextureSource(html, widthRef.current, heightRef.current, {
       label,
@@ -285,10 +323,10 @@ export function Surface({
     tex.colorSpace = THREE.SRGBColorSpace
     tex.anisotropy = 8
     applyFilterPolicy(tex, source.scale())
-    if (mirrorU) {
-      tex.wrapS = THREE.RepeatWrapping
-      tex.repeat.x = -1
-    }
+    // Set at birth as well as in the effect below: that effect is passive and
+    // r3f draws from its own rAF loop, so a mirrored Surface would otherwise
+    // get one frame of backwards text before the flip lands.
+    applyMirror(tex, mirrorURef.current)
     setTexture(tex)
 
     lastUploadRef.current = -1
@@ -302,11 +340,11 @@ export function Surface({
     // and it lands before onSource so a scene can still have the last word.)
     if (hitTestRef.current === 'content') source.element.style.pointerEvents = 'none'
 
-    const focusIn = () => onFocusWithin?.(true)
-    const focusOut = () => onFocusWithin?.(false)
+    const focusIn = () => onFocusWithinRef.current?.(true)
+    const focusOut = () => onFocusWithinRef.current?.(false)
     source.element.addEventListener('focusin', focusIn)
     source.element.addEventListener('focusout', focusOut)
-    const cleanupSource = onSource?.(source.element)
+    const cleanupSource = onSourceRef.current?.(source.element)
 
     return () => {
       source.element.removeEventListener('focusin', focusIn)
@@ -319,7 +357,14 @@ export function Surface({
       setTexture(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [html, mirrorU, paint])
+  }, [html])
+
+  // Mirroring is a texture setting, not a reason to rebuild anything.
+  useEffect(() => {
+    if (!texture) return
+    applyMirror(texture, mirrorU)
+    texture.needsUpdate = true
+  }, [texture, mirrorU])
 
   // Fixed-resolution changes re-raster in place — never recreate the source
   // (that would destroy live DOM state: focus, form values, selection).

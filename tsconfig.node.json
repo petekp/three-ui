@@ -19,5 +19,9 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["vite.config.ts"]
+  /* Repo tooling, which runs in node and is not part of either tree.
+     `tests/` holds the ones that read the repo itself — a test that walks
+     the filesystem is not library code and must not typecheck as if it
+     were, which is how it ends up under DOM-only lib settings. */
+  "include": ["vite.config.ts", "tests"]
 }
