@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from 'react'
+import { use, useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 import { Surface, type SurfaceProps } from './Surface'
@@ -53,7 +53,7 @@ export function SurfaceLayer({
   orient = 'normal',
   ...surfaceProps
 }: SurfaceLayerProps) {
-  const ctx = useContext(SurfaceContext)
+  const ctx = use(SurfaceContext)
   if (!ctx) throw new Error('<SurfaceLayer> must be rendered inside a <Surface>')
 
   const group = useRef<THREE.Group>(null)

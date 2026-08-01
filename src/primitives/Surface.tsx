@@ -4,7 +4,7 @@ import { useFrame, useThree, type ThreeElements, type ThreeEvent } from '@react-
 import { createDomTextureSource, type DomTextureSource } from '../lib/htmlInCanvas'
 import { DEFAULT_TIERS, clampTiers, selectLodTier, tiersInRange } from '../lib/lodTier'
 import { clearPointerState, deepestElementAt, forwardPointer, nudgeSelect } from './forwardEvents'
-import { FocusGroupContext } from './FocusScene'
+import { FocusGroupContext } from './focusContext'
 import { SurfaceContext, type SurfaceContextValue } from './SurfaceContext'
 import { useLatest } from './useLatest'
 
@@ -237,7 +237,8 @@ export function Surface({
           if (deepestElementAt(el, x, y)) intersects.push(hit)
         }
       },
-    [],
+    // Stable ref identities — this memo never actually re-runs.
+    [hitTestRef, mirrorURef],
   )
   // Destructure the tuple into primitives so an inline `resolution={[1, 2]}`
   // (fresh array identity every render) can't defeat the memo.

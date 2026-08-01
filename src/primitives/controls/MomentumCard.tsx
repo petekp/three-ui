@@ -18,7 +18,7 @@ import { RigidBodyType } from '@dimforge/rapier3d-compat'
 // easing curves, no keyframes. Interruption isn't an edge case — grabbing a
 // moving card mid-flight just works, because position is always emergent.
 
-interface MomentumCardProps {
+export interface MomentumCardProps {
   home: [number, number, number]
 }
 

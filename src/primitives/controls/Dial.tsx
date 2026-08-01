@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import type { ThreeElements } from '@react-three/fiber'
 import { composeFields, damping, detentField, hopImpulse } from '../../lib/physics1D'
 import { use1DOF, wrapAngle } from './use1DOF'
-import { FocusGroupContext, type LeafHandle } from '../FocusScene'
+import { FocusGroupContext, type LeafHandle } from '../focusContext'
 
 // <Dial> — the lab-003 knob as a primitive: a rotary control whose feel is
 // detentField + damping. Flicks ratchet through wells; onDetent fires LIVE

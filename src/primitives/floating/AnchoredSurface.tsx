@@ -4,6 +4,7 @@ import type { Group, Mesh } from 'three'
 import { Surface } from '../Surface'
 import { useSourceHost } from '../useSourceHost'
 import { useAnimationConductor } from '../useAnimationConductor'
+import { useLatest } from '../useLatest'
 import type { MotionValue } from '../../lib/motionSamples'
 
 // <AnchoredSurface> — the floating family's first pose: in front of a panel.
@@ -95,8 +96,7 @@ export function AnchoredSurface({
   // layer's centre. Held across frames because the final call after a cancel
   // arrives with the element already unmounted.
   const pivot = useRef<[number, number]>([0, 0])
-  const onFlightRef = useRef(onFlight)
-  onFlightRef.current = onFlight
+  const onFlightRef = useLatest(onFlight)
 
   useAnimationConductor(host, (v, done, el) => {
     const g = layerGroup.current
@@ -106,6 +106,16 @@ export function AnchoredSurface({
     // trigger. A group scales about its own origin, at the panel's centre —
     // so pivot-correct: p + (x − p)·s is the same as scaling about the origin
     // and translating by p·(1 − s).
+    //
+    // `getBoundingClientRect` is right HERE and wrong in `FloatingSurface`,
+    // which warns against it in as many words — worth knowing before
+    // "fixing" this to match. The visual rect bakes in the entrance transform,
+    // which is exactly what ruins a size measurement. But the conductor has
+    // already paused the animation and parked the DOM at its fully-materialized
+    // pole, so during a flight this element is wearing no transform at all and
+    // the visual rect IS the layout box. And it must be the *rect*: what's
+    // wanted is a position within the panel, which `offsetLeft`/`offsetTop`
+    // report against the offset parent rather than the source origin.
     if (el) {
       const rect = el.getBoundingClientRect()
       pivot.current = [

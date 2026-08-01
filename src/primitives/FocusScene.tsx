@@ -1,5 +1,4 @@
 import {
-  createContext,
   use,
   useEffect,
   useMemo,
@@ -29,6 +28,21 @@ import {
   type Dir,
   type NavRect,
 } from '../lib/spatialNav'
+import { useLatest } from './useLatest'
+import {
+  FocusGroupContext,
+  FocusSceneContext,
+  type FocusCause,
+  type FocusGroupApi,
+  type FocusSceneApi,
+  type FocusSceneEvent,
+  type GroupFocusState,
+  type GroupRegistration,
+  type LeafKeyAction,
+  type NavPolicy,
+  type ReframeFulfiller,
+  type ReframeRequest,
+} from './focusContext'
 
 // FocusScene — lab 007's manager, implementing docs/focus.md.
 //
@@ -56,76 +70,6 @@ import {
 // of the native tab order first, which is proxy-layer work (next
 // increment).
 
-export type FocusLevel = 'page' | 'scene' | 'unit' | 'interior'
-export type GroupFocusState = 'none' | 'unit' | 'interior'
-export type FocusCause =
-  | 'ring' // Tab between units
-  | 'descend' // Enter/F2 into a group's DOM
-  | 'ascend' // Escape upward, or Shift+Tab from the first interior element
-  | 'exit' // Tab past the last interior element → next unit
-  | 'interior' // Tab across a member boundary INSIDE a group (composite ⇄ leaf)
-  | 'escape' // Escape at scene level (no focus move; subscribers react)
-  | 'release' // Escape out of an ENGAGED group — the camera's cue to un-commit
-  | 'pointer' // focus arrived by means we didn't initiate (mouse, page Tab)
-  | 'directional' // arrow-key spatial move between units (docs/focus.md)
-
-export interface FocusSceneEvent {
-  level: FocusLevel
-  groupId?: string
-  cause: FocusCause
-  /** The registered focus object for `groupId` (FocusGroup objectRef, else
-   *  the first member object) — resolved at emit time so camera rigs can
-   *  fulfill the descend/release grammar without keeping their own
-   *  id→object map. Absent for scene/page-level events. */
-  object?: THREE.Object3D | null
-}
-
-// Reframe bridge (docs/focus.md, ratified 2026-07-30). The DOM's focus()
-// carries an implicit obligation — the scroll container brings the focused
-// element into view. Our preventScroll:true suppresses the page's fulfillment
-// (correct: panels aren't in page flow) so the obligation transfers to the
-// camera. But the camera is APP state (orbit rigs, scroll cameras, XR heads
-// we must never move) — so the library only DETECTS and REQUESTS; the app's
-// rig fulfills however it wants. A minimal built-in fulfiller covers rigless
-// scenes so the invariant holds out of the box.
-
-export interface ReframeRequest {
-  groupId: string
-  /** The scene object whose projection triggered the request. */
-  object: THREE.Object3D
-  /** Projected rect in canvas CSS px; null = entirely behind the camera. */
-  rect: { x: number; y: number; w: number; h: number } | null
-  viewport: Viewport
-  /** 'descend' is the commitment gesture (center-stage it); every other
-   *  cause wants the MINIMAL correction (scrollIntoView block:'nearest'). */
-  cause: FocusCause
-  level: FocusLevel
-}
-
-export type ReframeFulfiller = (req: ReframeRequest) => void
-
-// Directional-nav policy (docs/focus.md "no-candidate ladder"). When an
-// arrow finds no candidate in its direction, the ladder asks whether the
-// VIEW can still move that way — if yes, nudge the camera one increment and
-// leave focus put (repeated presses alternate tween…tween…focus as targets
-// come into view); if no, the press is a no-op at the scene root. Camera
-// bounds are app state (orbit clamps, scroll extents), so like reframing
-// this is detect-here / fulfill-there: the app registers the predicate and
-// the motion. Rigless scenes get no nudge — spatial arrows still work
-// between projectable candidates; view motion is rig territory.
-
-export interface NudgeRequest {
-  dir: Dir
-  viewport: Viewport
-}
-
-export interface NavPolicy {
-  /** Can the view move any further in this direction? (For orbit rigs: yaw
-   *  is unbounded, pitch has the polar band — see viewPitchRoom.) */
-  canMove(dir: Dir): boolean
-  /** Move the view one increment in the direction. Never moves focus. */
-  nudge(req: NudgeRequest): void
-}
 
 /** One shape for both member kinds: a composite's root is the Surface source
  *  subtree; a leaf's root is its ARIA proxy in the shared portal layer. */
@@ -134,98 +78,12 @@ interface MemberData {
   object: THREE.Object3D | null
 }
 
-// Leaf members (docs/focus.md "Proxy contract"): a WebGL-only control backed
-// by a visually-hidden proxy element carrying real focus + ARIA semantics.
-// 'switch'/'button' land when Toggle/pushbutton wiring does — no untested
-// role paths shipped ahead of a control that exercises them.
-export type LeafRole = 'slider'
-
-export type LeafKeyAction =
-  | { type: 'step'; dir: 1 | -1 } // arrows — impulses into the physics
-  | { type: 'jump'; to: 'min' | 'max' } // Home/End — APG-mandatory absolutes
-
-export interface LeafAria {
-  min: number
-  max: number
-  now: number
-  /** Human units ("440 Hz"), not raw indices. */
-  valuetext?: string
-  orientation?: 'horizontal' | 'vertical'
-}
-
-export interface LeafEntry {
-  label: string
-  role: LeafRole
-  /** Projected for the proxy's screen rect (mobile AT explores by position). */
-  object: THREE.Object3D | null
-  aria: LeafAria
-  /** Explicit traversal order (Flutter OrderedTraversalPolicy). Default:
-   *  composites first, then leaves, registration order within each kind. */
-  order?: number
-  onKey?: (action: LeafKeyAction) => void
-  /** Real focus arriving on / leaving the proxy — drive the mesh glow. */
-  onFocus?: (focused: boolean) => void
-}
-
-export interface LeafHandle {
-  /** Update the announced value at settle — never per physics frame. */
-  setAria(patch: Partial<Pick<LeafAria, 'now' | 'valuetext'>>): void
-  dispose(): void
-}
-
-interface GroupRegistration {
-  id: string
-  label?: string
-  /** Authored ring position. Groups with an order ignore camera geometry
-   *  entirely (sceneRing); unordered groups fall back to reading order. */
-  order?: number
-  /** Object projected for ring ordering; falls back to the first composite
-   *  member's mesh when absent. */
-  objectRef?: RefObject<THREE.Object3D | null>
-  onStateChange?: (state: GroupFocusState, cause: FocusCause) => void
-}
-
 interface GroupRuntime {
   reg: GroupRegistration
   /** Interior focus memory (docs/focus.md "Focus memory — a stack"). */
   memory: MemoryStack<HTMLElement>
   lastState: GroupFocusState
 }
-
-interface FocusSceneApi {
-  registerGroup(reg: GroupRegistration): () => void
-  registerMember(
-    groupId: string,
-    entry: { root: HTMLElement; object: THREE.Object3D | null; label?: string; order?: number },
-  ): () => void
-  registerLeaf(groupId: string, entry: LeafEntry): LeafHandle
-  subscribe(fn: (e: FocusSceneEvent) => void): () => void
-  /** App camera rigs claim visibility fulfillment; the built-in minimal
-   *  fulfiller stands down while any registration is live. */
-  registerReframeFulfiller(fn: ReframeFulfiller): () => void
-  /** App rigs claim the no-candidate ladder's view motion (see NavPolicy). */
-  registerNavPolicy(policy: NavPolicy): () => void
-  focusUnit(groupId: string): boolean
-  /** One shared projection pass repositioning every leaf proxy. Called on
-   *  focus transitions automatically; call it at tween-settle / drag-end —
-   *  never per frame (react-three-a11y's open perf bug). */
-  syncProxyRects(): void
-}
-
-const FocusSceneContext = createContext<FocusSceneApi | null>(null)
-
-interface FocusGroupApi {
-  registerComposite(entry: {
-    root: HTMLElement
-    object: THREE.Object3D | null
-    label?: string
-    order?: number
-  }): () => void
-  registerLeaf(entry: LeafEntry): LeafHandle
-}
-
-/** Consumed by Surface for auto-registration; null outside a FocusGroup. */
-export const FocusGroupContext = createContext<FocusGroupApi | null>(null)
 
 // --------------------------------------------------------------------------
 
@@ -284,6 +142,16 @@ const ARROW_DIRS: Record<string, Dir> = {
 
 const ROUTED_KEYS = new Set(['Tab', 'Enter', 'F2', 'Escape', ...Object.keys(ARROW_DIRS)])
 
+/** ONE portal layer for every proxy (docs/focus.md: never a React root per
+ *  proxy — that's react-three-a11y's crash class). Plain imperative DOM:
+ *  we're inside the r3f reconciler, where a react-dom portal can't reach.
+ *  Children are position:fixed, so the layer itself has no geometry. */
+function createProxyLayer(): HTMLDivElement {
+  const el = document.createElement('div')
+  el.dataset.threeUiProxyLayer = ''
+  return el
+}
+
 export function FocusScene({
   children,
   onFocusChange,
@@ -307,16 +175,24 @@ export function FocusScene({
   const subscribers = useRef(new Set<(e: FocusSceneEvent) => void>()).current
   const fulfillers = useRef(new Set<ReframeFulfiller>()).current
   const navPolicies = useRef(new Set<NavPolicy>()).current
+  // Scene-lifetime, and deliberately NOT inside the bundle memo below: that
+  // memo is keyed on `camera`, so a scene that swapped its default camera
+  // would build a fresh layer while every proxy already registered stayed
+  // behind in the old, removed one — reachable by nothing, focusable by no
+  // one. The leaf-id counter has to move with it: restarting at 0 while the
+  // tree (a ref, so it survives) still holds those ids mints duplicates. The
+  // directional trail is here for the plain reason that a trail is scene
+  // state and a camera is not a new scene.
+  const proxyLayer = useRef(createProxyLayer()).current
+  const leafSeq = useRef(0)
+  const history = useRef(createDirectionalHistory()).current
   const cursorRef = useRef<string | null>(null)
   // Cause of the focusin we are about to trigger; a focusin with no pending
   // cause arrived by mouse / native Tab / script — reported as 'pointer'.
   const pendingCauseRef = useRef<FocusCause | null>(null)
-  const onFocusChangeRef = useRef(onFocusChange)
-  onFocusChangeRef.current = onFocusChange
-  const initialFocusRef = useRef(initialFocus)
-  initialFocusRef.current = initialFocus
-  const marginRef = useRef(reframeMargin)
-  marginRef.current = reframeMargin
+  const onFocusChangeRef = useLatest(onFocusChange)
+  const initialFocusRef = useLatest(initialFocus)
+  const marginRef = useLatest(reframeMargin)
   // The built-in fulfiller's tween: a bare camera truck, consumed by
   // useFrame below. Never armed while an app fulfiller is registered.
   const defaultTweenRef = useRef<{ from: THREE.Vector3; to: THREE.Vector3; t: number } | null>(
@@ -324,14 +200,6 @@ export function FocusScene({
   )
 
   const bundle = useMemo(() => {
-    // ONE portal layer for every proxy (docs/focus.md: never a React root per
-    // proxy — that's react-three-a11y's crash class). Plain imperative DOM:
-    // we're inside the r3f reconciler, where a react-dom portal can't reach.
-    // Children are position:fixed, so the layer itself has no geometry.
-    const proxyLayer = document.createElement('div')
-    proxyLayer.dataset.threeUiProxyLayer = ''
-    let leafSeq = 0
-
     const hasComposite = (groupId: string) =>
       tree.members(groupId).some((m) => m.kind === 'composite')
 
@@ -535,8 +403,6 @@ export function FocusScene({
     }
 
     // ---- Directional navigation (arrows) -----------------------------------
-
-    const history = createDirectionalHistory()
 
     /** Candidate rects for a spatial pick: every registered group except the
      *  origin, projected fresh at this keypress (nothing cached but the
@@ -963,7 +829,7 @@ export function FocusScene({
         proxy.addEventListener('blur', onBlur)
         proxyLayer.appendChild(proxy)
 
-        const memberId = `${groupId}:leaf:${leafSeq++}:${entry.label}`
+        const memberId = `${groupId}:leaf:${leafSeq.current++}:${entry.label}`
         tree.registerMember(groupId, {
           id: memberId,
           kind: 'leaf',
@@ -1029,7 +895,9 @@ export function FocusScene({
       debugMembers,
       historySize: () => history.size(),
     }
-  }, [camera, gl, tree, runtimes, subscribers, fulfillers, navPolicies])
+    // The trailing refs are stable identities, not re-run triggers.
+  }, [camera, gl, tree, runtimes, subscribers, fulfillers, navPolicies, proxyLayer,
+      history, leafSeq, marginRef, initialFocusRef, onFocusChangeRef])
 
   // The built-in fulfiller's consumer: a 0.32s smoothstep truck. Armed only
   // in rigless scenes — registering any app fulfiller disarms it for good.
@@ -1117,8 +985,7 @@ export function FocusGroup({
   children: ReactNode
 }) {
   const scene = use(FocusSceneContext)
-  const onStateChangeRef = useRef(onStateChange)
-  onStateChangeRef.current = onStateChange
+  const onStateChangeRef = useLatest(onStateChange)
 
   useEffect(() => {
     if (!scene) return
@@ -1129,7 +996,7 @@ export function FocusGroup({
       objectRef,
       onStateChange: (state, cause) => onStateChangeRef.current?.(state, cause),
     })
-  }, [scene, id, label, order, objectRef])
+  }, [scene, id, label, order, objectRef, onStateChangeRef])
 
   const api = useMemo<FocusGroupApi | null>(
     () =>
@@ -1141,53 +1008,4 @@ export function FocusGroup({
   )
 
   return <FocusGroupContext value={api}>{children}</FocusGroupContext>
-}
-
-/** The scene api for imperative integration — chiefly syncProxyRects() at
- *  camera tween-settle / drag-end. Null outside a FocusScene. */
-export function useFocusScene(): {
-  focusUnit(groupId: string): boolean
-  syncProxyRects(): void
-} | null {
-  return use(FocusSceneContext)
-}
-
-/** Subscribe to scene-level focus events (e.g. Escape-at-scene → camera
- *  home). No-op outside a FocusScene. */
-export function useFocusSceneEvents(handler: (e: FocusSceneEvent) => void) {
-  const scene = use(FocusSceneContext)
-  const ref = useRef(handler)
-  ref.current = handler
-  useEffect(() => scene?.subscribe((e) => ref.current(e)), [scene])
-}
-
-/** Claim reframe fulfillment for the app's camera rig (docs/focus.md
- *  "Reframe bridge"). While ANY fulfiller is registered the built-in bare-
- *  camera truck stands down — the rig owns visibility however it wants,
- *  including ignoring 'descend' requests its approach ride already covers.
- *  No-op outside a FocusScene. */
-export function useFocusReframe(fulfiller: ReframeFulfiller) {
-  const scene = use(FocusSceneContext)
-  const ref = useRef(fulfiller)
-  ref.current = fulfiller
-  useEffect(() => scene?.registerReframeFulfiller((req) => ref.current(req)), [scene])
-}
-
-/** Claim the no-candidate ladder's view motion (docs/focus.md "Directional
- *  navigation"): `canMove` is the camera-bounds predicate, `nudge` the one-
- *  increment view move. Rigless scenes get no nudge — arrows still work
- *  between projectable candidates; view motion is rig territory. No-op
- *  outside a FocusScene. */
-export function useFocusNavPolicy(policy: NavPolicy) {
-  const scene = use(FocusSceneContext)
-  const ref = useRef(policy)
-  ref.current = policy
-  useEffect(
-    () =>
-      scene?.registerNavPolicy({
-        canMove: (dir) => ref.current.canMove(dir),
-        nudge: (req) => ref.current.nudge(req),
-      }),
-    [scene],
-  )
 }

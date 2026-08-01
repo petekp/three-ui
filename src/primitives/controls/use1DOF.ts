@@ -2,6 +2,7 @@ import { useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { step, type Body1D, type Field } from '../../lib/physics1D'
+import { useLatest } from '../useLatest'
 
 // The shared mechanism under every physical control: a 1-DOF body driven by
 // a force field (src/lib/physics1D.ts), coupled kinematically to the hand
@@ -37,8 +38,7 @@ export function use1DOF(opts: Use1DOFOptions) {
   const controls = useThree((s) => s.controls as { enabled?: boolean } | null)
   const body = useRef<Body1D>({ q: opts.initialQ ?? 0, v: 0 })
   // Latest options in a ref so handlers/useFrame never see stale closures.
-  const optsRef = useRef(opts)
-  optsRef.current = opts
+  const optsRef = useLatest(opts)
 
   const drag = useRef({ active: false, offset: 0, lastT: 0 })
   const rest = useRef({ settled: true, frames: 0 })

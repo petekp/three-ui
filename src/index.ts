@@ -50,22 +50,23 @@ export { useAnimationConductor } from './primitives/useAnimationConductor'
 export type { MotionValue } from './lib/motionSamples'
 
 // ── Focus, and the camera that follows it ────────────────────────────────
+export { FocusScene, FocusGroup } from './primitives/FocusScene'
 export {
-  FocusScene,
-  FocusGroup,
   useFocusScene,
   useFocusSceneEvents,
   useFocusReframe,
   useFocusNavPolicy,
-  type FocusLevel,
-  type GroupFocusState,
-  type FocusCause,
-  type FocusSceneEvent,
-  type ReframeRequest,
-  type ReframeFulfiller,
-  type NudgeRequest,
-  type NavPolicy,
-} from './primitives/FocusScene'
+} from './primitives/useFocusScene'
+export type {
+  FocusLevel,
+  GroupFocusState,
+  FocusCause,
+  FocusSceneEvent,
+  ReframeRequest,
+  ReframeFulfiller,
+  NudgeRequest,
+  NavPolicy,
+} from './primitives/focusContext'
 export {
   FocusOrbitRig,
   type FocusOrbitRigProps,
@@ -74,7 +75,7 @@ export {
 } from './primitives/FocusOrbitRig'
 
 // ── Physical controls ────────────────────────────────────────────────────
-export { MomentumCard } from './primitives/MomentumCard'
+export { MomentumCard, type MomentumCardProps } from './primitives/controls/MomentumCard'
 export { Dial, type DialProps } from './primitives/controls/Dial'
 export { Toggle, type ToggleProps } from './primitives/controls/Toggle'
 export { Slider, type SliderProps } from './primitives/controls/Slider'

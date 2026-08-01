@@ -33,7 +33,7 @@ import {
   useFocusReframe,
   useFocusScene,
   useFocusSceneEvents,
-} from './FocusScene'
+} from './useFocusScene'
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
 

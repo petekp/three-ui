@@ -99,7 +99,8 @@ export function useSourceHost({
       // commit phase (React warns and defers anyway) — do it cleanly.
       if (root) queueMicrotask(() => root.unmount())
     }
-  }, [])
+    // Stable ref identities only — `mount` never changes, which is the point.
+  }, [classNameRef, widthRef, heightRef, contentRef, onHostRef])
 
   // Re-render an owned tree in place. Never tears the root down and rebuilds
   // it: that would take focus, form values, and selection with it.
@@ -136,7 +137,7 @@ export function useSourceHost({
     const mo = new MutationObserver(sync)
     mo.observe(host, { childList: true })
     return () => mo.disconnect()
-  }, [host])
+  }, [host, onChildListRef])
 
   return { mount, host, occupied }
 }
