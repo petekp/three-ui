@@ -14,6 +14,7 @@ import {
   clearPointerState,
   deepestElementAt,
   forwardPointer,
+  silenceHoverMove,
   trackFocusModality,
 } from './forwardEvents'
 
@@ -532,5 +533,38 @@ describe('moving between elements inside the surface', () => {
     expect(trigger.hasAttribute('data-hover')).toBe(false)
     expect(sibling.hasAttribute('data-hover')).toBe(true)
     expect(root.hasAttribute('data-hover')).toBe(true)
+  })
+})
+
+describe('silencing the trusted canvas move', () => {
+  // The counterpart of the departure burst: the forwarder tells the true
+  // story with synthetic events, so the native canvas move — screen
+  // coordinates, target CANVAS — must not ALSO reach document-level
+  // listeners that reason about coordinates (Radix's tooltip grace tracker
+  // closes any tooltip the moment it sees one). Hover moves are silenced;
+  // drag moves must keep bubbling — OrbitControls listens at document for
+  // the duration of a drag (decisions #18).
+
+  function nativeMoveThrough(buttons: number) {
+    // A stand-in canvas inside the page, with the same listener topology as
+    // the app: silencer at the canvas's host, coordinate reasoner at document.
+    const host = document.createElement('div')
+    document.body.append(host)
+    let reached = 0
+    const reasoner = () => reached++
+    document.addEventListener('pointermove', reasoner)
+    host.addEventListener('pointermove', (e) => silenceHoverMove(e as PointerEvent))
+    host.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, buttons }))
+    document.removeEventListener('pointermove', reasoner)
+    host.remove()
+    return reached
+  }
+
+  it('a hover move stops at the canvas', () => {
+    expect(nativeMoveThrough(0)).toBe(0)
+  })
+
+  it('a drag move still reaches document', () => {
+    expect(nativeMoveThrough(1)).toBe(1)
   })
 })

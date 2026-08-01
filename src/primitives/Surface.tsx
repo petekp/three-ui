@@ -8,6 +8,7 @@ import {
   deepestElementAt,
   forwardPointer,
   nudgeSelect,
+  silenceHoverMove,
   trackFocusModality,
 } from './forwardEvents'
 import { FocusGroupContext } from './focusContext'
@@ -544,6 +545,11 @@ export function Surface({
     const source = sourceRef.current
     if (!uv || !source) return
     forwardPointer(source.element, uv.u, uv.v, 'move')
+    // The forwarded move above is this pointer's true story; the native one —
+    // target CANVAS, screen coordinates — must not also reach document-level
+    // coordinate reasoners (Radix's tooltip grace tracker dismisses on it).
+    // Hover only: drag moves keep bubbling for OrbitControls (decisions #26).
+    silenceHoverMove(e.nativeEvent)
   }
 
   return (

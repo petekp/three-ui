@@ -1921,3 +1921,43 @@ Decisions #25 has the full argument. The one open cost: an animated
 *resize* pays a GL realloc per frame per resizing pane — clean at
 app-shell scale, deferred as a during-motion strategy until a wall of
 panels actually hits it.
+
+## the second story — silencing the trusted move
+
+First debt on the floating-layer kit's ledger (#36): the two-hop tooltip
+transit. Hover the tooltip trigger, glide across the card toward the
+tooltip's own content, and it closes in your face — even though the
+departure burst (the fix before last) reports the destination correctly,
+and even though the forwarded stream says, truthfully: leave trigger,
+cross card, arrive on content.
+
+The trace made the shape obvious once it was captured with trusted CDP
+input. The close decision lands at the exact moment the pointer arrives
+on the content, and the DOM removal 150ms later is just the exit
+animation finishing. The Radix source names the mechanism: its grace
+tracker is a document-level `pointermove` listener that closes the
+tooltip whenever a move's *coordinates* fall outside the trigger∪content
+hull. And every trusted move over a Surface reaches document twice — once
+retold by the forwarder with the coordinates of what it actually hit,
+and once in the original, target `<canvas>`, carrying screen
+coordinates. Screen (1203, 405) measured against a hull built at the
+parking spot (x ≈ 116–245) is not a near miss; it's a different
+coordinate system. The tooltip was closed by the pointer's own shadow.
+
+The fix is the pointerdown suppression of decisions #18, extended to
+hover: after forwarding a move, `Surface` stops the native event from
+bubbling on to document. One pointer, one story. Hover moves only —
+`buttons === 0` is the line, because OrbitControls listens at document
+for the duration of a drag, and a drag that began on empty space must
+keep orbiting while the ray crosses a panel. Dismissal survives
+untouched on both routes: empty-canvas moves never meet a Surface
+handler and bubble as before, and leaving a Surface still fires the
+burst, whose moves land provably outside every hull.
+
+Verified live with the same five-step transit that used to die: transit
+survives, rest on content holds, genuine departure still dismisses, and
+an orbit drag dragged straight across the panel still orbits. Decisions
+#26 has the full autopsy, including why "Radix hears the forwarded
+content-move first" isn't enough — tearing down its tracker is a React
+state update, and the trusted move slips through the still-attached
+listener microseconds later.

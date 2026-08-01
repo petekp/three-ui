@@ -1008,3 +1008,53 @@ per resizing pane (immutable storage, decisions #10). Fine at app-shell
 scale (3 panes at 120Hz measured clean); a wall of resizing panels would
 want a during-motion strategy (scale the mesh, re-raster at settle) —
 deferred until a scene actually hits it.
+
+## 26. Silence the trusted hover move at the canvas — one pointer, one story (2026-08-01, lab 009 / #36)
+
+**Context.** The two-hop tooltip transit (trigger → card body → tooltip
+content) closed mid-transit even after the departure burst learned to
+report real destinations (#19, #23). Captured trace: the forwarded
+stream was *correct* — leave on the trigger, enter+move on the content,
+burst frames inside the grace hull — and the tooltip closed anyway,
+~150ms after arrival (the exit animation trailing a close decision made
+at arrival time). Radix source (react-tooltip 1.2.16) names the killer:
+the grace tracker is a document-level `pointermove` listener that keeps
+the tooltip open if `event.target` is inside trigger/content, else
+**closes if `clientX/Y` falls outside the hull**. Every trusted move
+over a Surface bubbles to document with `target = <canvas>` and SCREEN
+coordinates — judged against a hull built in parked-source page space
+(~x 116–245), screen (1203, 405) is "miles outside" and closes a tooltip
+the pointer is demonstrably travelling toward. The forwarded content
+move Radix hears first can't save it: tearing the tracker down is a
+React state update, so the listener is still attached microseconds later
+when the trusted event reaches document.
+**Decision.** `silenceHoverMove` in forwardEvents: `Surface.handleMove`
+stops the native event's propagation after forwarding, **hover moves
+only** (`buttons === 0`). This is #18 extended from pointerdown to
+pointermove, same doctrine: the canvas is how the pointer travelled, not
+what it hit, and the forwarder having retold the move truthfully, the
+native's screen-space version must not ALSO reach document-level
+coordinate reasoners. Two pointer stories at document is one too many.
+**Why dismissal still works everywhere.** A pointer over empty canvas
+never reaches a Surface handler — its native move bubbles untouched and
+closes what it should. A pointer leaving a Surface gets the departure
+burst, whose synthetic moves land provably outside every hull (#19).
+**Why drags are exempt.** OrbitControls registers document-level
+move/up listeners for the duration of a drag; a drag that began on empty
+space must keep orbiting while the ray crosses a panel — the exact
+reason #18 confined itself to pointerdown. `buttons === 0` is the line.
+**Verified** (lab 009, trusted CDP input, Chrome 150): identical
+five-step transit — without the fix the tooltip closes on the first
+trusted move after the grace hull arms; with it, transit survives,
+hover rests on the content, genuine departure to empty canvas still
+dismisses, and an orbit drag from empty space across the panel still
+orbits. A/B'd live before shipping by stopping trusted hover moves at
+r3f's event root.
+**Rejected.** (a) *Dispatching forwarded moves so Radix's `hasEnteredTarget`
+branch wins* — it does win, and loses anyway: the teardown is async and
+the trusted move closes through the still-attached listener. (b)
+*Patching Radix / requiring `disableHoverableContent`* — the seam is
+ours; every hover library that reasons about document-level move
+coordinates (HoverCard next) would need the same patch. (c) *Silencing
+mousemove too* — nothing measured listens to it at document; widen only
+on evidence.

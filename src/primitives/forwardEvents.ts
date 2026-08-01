@@ -395,6 +395,31 @@ export function clearPointerState(root: HTMLElement) {
   }
 }
 
+/**
+ * Stop a native canvas pointermove from bubbling on to document — the same
+ * truth-telling as Surface's pointerdown suppression (decisions #18), extended
+ * to hover. Every pointer over a Surface arrives as a native event whose
+ * target is the canvas and whose coordinates are screen coordinates; the
+ * forwarder retells that move as a synthetic event with the coordinates of
+ * what the pointer actually hit. Document-level listeners that reason about
+ * move COORDINATES — Radix's tooltip grace tracker is the measured case:
+ * `isPointInPolygon(clientX/Y, hull)` against a hull built in parked-source
+ * page space — hear the canvas's screen coordinates as "miles outside" and
+ * dismiss a tooltip the pointer is demonstrably travelling toward. Both
+ * stories must not reach the document; the forwarded one is the true one.
+ *
+ * Hover moves only (`buttons === 0`): OrbitControls registers document-level
+ * move/up listeners for the duration of a drag, and a drag that began on
+ * empty space must keep orbiting while the ray crosses a panel. Dismissal
+ * still works everywhere — a pointer over empty canvas never reaches a
+ * Surface handler, so its native move bubbles untouched and closes what it
+ * should close; a pointer leaving a Surface gets the departure burst, whose
+ * synthetic moves land provably outside every grace hull.
+ */
+export function silenceHoverMove(native: PointerEvent) {
+  if (native.buttons === 0) native.stopPropagation()
+}
+
 export interface ForwardResult {
   target: Element
   focused: boolean
