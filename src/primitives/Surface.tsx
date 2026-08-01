@@ -3,7 +3,13 @@ import * as THREE from 'three'
 import { useFrame, useThree, type ThreeElements, type ThreeEvent } from '@react-three/fiber'
 import { createDomTextureSource, type DomTextureSource } from '../lib/htmlInCanvas'
 import { DEFAULT_TIERS, clampTiers, selectLodTier, tiersInRange } from '../lib/lodTier'
-import { clearPointerState, deepestElementAt, forwardPointer, nudgeSelect } from './forwardEvents'
+import {
+  clearPointerState,
+  deepestElementAt,
+  forwardPointer,
+  nudgeSelect,
+  trackFocusModality,
+} from './forwardEvents'
 import { FocusGroupContext } from './focusContext'
 import { SurfaceContext, type SurfaceContextValue } from './SurfaceContext'
 import { useLatest } from './useLatest'
@@ -281,6 +287,10 @@ export function Surface({
   useEffect(() => {
     if (texture && materialRef.current) materialRef.current.needsUpdate = true
   }, [texture])
+
+  // The document-level half of the focus-modality mirror (see forwardEvents).
+  // Reference-counted — any number of Surfaces share one set of listeners.
+  useEffect(() => trackFocusModality(), [])
 
   // Creating the source is a TEARDOWN. It destroys the live DOM subtree and
   // with it everything that was alive in there: focus, form values, text

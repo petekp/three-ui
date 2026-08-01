@@ -1799,6 +1799,65 @@ forwarded pointerdown ought to count as pointer modality for the focus
 that follows — is a real question about the event bridge, not a paint
 bug, and it goes in the queue rather than in this diff.
 
+## the verdict — teaching the forwarder to say how focus arrived
+
+The queue lasted about an hour. Before building anything I went back to
+check the one thing the last entry had reasoned rather than measured:
+maybe a *real* user's click — a trusted pointerdown on the canvas, even
+though the canvas isn't the button — updates the browser's modality and
+the ring never shows outside probes. Projected the trigger through the
+mesh, drove it with trusted CDP input: 19 and 20 paints, ring
+materializing. The strong version is true. Every pointer user pays it,
+and worse than the paints, the *look* diverges from the page —
+byte-verbatim shadcn, opening its popovers with a focus ring no page
+would show.
+
+Which reframes what `:focus-visible` is. It isn't a state like `:hover`;
+it's a *verdict*. The browser grants or withholds the ring by asking how
+the user last interacted, and the heuristic that answers is fed
+exclusively by trusted events. The forwarder dispatches synthetic ones,
+so the browser judges every post-click autofocus as if the user had been
+tabbing. This is the same shape as decisions #19 — the forwarder is the
+only thing that knows the pointer's real story, and whatever it declines
+to say, nothing downstream can reconstruct — except this time the
+missing testimony doesn't suppress a behavior, it acquits the wrong one.
+
+So the forwarder now delivers the verdict itself, and the mechanism is
+the hover twin pointed the other way. A module-level modality flips to
+`pointer` at every forwarded press — declared *before* dispatch, because
+a consumer may focus synchronously from its pointerdown handler — and
+back to `keyboard` on any real keydown (capture phase, so keys FocusScene
+claims still count; lone modifiers ignored, as the browser ignores
+them). A document-level `focusin` listener stamps `data-pointer-focus`
+on whatever gains focus under pointer modality, `focusout` cleans it,
+and text inputs are never stamped at all — click into a field and the
+ring is information, not noise, which is the browser's own carve-out.
+The dialect grows its fourth line:
+
+```css
+@custom-variant focus-visible (&:focus-visible:not([data-pointer-focus]));
+```
+
+Where the hover twin *grants* a state real hit-testing can't deliver,
+this one *withholds* a state the heuristic wrongly granted. Same mirror,
+opposite direction.
+
+The differential came out textbook. Trusted click through the mesh:
+popover opens at **3 paints**, Apply autofocused and stamped, zero ring
+transitions — page parity for the mouse. Escape, then Enter on the
+returned-focus trigger: popover opens at 20 paints, no stamp, ring
+visible and fading in — page parity for the keyboard, who earned those
+paints. Radix's focus-return on dismissal inherits the right verdict
+with no code at all. Lab 006's spine doesn't blink: its chrome runs on
+`[data-focus]`, which never consults the pseudo-class.
+
+One oddity surfaced and is parked rather than chased: a trusted Tab
+pressed while focus sits inside the detached popover moves nothing —
+unclaimed after full propagation, unacted by the browser. Pre-existing,
+orthogonal to the mirror, filed with the #36 pile next to the two-hop
+tooltip transit. Decisions #24 has the full argument, including the
+three rejected fixes.
+
 The rest of the verification was the ladder itself, because a refactor of a
 focus manager that typechecks proves nothing. Canvas → `scene`, Tab → `unit`,
 Enter descends into all four groups that have tabbable interiors and

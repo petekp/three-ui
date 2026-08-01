@@ -47,6 +47,105 @@ export function deepestElementAt(root: Element, x: number, y: number): Element |
   return best
 }
 
+// ---- focus modality mirroring -------------------------------------------
+//
+// `:focus-visible` is not a state, it is a *verdict*: the browser decides
+// whether the focus that just landed deserves a visible ring, and it decides
+// by asking how the user last interacted — keyboard shows the ring, pointer
+// does not (unless the element takes keyboard input, which always earns it).
+// The heuristic is fed exclusively by TRUSTED events. Everything the
+// forwarder dispatches is synthetic, so the browser never hears our pointer
+// story, and any script focus that follows a forwarded click — our own fixup
+// below, or a library's autofocus (Radix FocusScope focuses the first
+// tabbable of every popover it opens) — is judged as if the user had been
+// tabbing. Measured 2026-08-01: every pointer-opened popover materialized a
+// focus ring a real page would not show, and with shadcn's `transition-all`
+// on the button, paid ~18 paints of ring fade under the entrance flight.
+//
+// Same doctrine as the boundary protocol above: the forwarder is the only
+// thing that knows the pointer's real story, so whatever it declines to say,
+// nothing downstream can reconstruct. It mirrors the verdict the browser
+// would have reached onto `data-pointer-focus`, and the consumer's
+// `focus-visible` variant excludes it:
+//
+//   @custom-variant focus-visible (&:focus-visible:not([data-pointer-focus]));
+//
+// Keyboard is tracked from real keydowns (which ARE trusted and also reach
+// the heuristic — that direction was never broken) so a Tab after a click
+// re-earns the ring on the next focus, exactly as on a page.
+
+const POINTER_FOCUS_ATTR = 'data-pointer-focus'
+
+/**
+ * The browser's own carve-out: an element that supports keyboard input shows
+ * its focus ring however focus arrived — click into a text field and the ring
+ * is correct, not noise. Only button-like things get stamped.
+ */
+function ringSuppressible(el: Element): boolean {
+  if (el instanceof HTMLTextAreaElement) return false
+  if ((el as HTMLElement).isContentEditable) return false
+  if (el instanceof HTMLInputElement) {
+    return ['button', 'submit', 'reset', 'checkbox', 'radio', 'range', 'color', 'file', 'image'].includes(el.type)
+  }
+  return true
+}
+
+/** What the user last did, as far as any parked subtree can know. Starts as
+ * 'keyboard' because that is the browser's posture before any interaction —
+ * an autofocus on a freshly loaded page shows its ring. */
+let modality: 'pointer' | 'keyboard' = 'keyboard'
+
+const isModifier = (key: string) =>
+  key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'Meta'
+
+const onModalityKeydown = (e: KeyboardEvent) => {
+  // Modifier chords are how pointer users invoke shortcuts mid-gesture; the
+  // browser's heuristic ignores them and so do we.
+  if (!isModifier(e.key)) modality = 'keyboard'
+}
+const onModalityFocusIn = (e: FocusEvent) => {
+  const el = e.target
+  if (!(el instanceof HTMLElement)) return
+  if (modality === 'pointer' && ringSuppressible(el)) {
+    el.setAttribute(POINTER_FOCUS_ATTR, '')
+  } else {
+    el.removeAttribute(POINTER_FOCUS_ATTR)
+  }
+}
+const onModalityFocusOut = (e: FocusEvent) => {
+  const el = e.target
+  if (el instanceof HTMLElement) el.removeAttribute(POINTER_FOCUS_ATTR)
+}
+
+let modalityInstalls = 0
+
+/**
+ * Install the document-level half of the mirror (keydown resets to keyboard;
+ * focusin stamps, focusout cleans). Reference-counted: every Surface calls
+ * this, one set of listeners serves them all. Returns a release.
+ *
+ * keydown listens on CAPTURE so a handler that stops propagation (FocusScene
+ * claims Tab and arrows at the document) cannot hide a keyboard interaction
+ * from the mirror.
+ */
+export function trackFocusModality(): () => void {
+  if (modalityInstalls++ === 0) {
+    document.addEventListener('keydown', onModalityKeydown, true)
+    document.addEventListener('focusin', onModalityFocusIn)
+    document.addEventListener('focusout', onModalityFocusOut)
+  }
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (--modalityInstalls === 0) {
+      document.removeEventListener('keydown', onModalityKeydown, true)
+      document.removeEventListener('focusin', onModalityFocusIn)
+      document.removeEventListener('focusout', onModalityFocusOut)
+    }
+  }
+}
+
 // ---- hover / active mirroring -------------------------------------------
 //
 // :hover and :active are set by the browser's REAL hit-testing, which never
@@ -351,6 +450,10 @@ export function forwardPointer(
     target.dispatchEvent(new PointerEvent('pointermove', init))
     target.dispatchEvent(new MouseEvent('mousemove', init))
   } else if (kind === 'down') {
+    // The press is the interaction the modality mirror cares about — declared
+    // BEFORE dispatch, because a consumer may focus synchronously from its
+    // pointerdown handler and the verdict must already be in.
+    modality = 'pointer'
     // Real browsers hover before they press — a down with no prior move
     // (surface just appeared under the cursor) still hovers correctly.
     updateHover(root, target, init)
@@ -359,6 +462,7 @@ export function forwardPointer(
     target.dispatchEvent(new PointerEvent('pointerdown', init))
     target.dispatchEvent(new MouseEvent('mousedown', init))
   } else {
+    modality = 'pointer' // a release is a pointer interaction even without its down
     target.dispatchEvent(new PointerEvent('pointerup', init))
     target.dispatchEvent(new MouseEvent('mouseup', init))
     target.dispatchEvent(new MouseEvent('click', init))

@@ -31,6 +31,12 @@
  *     forwardEvents mirrors pointer state as data attributes. This one
  *     override makes every `hover:` utility in verbatim shadcn code work
  *     through the texture.
+ *  4. `focus-visible` excludes `[data-pointer-focus]`: the browser's
+ *     ring-or-no-ring verdict is fed only by trusted events, so a script
+ *     focus after a forwarded click reads as keyboard and paints a ring a
+ *     real page wouldn't. forwardEvents mirrors the correct verdict as an
+ *     attribute; this variant consults it. Same mechanism as #3, opposite
+ *     direction — there the mirror grants a state, here it withholds one.
  *
  * Theme tokens are transcribed from shadcn's documented new-york-v4 zinc
  * theme (chart/sidebar vars trimmed — nothing here consumes them).
@@ -41,6 +47,7 @@
 
 @custom-variant hover (&:is(:hover, [data-hover]));
 @custom-variant active (&:is(:active, [data-active]));
+@custom-variant focus-visible (&:focus-visible:not([data-pointer-focus]));
 @custom-variant dark (&:is(.dark *));
 
 :root {

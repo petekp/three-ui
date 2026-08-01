@@ -882,3 +882,68 @@ how this bug happened. A knob that can only ever be set wrong is not a knob.
 1280×720"; the rest of #21 stands. Note also that #21's closing line —
 `CameraChrome` "stays in the lab pending promotion" — is stale: both it and
 `ViewerSurface` ship from `src/primitives/floating/` and the public barrel.
+
+## 24. `:focus-visible` is a verdict, and the forwarder must deliver it (2026-08-01, lab 009)
+
+**Context.** Routing `FloatingSurface` through the conductor (#17) removed
+the entrance keyframes from the paint path — and the counter didn't move:
+19 paints per popover open, before and after. `document.getAnimations()`
+mid-flight held the answer: the `enter` animation sat `paused` (the
+conductor working), and beside it six CSS *transitions* ran on the Apply
+button — border colours to `--ring`, box-shadow `none` → 3px ring,
+outline-width 3→1px, 150ms each. The focus ring, fading in under the
+entrance flight it was hiding beneath. Two per-frame painters sharing a
+window count once per frame, which is why seizing the keyframes changed
+nothing measured.
+**Why the ring is there at all.** Radix autofocuses the first tabbable of
+every popover it opens; shadcn's Button styles the ring under
+`focus-visible:` with `transition-all`. On a page, a *pointer*-opened
+popover shows no ring: `:focus-visible` is not a state but a verdict —
+the browser grants the ring by asking how the user last interacted, and
+script focus after a pointer interaction is denied it. That heuristic is
+fed **exclusively by trusted events**. Everything the forwarder dispatches
+is synthetic, so the browser never hears our pointer story and judges
+every post-click autofocus as keyboard. Verified with trusted CDP input
+through the mesh — the trusted pointerdown lands on the *canvas*, which
+apparently doesn't update the verdict either (`KeepDomFocus` prevents its
+default; unproven whether that's the reason): still 19/20 paints, ring
+still materializing. Not a probe artifact; every real pointer user pays
+it, in fidelity and in paints.
+**Decision.** The same shape as #19: the forwarder is the only thing that
+knows the pointer's real story, so it mirrors the verdict. `forwardEvents`
+keeps a module-level modality — `'pointer'` declared at every forwarded
+press (before dispatch, so a consumer focusing synchronously from
+`pointerdown` already sees it), `'keyboard'` restored by any real keydown
+(capture-phase, so FocusScene's claimed keys still count; lone modifiers
+ignored, as the browser ignores them). A document `focusin` listener
+stamps `data-pointer-focus` on elements focused under pointer modality —
+never on text inputs, textareas or contenteditables, which earn their ring
+however focus arrives (the browser's own carve-out) — and `focusout`
+removes it. The consumer's side is one dialect line, the fourth:
+
+    @custom-variant focus-visible (&:focus-visible:not([data-pointer-focus]));
+
+Same mechanism as the hover twin, opposite direction — there the mirror
+grants a state real hit-testing can't deliver; here it withholds one the
+heuristic wrongly granted.
+**Verified** (trusted CDP input, lab 009): pointer open = 3 paints,
+`data-pointer-focus` stamped on the autofocused Apply, zero ring
+transitions; Escape → Enter reopen = ring visible, no stamp, ~20 paints of
+ring fade — which keyboard users get on a page too and are entitled to.
+Radix's focus-return on dismissal inherits the right verdict with no extra
+code. Lab 006's Tab entry and `data-focus` chrome unaffected (that system
+never consults `:focus-visible`). 26 forwardEvents tests incl. 7 on the
+mirror.
+**Rejected.** (a) *Suppress ring transitions in CSS*
+(`transition: none` under `.ui-layer`) — kills the paint cost but shows a
+ring a page wouldn't show, and steals the ring *animation* from keyboard
+users who've earned it. (b) *`onOpenAutoFocus` preventDefault per
+component* — breaks byte-verbatim ports and forfeits keyboard a11y of
+every popover. (c) *Not preventing the canvas's mousedown default so the
+trusted event might teach the heuristic* — that preventDefault is
+load-bearing (it stops the canvas stealing focus from parked inputs), and
+the untrusted probe path would stay wrong regardless.
+**Open.** A trusted Tab pressed while focus sits inside the detached
+popover moves nothing — unclaimed (`defaultPrevented` false after full
+propagation), unacted. Pre-existing, orthogonal to the mirror, filed under
+the #36 umbrella with the two-hop tooltip transit.

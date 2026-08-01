@@ -9,8 +9,13 @@
 // these tests are about the event protocol, not about where boxes land.
 // deepestElementAt's own hit-testing is exercised through those stubs.
 
-import { beforeEach, describe, expect, it } from 'vitest'
-import { clearPointerState, deepestElementAt, forwardPointer } from './forwardEvents'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  clearPointerState,
+  deepestElementAt,
+  forwardPointer,
+  trackFocusModality,
+} from './forwardEvents'
 
 const ROOT = { left: 0, top: 0, right: 360, bottom: 460 }
 
@@ -358,6 +363,111 @@ describe('leaving one surface for another', () => {
     const moves = awayMoves()
     expect(moves.length).toBeGreaterThan(0)
     expect(moves[0].x).toBeLessThan(ROOT.left)
+  })
+})
+
+describe('focus modality mirroring', () => {
+  // The browser decides ring-or-no-ring by asking how the user last
+  // interacted, and its heuristic hears only TRUSTED events — so focus that
+  // follows a forwarded click reads as keyboard and shows a ring a real page
+  // wouldn't. The forwarder mirrors the verdict it knows to be correct as
+  // `data-pointer-focus`; the consumer's `focus-visible` variant excludes it.
+
+  let release: () => void
+
+  beforeEach(() => {
+    release = trackFocusModality()
+    // The mirror's modality is module state; a previous test may have left it
+    // on 'pointer'. A keydown is the public way to reset it.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }))
+  })
+
+  afterEach(() => release())
+
+  const clickOn = (boxCoords: readonly [number, number, number, number]) => {
+    const at = uvOf(...boxCoords)
+    forwardPointer(root, at.u, at.v, 'down')
+    forwardPointer(root, at.u, at.v, 'up')
+  }
+
+  it('stamps the button a forwarded click focuses', () => {
+    clickOn(TRIGGER_BOX)
+
+    expect(document.activeElement).toBe(trigger)
+    expect(trigger.hasAttribute('data-pointer-focus')).toBe(true)
+  })
+
+  it('stamps a script focus that follows a forwarded press', () => {
+    // The case the whole mirror exists for: Radix FocusScope autofocuses the
+    // first tabbable of a popover it opened in reaction to our click. That
+    // focus is not ours, but the interaction that caused it was.
+    const at = uvOf(...TRIGGER_BOX)
+    forwardPointer(root, at.u, at.v, 'down')
+
+    sibling.focus()
+
+    expect(sibling.hasAttribute('data-pointer-focus')).toBe(true)
+  })
+
+  it('a keyboard interaction re-earns the ring for the next focus', () => {
+    clickOn(TRIGGER_BOX)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+
+    sibling.focus()
+
+    expect(sibling.hasAttribute('data-pointer-focus')).toBe(false)
+  })
+
+  it('modifier keys are not a keyboard interaction', () => {
+    // A pointer user holding Shift mid-gesture has not switched to the
+    // keyboard; the browser's heuristic ignores lone modifiers and so do we.
+    clickOn(TRIGGER_BOX)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', bubbles: true }))
+
+    sibling.focus()
+
+    expect(sibling.hasAttribute('data-pointer-focus')).toBe(true)
+  })
+
+  it('never stamps an element that takes keyboard input', () => {
+    // The browser's own carve-out: click into a text field and the ring is
+    // information, not noise. Only button-like things get suppressed.
+    const input = document.createElement('input')
+    input.type = 'text'
+    root.append(input)
+    const INPUT_BOX = [20, 200, 120, 240] as const
+    box(input, ...INPUT_BOX)
+
+    clickOn(INPUT_BOX)
+
+    expect(document.activeElement).toBe(input)
+    expect(input.hasAttribute('data-pointer-focus')).toBe(false)
+  })
+
+  it('the stamp leaves with focus', () => {
+    // A stale stamp would suppress a later, legitimately keyboard-earned ring
+    // on the same element.
+    clickOn(TRIGGER_BOX)
+    expect(trigger.hasAttribute('data-pointer-focus')).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    sibling.focus()
+
+    expect(trigger.hasAttribute('data-pointer-focus')).toBe(false)
+  })
+
+  it('released listeners stop stamping', () => {
+    release()
+    // Re-install so afterEach's release stays balanced, then release for real.
+    const again = trackFocusModality()
+    again()
+
+    const at = uvOf(...TRIGGER_BOX)
+    forwardPointer(root, at.u, at.v, 'down')
+    sibling.focus()
+
+    expect(sibling.hasAttribute('data-pointer-focus')).toBe(false)
+    release = trackFocusModality() // rebalance for afterEach
   })
 })
 

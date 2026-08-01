@@ -81,7 +81,9 @@ wants something that isn't exported, export it — don't reach around.
 - Late-mounted Surfaces must bump `material.needsUpdate` when the
   texture arrives (already handled inside `Surface` — don't remove it).
 - `:hover`/`:active` must be authored as `[data-hover]`/`[data-active]`
-  alongside the pseudo-classes.
+  alongside the pseudo-classes — and `:focus-visible` must exclude
+  `[data-pointer-focus]` (the browser's ring verdict never hears synthetic
+  events, so Surface mirrors it; decisions.md #24).
 
 ## Verifying changes
 

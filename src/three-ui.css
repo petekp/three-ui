@@ -29,6 +29,16 @@
  *                and every `hover:` utility in your existing markup starts
  *                working inside a Surface, unedited.
  *
+ *  `[data-pointer-focus]` — the same mirror, opposite direction. The
+ *                browser's `:focus-visible` verdict is fed only by trusted
+ *                events, so focus that follows a *forwarded* click reads as
+ *                keyboard and shows a ring a real page wouldn't. `Surface`
+ *                stamps this attribute on pointer-focused elements (never on
+ *                keyboard-focused ones, never on text inputs); your
+ *                `:focus-visible` rules should exclude it:
+ *
+ *                  @custom-variant focus-visible (&:focus-visible:not([data-pointer-focus]));
+ *
  *  `[data-focus='unit' | 'interior']` — `FocusScene` stamps these on a focus
  *                unit's root element. Style them with PAINT properties only
  *                (outline, colour, shadow); layout changes cost a relayout of
