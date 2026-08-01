@@ -1,9 +1,6 @@
 import { useRef } from 'react'
 import { Text } from '@react-three/drei'
-import { Surface } from '../primitives/Surface'
-import { Dial } from '../primitives/controls/Dial'
-import { Toggle } from '../primitives/controls/Toggle'
-import { Slider } from '../primitives/controls/Slider'
+import { Dial, Slider, Surface, Toggle } from 'three-ui'
 
 // Lab 005 — the physical control kit. Every control on this wall is the SAME
 // integrator (src/lib/physics1D.ts) under a different composed force field:

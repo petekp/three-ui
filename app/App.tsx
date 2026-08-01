@@ -11,8 +11,7 @@ import { Lab008 } from './scenes/Lab008'
 import { Lab009 } from './scenes/Lab009'
 import { ProbeScaleApp } from './scenes/ProbeScale'
 import { ProbeFocusApp } from './scenes/ProbeFocus'
-import { FocusScene } from './primitives/FocusScene'
-import { detectHtmlInCanvas } from './lib/htmlInCanvas'
+import { detectHtmlInCanvas, FocusScene } from 'three-ui'
 
 type LabId = '001' | '002' | '003' | '004' | '005' | '006' | '008' | '009'
 

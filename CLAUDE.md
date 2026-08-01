@@ -6,6 +6,22 @@ in `docs/` — **read `docs/platform.md` before touching
 `src/lib/htmlInCanvas.ts` or `Surface`'s paint path**, and
 `docs/decisions.md` before "simplifying" anything it covers.
 
+## Two trees
+
+- **`src/`** — the library. Public surface is `src/index.ts`, plus the
+  stylesheet at `src/three-ui.css` (all mechanism; it documents the three
+  things it asks of a consumer's CSS in return). Nothing in here may
+  import from `app/`.
+- **`app/`** — the lab application, a *consumer*. It reaches the library
+  only through the `three-ui` / `three-ui/style.css` specifiers (aliased
+  in `vite.config.ts` and `tsconfig.app.json`), exactly as an outside
+  project would — so anything missing from the barrel breaks the build
+  instead of slipping past on a relative path. `app/shadcn.css` is this
+  app's Tailwind theme and its answers to what `three-ui.css` asks for.
+
+Both directions are enforced by `src/boundary.test.ts`. When a scene
+wants something that isn't exported, export it — don't reach around.
+
 ## Hard rules (each one is paid for — see docs/decisions.md)
 
 - **Never animate/transition `opacity` or `transform` on a Surface's
@@ -37,7 +53,7 @@ in `docs/` — **read `docs/platform.md` before touching
   wherever the DOM painted nothing, and subsumes liveness gating entirely
   (an empty layer is inert by construction). Its container needs
   `pointer-events: none` with `auto` on its children — `.ui-layer > *` in
-  `ui.css` — and note `createDomTextureSource` re-roots the cascade to
+  `src/three-ui.css` — and note `createDomTextureSource` re-roots the cascade to
   `auto`, because the parking canvas's `none` inherits (decisions.md #20).
 - **Every element handed to `drawElementImage` must declare explicit pixel
   dimensions.** It rasterizes an element at its *own layout box*, and a
@@ -85,3 +101,9 @@ in `docs/` — **read `docs/platform.md` before touching
   user may be orbiting concurrently), `window.__threeUI.stats()` for
   per-source paint counters, `window.__lab005` etc. for scene hooks.
 - r3f HMR can fake broken materials — hard-reload before judging visuals.
+  It also fakes broken *modules*: after a dev-server restart the tab can
+  end up holding two instances of a pre-bundled dep, and a module-level
+  singleton then quietly stops working across them (measured 2026-08-01 —
+  `toast()` from one instance, `<Toaster>` subscribed to the other, no
+  error anywhere, toasts simply never appeared). Reload before believing
+  any "it silently does nothing" result.

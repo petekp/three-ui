@@ -88,7 +88,7 @@ Drag makes the body kinematic (velocity integrated from the pointer),
 release hands the smoothed velocity to Rapier. No durations, no easing —
 interruption mid-flight is just another grab.
 
-### focus-as-light (`src/scenes/Lab002.tsx`)
+### focus-as-light (`app/scenes/Lab002.tsx`)
 Scene lighting bound to DOM state: `focusin`/`focusout` on the live subtree
 drives a key spotlight (2 → 320 candela, damped); failed validation pulses a
 red point light from inside the console. Attention is literal light, not a
@@ -1026,11 +1026,11 @@ interaction-paradigm claim.
 The word "verbatim" is load-bearing: Button, Card, Input, Label, and
 Badge came from the shadcn registry by `curl`
 (`ui.shadcn.com/r/styles/new-york-v4/*.json`), written to
-`src/components/ui/` byte-identical, imports from the unified
+`app/components/ui/` byte-identical, imports from the unified
 `radix-ui` package and `@/lib/utils` resolved by alias rather than
 edited. shadcn's copy-into-your-repo model is what makes this
 legitimate rather than a fork — vendoring IS the install path. The
-Tailwind side (`src/styles/ui.css`) replaces the generated globals
+Tailwind side (`app/shadcn.css`) replaces the generated globals
 with exactly three deviations, each one a dialect rule of DOM-as-
 matter: `tw-animate-css` is refused (opacity/transform keyframes are
 compositor-owned and never rasterize — motion belongs to the mesh),
@@ -1070,7 +1070,7 @@ idle flat at 69→69 across 2.5s once blurred (caret blink paints while
 focused, as it always has); and the focus spine composed for free —
 Tab selected the unit, Enter descended with native focus landing on
 the Input, Escape ascended, the `data-focus` outline riding the card
-via one dialect selector in ui.css. Zero edits to any component
+via one dialect selector in the app stylesheet. Zero edits to any component
 source. The leaf set turned out animation-free, so the compositor
 rule cost nothing here — that bill arrives with the floating family,
 which is increment 2's whole subject.

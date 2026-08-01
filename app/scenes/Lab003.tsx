@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Text } from '@react-three/drei'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
-import { Surface } from '../primitives/Surface'
+import { Surface } from 'three-ui'
 
 // Lab 003 — feasibility edges of the primitive set:
 //   A. multi-Surface   several live source canvases parked at the same fixed

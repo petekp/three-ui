@@ -1,9 +1,13 @@
 /* three-ui × shadcn/ui — the Tailwind side of the port.
  *
- * Components in src/components/ui/ are byte-verbatim from the shadcn
- * registry (new-york-v4). This file replaces shadcn's generated
- * globals.css with three deliberate deviations, each one a dialect rule
- * of rendering DOM as matter:
+ * APP code, not library. `src/three-ui.css` holds the rules the primitives
+ * actually require (framework-agnostic, all mechanism); this file is one
+ * consumer's answer to what that stylesheet asks for in return — the theme,
+ * the typography, and the three deviations from shadcn's generated
+ * globals.css that a port to matter turns out to need.
+ *
+ * Components in app/components/ui/ are byte-verbatim from the shadcn
+ * registry (new-york-v4). The deviations:
  *
  *  1. `tw-animate-css` IS imported — but as a score, not a performance.
  *     Its keyframes run on descendants of the drawn root, so they DO
@@ -114,53 +118,18 @@
   .ui-root {
     @apply bg-background font-sans text-foreground antialiased;
   }
+  /* `.ui-layer`'s transparency is the whole point of it — background-less,
+   * so everything the popover does not cover stays clear glass and the panel
+   * behind is seen through it. The `pointer-events` half of the contract is
+   * mechanism and lives in src/three-ui.css. */
   .ui-layer {
     @apply font-sans text-foreground antialiased;
   }
-  /* The portal-container idiom, unchanged from a 2D page: the container is
-   * clear to the pointer, what it holds is not. On a Surface this is also
-   * what the RAYCASTER reads (Surface `hitTest="content"`), so a ray through
-   * the clear part of the slab carries on to the panel behind it instead of
-   * stopping at glass. Without it, opening a tooltip put a full-panel slab in
-   * front of its own trigger — and the panel, hearing the ray leave,
-   * dismissed the tooltip it had just opened. */
-  .ui-layer > * {
-    pointer-events: auto;
-  }
 }
 
-/* three-ui dialect: a DETACHED floating layer.
- *
- * An anchored layer (`.ui-layer`) is the same size and origin as the panel it
- * belongs to, so a positioner's page coordinates land in exactly the right
- * place for free — that coincidence is what made the anchored family cheap.
- * A DETACHED layer gives up the coincidence on purpose: its content is its own
- * object at its own pose in the scene, so there is no 2D offset that could be
- * right, and the positioner's answer is not merely unnecessary but wrong.
- *
- * So placement is revoked, and the scene graph does it instead. Both mechanisms
- * a positioner can use are covered: Floating UI writes `transform: translate()`
- * on a `fixed; left:0; top:0` wrapper, and older/simpler ones write the offsets
- * directly. Pinned at the origin, the content rasterizes at its canvas's
- * top-left corner — which is what lets the Surface be sized to hug it.
- *
- * `!important` is load-bearing twice over: Radix rebuilds the wrapper on every
- * open (so a one-shot inline write does not survive a close/reopen), and
- * Floating UI rewrites its inline transform on every autoUpdate tick. Measured
- * 2026-07-31: inline read `translate(36px, 133px)` while computed read `none`.
- *
- * Note this targets the WRAPPER, not the content — so the entrance animation
- * (`zoom-in-95`, `slide-in-from-top-2`), which transforms the content itself,
- * is untouched and still reaches useAnimationConductor. */
-.ui-detached > * {
-  position: fixed !important;
-  inset: 0 auto auto 0 !important;
-  transform: none !important;
-}
-
-/* three-ui dialect: FocusScene stamps data-focus on the unit root (the
- * Surface's source element). Outline, not box-shadow, so the card's own
- * shadow-sm survives; paint properties only. */
+/* FocusScene stamps data-focus on the unit root (the Surface's source
+ * element). Outline, not box-shadow, so the card's own shadow-sm survives;
+ * paint properties only. */
 [data-focus='unit'] .ui-root [data-slot='card'] {
   outline: 2px solid var(--ring);
   outline-offset: -2px;

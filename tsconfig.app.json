@@ -5,9 +5,12 @@
     "lib": ["ES2023", "DOM"],
     "module": "esnext",
     "types": ["vite/client"],
+    /* Mirrors vite.config.ts. `three-ui` is how app/ reaches the library —
+       through the barrel and nothing else, the way a consumer would. */
     "paths": {
-      "@/registry/new-york-v4/ui/*": ["./src/components/ui/*"],
-      "@/*": ["./src/*"]
+      "three-ui": ["./src/index.ts"],
+      "@/registry/new-york-v4/ui/*": ["./app/components/ui/*"],
+      "@/*": ["./app/*"]
     },
     "allowArbitraryExtensions": true,
     "skipLibCheck": true,
@@ -26,5 +29,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src", "app"]
 }

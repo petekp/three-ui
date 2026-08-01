@@ -3,8 +3,7 @@ import * as THREE from 'three'
 import { Text } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
 import { Physics, RigidBody } from '@react-three/rapier'
-import { Surface } from '../primitives/Surface'
-import { MomentumCard } from '../primitives/MomentumCard'
+import { MomentumCard, Surface } from 'three-ui'
 
 const CONSOLE_W = 768
 const CONSOLE_H = 448

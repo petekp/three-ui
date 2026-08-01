@@ -59,6 +59,8 @@ const END_EPSILON_MS = 0.5
 
 interface Flight {
   anim: Animation
+  /** The element the animation is running on — the caller's pivot reference. */
+  el: HTMLElement
   samples: MotionSample[]
   durationMs: number
   elapsedMs: number
@@ -75,13 +77,22 @@ function animationNameOf(a: Animation): string | null {
  * runs once per frame while a flight is in progress and receives the pose
  * the DOM would have been wearing.
  *
- * `apply` is called with REST exactly once when a flight ends or is
- * cancelled, so a consumer can return the mesh to its resting pose without
- * tracking state of its own.
+ * The third argument is the element the animation is running on. CSS scales
+ * and translates about *that* element's box; a mesh moves about its own
+ * origin, so a consumer correcting for the difference needs to know where the
+ * moving thing actually is. It is `null` only on the final call after a
+ * cancel, where the element has usually been unmounted.
+ *
+ * `apply` is called once more when a flight ends or is cancelled, so a
+ * consumer can settle the mesh without tracking state of its own.
  */
 export function useAnimationConductor(
   root: HTMLElement | null,
-  apply: (value: MotionValue, done: boolean) => void,
+  apply: (
+    value: MotionValue,
+    done: boolean,
+    el: HTMLElement | null,
+  ) => void,
 ) {
   const applyRef = useRef(apply)
   applyRef.current = apply
@@ -137,7 +148,7 @@ export function useAnimationConductor(
         anim.finish()
         return
       }
-      flightRef.current = { anim, samples, durationMs, elapsedMs }
+      flightRef.current = { anim, el, samples, durationMs, elapsedMs }
     }
 
     // The animation was taken away — usually because the element it was
@@ -148,7 +159,7 @@ export function useAnimationConductor(
     const onCancel = () => {
       if (!flightRef.current) return
       flightRef.current = null
-      applyRef.current(lastValueRef.current, true)
+      applyRef.current(lastValueRef.current, true, null)
     }
 
     root.addEventListener('animationstart', onStart)
@@ -168,7 +179,7 @@ export function useAnimationConductor(
     const done = p >= 1
     const value = sampleAt(flight.samples, p)
     lastValueRef.current = value
-    applyRef.current(value, done)
+    applyRef.current(value, done, flight.el)
     if (done) {
       flightRef.current = null
       // Hand the animation back. finish() fires animationend, which is what

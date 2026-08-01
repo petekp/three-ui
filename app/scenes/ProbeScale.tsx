@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { Canvas } from '@react-three/fiber'
-import { Surface } from '../primitives/Surface'
+import { Surface } from 'three-ui'
 
 // Scale probe — not a lab. Answers one question: how many live Surfaces can
 // the DOM→canvas→texture pipeline carry before frame time dies?

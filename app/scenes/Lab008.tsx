@@ -8,7 +8,7 @@ import {
   Surface,
   type FocusRigApi,
   type GroupFocusState,
-} from '../index'
+} from 'three-ui'
 
 // Lab 008 — the consumer scene: three-ui through its own front door.
 //

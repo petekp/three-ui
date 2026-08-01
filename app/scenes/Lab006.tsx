@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useThree, type ThreeEvent } from '@react-three/fiber'
-import { Surface } from '../primitives/Surface'
-import { FocusGroup, useFocusScene, type GroupFocusState } from '../primitives/FocusScene'
-import { FocusOrbitRig, type FocusRigApi } from '../primitives/FocusOrbitRig'
-import { Dial } from '../primitives/controls/Dial'
-import { arcLayout, type ArcSlot } from '../lib/arcLayout'
+import {
+  arcLayout,
+  Dial,
+  FocusGroup,
+  FocusOrbitRig,
+  Surface,
+  useFocusScene,
+  type ArcSlot,
+  type FocusRigApi,
+  type GroupFocusState,
+} from 'three-ui'
 import {
   buildPanels,
   injectLab006Styles,

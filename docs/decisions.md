@@ -566,7 +566,7 @@ Radix. (a) **`pointer-events` is honored in the forwarded hit test.**
 Surface can be raycast against its content, not its plane.**
 `hitTest="content"` installs a `raycast` that intersects the quad, converts
 each hit's UV to a page point, and keeps only the hits `deepestElementAt`
-resolves. `.ui-layer > * { pointer-events: auto }` in `ui.css` is the
+resolves. `.ui-layer > * { pointer-events: auto }` in `three-ui.css` is the
 ordinary portal-container idiom, now load-bearing in three dimensions: the
 container is clear, what it holds is not.
 **Why at raycast level and not in a handler.** An intersection r3f never

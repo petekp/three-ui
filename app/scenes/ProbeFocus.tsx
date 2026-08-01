@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { createDomTextureSource, type DomTextureSource } from '../lib/htmlInCanvas'
+import { createDomTextureSource, type DomTextureSource } from 'three-ui'
 
 // Focus probe — not a lab. Empirical gate for docs/focus.md: can the
 // browser's real focus machinery reach into parked source subtrees, can we

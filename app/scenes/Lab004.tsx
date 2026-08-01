@@ -2,8 +2,7 @@ import { useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Text } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
-import { Surface } from '../primitives/Surface'
-import { SurfaceLayer } from '../primitives/SurfaceLayer'
+import { Surface, SurfaceLayer } from 'three-ui'
 
 // Lab 004 — the floating-layer system. Lab 003 proved a popover can be a
 // second Surface, but placed it with hand-written flat-plane math. This lab

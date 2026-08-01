@@ -94,7 +94,7 @@ choice of container is the whole decision. Nothing else changes.
 
 The first two keep the positioner's answer, because their canvas shares an
 origin with the thing being positioned against. A `FloatingSurface`
-**revokes** it (`.ui-detached` in `ui.css`) and takes the pose from the
+**revokes** it (`.ui-detached` in `three-ui.css`) and takes the pose from the
 scene graph instead, so `side` / `align` / `sideOffset` / `avoidCollisions`
 are still authored and are silently ignored. Its canvas is sized to the
 content, so the content root's size is written for it — this is the one

@@ -1,0 +1,80 @@
+/* three-ui — the stylesheet the primitives require.
+ *
+ * Import once, anywhere in the consuming app. Everything here is MECHANISM:
+ * plain CSS, no framework, no theme, no opinion about how anything looks.
+ * Each rule exists because a primitive would misbehave without it.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * What the library asks of YOUR stylesheet, in return
+ * ─────────────────────────────────────────────────────────────────────────
+ *
+ *  `.ui-root`  — the container of a `SurfaceApp`'s React tree. It stands in
+ *                for `<body>`, which the host page owns. Put your global
+ *                background, colour and typography base rules here.
+ *
+ *  `.ui-layer` — its transparent twin: the portal container of any floating
+ *                Surface. Same typography, no background — whatever the
+ *                content does not cover has to stay clear glass, because
+ *                that is what the panel behind it is seen through.
+ *
+ *  `[data-hover]` / `[data-active]` — real hit-testing never reaches a parked
+ *                subtree, so `Surface` mirrors pointer state onto elements as
+ *                these attributes. Any `:hover` or `:active` rule that should
+ *                work through a texture must match them too. In Tailwind that
+ *                is two lines:
+ *
+ *                  @custom-variant hover (&:is(:hover, [data-hover]));
+ *                  @custom-variant active (&:is(:active, [data-active]));
+ *
+ *                and every `hover:` utility in your existing markup starts
+ *                working inside a Surface, unedited.
+ *
+ *  `[data-focus='unit' | 'interior']` — `FocusScene` stamps these on a focus
+ *                unit's root element. Style them with PAINT properties only
+ *                (outline, colour, shadow); layout changes cost a relayout of
+ *                the whole subtree on every focus move.
+ */
+
+/* A portal container is clear to the pointer; what it holds is not. This is
+ * the ordinary 2D idiom, and on a Surface it does double duty: `Surface`
+ * sets the source root to `pointer-events: none` under `hitTest="content"`,
+ * and the RAYCASTER reads the same computed value — so a ray through the
+ * clear part of a floating slab carries on to the panel behind instead of
+ * stopping at glass.
+ *
+ * Without it, opening a tooltip put a full-panel slab in front of its own
+ * trigger; the panel heard the ray leave, and dismissed the tooltip it had
+ * just opened (docs/decisions.md #20). */
+.ui-layer > * {
+  pointer-events: auto;
+}
+
+/* A DETACHED floating layer.
+ *
+ * An anchored layer (`AnchoredSurface`) is the same size and origin as the
+ * panel it belongs to, so a positioner's page coordinates land in exactly the
+ * right place for free — that coincidence is what makes the anchored family
+ * cheap. A detached layer (`FloatingSurface`) gives the coincidence up on
+ * purpose: its content is its own object at its own pose in the scene, so
+ * there is no 2D offset that could be right, and the positioner's answer is
+ * not merely unnecessary but wrong.
+ *
+ * So placement is revoked and the scene graph does it instead. Both mechanisms
+ * a positioner can use are covered: Floating UI writes `transform: translate()`
+ * on a `fixed; left:0; top:0` wrapper, and older or simpler ones write the
+ * offsets directly. Pinned at the origin, the content rasterizes at its
+ * canvas's top-left corner — which is what lets the Surface be sized to hug it.
+ *
+ * `!important` is load-bearing twice over: Radix rebuilds the wrapper on every
+ * open (so a one-shot inline write would not survive a close and reopen), and
+ * Floating UI rewrites its inline transform on every autoUpdate tick. Measured
+ * 2026-07-31: inline read `translate(36px, 133px)` while computed read `none`.
+ *
+ * Note this targets the WRAPPER, not the content — so an entrance animation,
+ * which transforms the content itself, is untouched and still reaches
+ * `useAnimationConductor` (docs/decisions.md #22). */
+.ui-detached > * {
+  position: fixed !important;
+  inset: 0 auto auto 0 !important;
+  transform: none !important;
+}

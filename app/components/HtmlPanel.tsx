@@ -6,7 +6,7 @@ import {
   createDomTextureSource,
   detectHtmlInCanvas,
   type DomTextureSource,
-} from '../lib/htmlInCanvas'
+} from 'three-ui'
 
 const PANEL_W = 512
 const PANEL_H = 384
