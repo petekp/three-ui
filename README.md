@@ -2336,3 +2336,46 @@ browser does on every crossing. One unit test pins it; the tooltip
 now hides on surface departure and internal crossings alike, and the
 Radix components hear the twins as the duplicates a real pointer
 always sent them. 259 tests. Decisions #19 addendum.
+
+## the handle moves — a drag consumer through the texture
+
+The workbench splits: a vertical `ResizablePanelGroup` (byte-verbatim,
+react-resizable-panels v4 underneath), the tabs above, a console strip
+below, and a grip handle between them that you can grab through the
+canvas and pull. The drag lands in parked coordinates end to end — the
+library hit-tests its separator's rect at document capture, computes
+deltas from `clientX/Y`, and never learns it is being operated from
+inside a texture. An 80-pixel pull moves the layout exactly 80 pixels,
+both directions, with the camera frozen; a press on empty space still
+orbits.
+
+Getting there surfaced three lies the forwarder had been telling, all
+of one shape: a drag consumer listens for the *gesture*, and the
+narration kept breaking character mid-gesture. Forwarded moves said no
+button was held (hover was the only consumer moves had ever had), so
+the drag deactivated on its own first frame — `forwardPointer` now
+carries the real `buttons` state. The trusted canvas move told screen
+coordinates to the same document listener the forwarded move was
+telling parked coordinates to — `trackDrag` now prevents (not stops:
+the consumer's front door reads `defaultPrevented`, and r3f's own
+delivery rides the propagation) trusted canvas moves while a surface
+drag is live. And our own departure burst — built for hover dismissal,
+announcing `buttons: 0` from provably outside the panel — fired
+mid-drag and was heard as a release, killing the gesture 13 pixels in.
+The consumer had asked for pointer capture on every move; we refuse
+that capture (parked matter must never hold the real pointer —
+`guardPointerCapture` releases it the instant it is granted, or the
+canvas goes silent and the pipeline starves itself), so the forwarder
+owes the *semantics* of the capture instead: no boundary events, no
+position reports from elsewhere, until release. `clearPointerState`
+now defers departures while the drag is live and unwinds them when it
+ends — up first, boundary events after, the order a real capture ends
+in. Deferred, not dropped: the hover state still has to unwind or it
+leaks past the gesture.
+
+Verified with trusted input: full-fidelity bidirectional drag, camera
+frozen; a trusted press at the parked separator's own page coordinates
+does not phantom-drag — the panel library's occlusion filter sees the
+canvas painting above the parked group and stands down, which is the
+second time a consumer's own defenses have turned out to compose with
+the medium unpatched. Idle stays at 0. 266 tests. Decisions #32.

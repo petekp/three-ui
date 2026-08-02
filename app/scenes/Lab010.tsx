@@ -42,6 +42,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -500,6 +501,14 @@ const COSTS_CONFIG = {
   paints: { label: 'paints', color: 'var(--primary)' },
 } satisfies ChartConfig
 
+// The console strip under the resizable handle — the drag consumer's reward.
+const CONSOLE_LINES = [
+  '$ npm run test',
+  '✓ 16 files · 265 tests · 0 failed',
+  '$ npx tsc -b',
+  '✓ clean',
+]
+
 function Workbench() {
   return (
     <div
@@ -511,88 +520,109 @@ function Workbench() {
         <span className="font-mono text-[10px] text-muted-foreground">every seam, on the record</span>
       </header>
       <Separator />
-      <Tabs defaultValue="ledger" className="min-h-0 flex-1 gap-0">
-        <TabsList className="mx-3 mt-3">
-          <TabsTrigger value="ledger">Ledger</TabsTrigger>
-          <TabsTrigger value="decisions">Decisions</TabsTrigger>
-          <TabsTrigger value="costs">Costs</TabsTrigger>
-        </TabsList>
-        <TabsContent value="ledger" className="min-h-0 flex-1 p-3">
-          {/* The scroll region is the Table's OWN wrapper (shadcn renders an
-              `overflow-x-auto` container around every table) — sticky pins to
-              the nearest scrolling ancestor, so scrolling anything outside it
-              would carry the header away. overscroll-contain: the ledger at
-              its end refuses to hand the wheel to the camera, same contract
-              as the chat log. */}
-          <div
-            data-testid="lab010-ledger"
-            className="h-full overflow-hidden rounded-md border [&_[data-slot=table-container]]:h-full [&_[data-slot=table-container]]:overflow-y-auto [&_[data-slot=table-container]]:overscroll-contain"
-          >
-            <Table>
-              <TableHeader className="sticky top-0 bg-card">
-                <TableRow>
-                  <TableHead className="w-12">lab</TableHead>
-                  <TableHead>banked</TableHead>
-                  <TableHead className="text-right">tests</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {LABS.map((l) => (
-                  <TableRow key={l.id}>
-                    <TableCell className="font-mono text-xs">{l.id}</TableCell>
-                    <TableCell>
-                      <div className="text-xs font-medium">{l.title}</div>
-                      <div className="text-[10px] text-muted-foreground">{l.banked}</div>
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">{l.tests}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </TabsContent>
-        <TabsContent value="decisions" className="min-h-0 flex-1 p-3">
-          {/* type="always": the thumb is the point — Radix paints it as DOM,
-              and it tracks the forwarded scroll through the texture. */}
-          <ScrollArea type="always" className="h-full rounded-md border">
-            <div className="flex flex-col gap-3 p-3 pr-4">
-              {DECISIONS.map((d) => (
-                <div key={d.n} className="flex flex-col gap-0.5">
-                  <span className="font-mono text-[10px] text-muted-foreground">#{d.n}</span>
-                  <span className="text-xs font-medium">{d.title}</span>
-                  <span className="text-[11px] leading-snug text-muted-foreground">{d.body}</span>
+      {/* The drag seam: react-resizable-panels listens at the DOCUMENT and
+          hit-tests coordinates against its separator's rect — all of which
+          works in parked coordinates only because forwarded moves carry the
+          real buttons state, trusted canvas moves are defaultPrevented while
+          the drag is live, and the capture guard refuses it the pointer
+          capture it asks for on every move (decisions #32). */}
+      <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
+        <ResizablePanel defaultSize={72} minSize={40}>
+          <Tabs defaultValue="ledger" className="h-full gap-0">
+            <TabsList className="mx-3 mt-3">
+              <TabsTrigger value="ledger">Ledger</TabsTrigger>
+              <TabsTrigger value="decisions">Decisions</TabsTrigger>
+              <TabsTrigger value="costs">Costs</TabsTrigger>
+            </TabsList>
+            <TabsContent value="ledger" className="min-h-0 flex-1 p-3">
+              {/* The scroll region is the Table's OWN wrapper (shadcn renders an
+                  `overflow-x-auto` container around every table) — sticky pins to
+                  the nearest scrolling ancestor, so scrolling anything outside it
+                  would carry the header away. overscroll-contain: the ledger at
+                  its end refuses to hand the wheel to the camera, same contract
+                  as the chat log. */}
+              <div
+                data-testid="lab010-ledger"
+                className="h-full overflow-hidden rounded-md border [&_[data-slot=table-container]]:h-full [&_[data-slot=table-container]]:overflow-y-auto [&_[data-slot=table-container]]:overscroll-contain"
+              >
+                <Table>
+                  <TableHeader className="sticky top-0 bg-card">
+                    <TableRow>
+                      <TableHead className="w-12">lab</TableHead>
+                      <TableHead>banked</TableHead>
+                      <TableHead className="text-right">tests</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {LABS.map((l) => (
+                      <TableRow key={l.id}>
+                        <TableCell className="font-mono text-xs">{l.id}</TableCell>
+                        <TableCell>
+                          <div className="text-xs font-medium">{l.title}</div>
+                          <div className="text-[10px] text-muted-foreground">{l.banked}</div>
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-xs">{l.tests}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </TabsContent>
+            <TabsContent value="decisions" className="min-h-0 flex-1 p-3">
+              {/* type="always": the thumb is the point — Radix paints it as DOM,
+                  and it tracks the forwarded scroll through the texture. */}
+              <ScrollArea type="always" className="h-full rounded-md border">
+                <div className="flex flex-col gap-3 p-3 pr-4">
+                  {DECISIONS.map((d) => (
+                    <div key={d.n} className="flex flex-col gap-0.5">
+                      <span className="font-mono text-[10px] text-muted-foreground">#{d.n}</span>
+                      <span className="text-xs font-medium">{d.title}</span>
+                      <span className="text-[11px] leading-snug text-muted-foreground">{d.body}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </ScrollArea>
-        </TabsContent>
-        <TabsContent value="costs" className="min-h-0 flex-1 p-3">
-          <div className="flex h-full flex-col gap-2 rounded-md border p-3">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-xs font-medium">paints per interaction</span>
-              <span className="text-[10px] text-muted-foreground">
-                measured in the browser — the idle contract is the zero bar
-              </span>
-            </div>
-            <ChartContainer config={COSTS_CONFIG} className="min-h-0 w-full flex-1">
-              <BarChart data={COSTS} layout="vertical" margin={{ left: 8, right: 16 }}>
-                <CartesianGrid horizontal={false} />
-                <XAxis type="number" tickLine={false} axisLine={false} fontSize={10} />
-                <YAxis
-                  type="category"
-                  dataKey="action"
-                  tickLine={false}
-                  axisLine={false}
-                  width={58}
-                  fontSize={10}
-                />
-                <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
-                <Bar dataKey="paints" fill="var(--color-paints)" radius={3} />
-              </BarChart>
-            </ChartContainer>
+              </ScrollArea>
+            </TabsContent>
+            <TabsContent value="costs" className="min-h-0 flex-1 p-3">
+              <div className="flex h-full flex-col gap-2 rounded-md border p-3">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-xs font-medium">paints per interaction</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    measured in the browser — the idle contract is the zero bar
+                  </span>
+                </div>
+                <ChartContainer config={COSTS_CONFIG} className="min-h-0 w-full flex-1">
+                  <BarChart data={COSTS} layout="vertical" margin={{ left: 8, right: 16 }}>
+                    <CartesianGrid horizontal={false} />
+                    <XAxis type="number" tickLine={false} axisLine={false} fontSize={10} />
+                    <YAxis
+                      type="category"
+                      dataKey="action"
+                      tickLine={false}
+                      axisLine={false}
+                      width={58}
+                      fontSize={10}
+                    />
+                    <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
+                    <Bar dataKey="paints" fill="var(--color-paints)" radius={3} />
+                  </BarChart>
+                </ChartContainer>
+              </div>
+            </TabsContent>
+          </Tabs>
+        </ResizablePanel>
+        <ResizableHandle withHandle />
+        <ResizablePanel defaultSize={28} minSize={12}>
+          <div
+            data-testid="lab010-console"
+            className="flex h-full flex-col gap-0.5 overflow-y-auto overscroll-contain bg-muted/40 px-4 py-2 font-mono text-[10px] leading-relaxed text-muted-foreground"
+          >
+            {CONSOLE_LINES.map((line) => (
+              <div key={line}>{line}</div>
+            ))}
           </div>
-        </TabsContent>
-      </Tabs>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   )
 }

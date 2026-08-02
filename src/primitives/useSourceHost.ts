@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { guardPointerCapture } from './forwardEvents'
 import { useLatest } from './useLatest'
 
 // The DOM half of a Surface that hosts live UI.
@@ -73,6 +74,13 @@ export function useSourceHost({
     node.style.height = `${heightRef.current}px`
     el.appendChild(node)
 
+    // Parked matter must never hold the real pointer. A drag consumer inside
+    // (react-resizable-panels calls `setPointerCapture` per move) would
+    // otherwise capture pointerId 1 — the actual mouse — and every trusted
+    // pointer event retargets to the parked element: the canvas goes silent
+    // mid-gesture (decisions #32).
+    const unguard = guardPointerCapture(node)
+
     // The container is built HERE, not hoisted into a `useMemo`, because it
     // may own a React root. A hoisted node outlives a Surface source
     // teardown, so the next mount would call `createRoot` on a container
@@ -94,6 +102,7 @@ export function useSourceHost({
       rootRef.current = null
       onHostRef.current?.(null)
       setHost(null)
+      unguard()
       node.remove()
       // Unmounting synchronously here would land inside the outer root's
       // commit phase (React warns and defers anyway) — do it cleanly.

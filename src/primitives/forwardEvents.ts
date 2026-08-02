@@ -382,6 +382,18 @@ let lastForward: { root: HTMLElement; x: number; y: number } | null = null
 export function clearPointerState(root: HTMLElement) {
   const m = mirrors.get(root)
   if (!m) return
+  // While a surface drag is live, a departure is a lie twice over. The
+  // consumer asked for pointer capture (we refused it — see
+  // guardPointerCapture), and capture semantics are exactly this: no boundary
+  // events, no position reports from anywhere else, until the button comes
+  // up. And the burst below would say `buttons: 0` — the one signal every
+  // drag consumer treats as "released" (react-resizable-panels deactivates on
+  // its first buttonless move; measured killing a drag 13px in). Defer the
+  // whole departure; it runs, honestly, when the drag ends.
+  if (surfaceDrag) {
+    pendingClears.add(root)
+    return
+  }
   hoverRoots.delete(root)
   if (m.hovered) {
     // Leave from where the pointer actually was. The grace polygon is
@@ -493,6 +505,7 @@ export function forwardPointer(
   u: number,
   v: number,
   kind: 'down' | 'up' | 'move',
+  buttons?: number,
 ): ForwardResult | null {
   const rect = root.getBoundingClientRect()
   const x = rect.left + u * rect.width
@@ -523,7 +536,11 @@ export function forwardPointer(
     pointerType: 'mouse',
     isPrimary: true,
     button: 0,
-    buttons: kind === 'down' ? 1 : 0,
+    // Moves carry the REAL buttons state when the caller has it: a drag
+    // consumer (react-resizable-panels) deactivates the moment it sees a
+    // move with no button held, so a forwarded drag whose moves all said
+    // `buttons: 0` would end on its own first frame.
+    buttons: kind === 'down' ? 1 : kind === 'move' ? (buttons ?? 0) : 0,
     view: window,
   }
 
@@ -537,6 +554,7 @@ export function forwardPointer(
     // BEFORE dispatch, because a consumer may focus synchronously from its
     // pointerdown handler and the verdict must already be in.
     modality = 'pointer'
+    surfaceDrag = true
     // Real browsers hover before they press — a down with no prior move
     // (surface just appeared under the cursor) still hovers correctly.
     updateHover(root, target, init)
@@ -546,6 +564,7 @@ export function forwardPointer(
     target.dispatchEvent(new MouseEvent('mousedown', init))
   } else {
     modality = 'pointer' // a release is a pointer interaction even without its down
+    surfaceDrag = false
     target.dispatchEvent(new PointerEvent('pointerup', init))
     target.dispatchEvent(new MouseEvent('mouseup', init))
     target.dispatchEvent(new MouseEvent('click', init))
@@ -560,6 +579,10 @@ export function forwardPointer(
     } else {
       ;(document.activeElement as HTMLElement | null)?.blur?.()
     }
+    // Departures deferred during the drag unwind now — the order a real
+    // capture ends in: the up reaches its target first, then the boundary
+    // events fire.
+    flushPendingClears()
   }
 
   return { target, focused }
@@ -685,6 +708,103 @@ export function forwardWheel(
 // stopped before OrbitControls ever hears it.
 let wheelRefs = 0
 let untrackWheel: (() => void) | null = null
+
+// True from a forwarded pointerdown until its release — a drag that BEGAN on
+// a Surface. The discriminator matters: a drag that began on empty space and
+// merely travels over a panel is OrbitControls' gesture, and its document
+// stream must not be touched (decisions #26's carve-out).
+let surfaceDrag = false
+let dragRefs = 0
+let untrackDrag: (() => void) | null = null
+
+// Departures announced while the drag was live, waiting for the release.
+// (See clearPointerState — capture semantics defer them, not drop them:
+// whatever hover state those surfaces were holding still has to unwind, or
+// it leaks past the gesture.)
+const pendingClears = new Set<HTMLElement>()
+
+function flushPendingClears() {
+  const pending = [...pendingClears]
+  pendingClears.clear()
+  for (const root of pending) clearPointerState(root)
+}
+
+/**
+ * Arbitrate trusted DRAG moves at document capture — the third seat in the
+ * wheel/hover family, and it exists for the same reason: the canvas is how
+ * the pointer travelled, not what it is dragging.
+ *
+ * react-resizable-panels listens for pointermove at document BUBBLE and
+ * computes drag deltas from `clientX/Y` against the point where the drag
+ * began — which was a FORWARDED down, in parked coordinates. The trusted
+ * move (target CANVAS, screen coordinates) reaching that same listener
+ * interleaves a second coordinate system into the delta stream: the
+ * two-narrator problem again, this time with a button held.
+ *
+ * The remedy is `preventDefault`, not stopPropagation: the panel library's
+ * own front door is `if (event.defaultPrevented) return`, and propagation
+ * must survive because r3f delivers mesh events from the canvas wrapper's
+ * bubble — the forwarding pipeline itself rides the path a stop would cut.
+ * Suppressing a drag-move's compat `mousemove` is the only side effect, and
+ * only while a surface drag is live.
+ */
+export function trackDrag(): () => void {
+  if (dragRefs++ === 0) {
+    const onMove = (e: PointerEvent) => {
+      if (!surfaceDrag || !e.isTrusted || e.buttons === 0) return
+      if (!(e.target instanceof HTMLCanvasElement)) return
+      e.preventDefault()
+    }
+    // A release anywhere ends the gesture — including over the floor or off
+    // the window, where no Surface handler will ever hear it to forward one.
+    const onEnd = (e: PointerEvent) => {
+      if (e.isTrusted) {
+        surfaceDrag = false
+        // This capture listener runs before the same trusted up reaches the
+        // canvas and is forwarded — a microtask puts the flush after it, so
+        // the up still lands before any deferred boundary events. (When the
+        // forwarded up flushed already, this finds the set empty.)
+        queueMicrotask(flushPendingClears)
+      }
+    }
+    document.addEventListener('pointermove', onMove, { capture: true, passive: false })
+    document.addEventListener('pointerup', onEnd, true)
+    document.addEventListener('pointercancel', onEnd, true)
+    untrackDrag = () => {
+      document.removeEventListener('pointermove', onMove, { capture: true })
+      document.removeEventListener('pointerup', onEnd, true)
+      document.removeEventListener('pointercancel', onEnd, true)
+    }
+  }
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (--dragRefs === 0) {
+      untrackDrag?.()
+      untrackDrag = null
+    }
+  }
+}
+
+/**
+ * Parked matter must never hold the real pointer. A consumer that calls
+ * `setPointerCapture` from a parked subtree (react-resizable-panels does,
+ * per forwarded move, on its separator) captures the REAL mouse — synthetic
+ * events share pointerId 1 with it — and every trusted event thereafter
+ * retargets to the parked element: the canvas goes silent, r3f stops
+ * raycasting, and the forwarding pipeline starves itself mid-gesture.
+ * Release it the moment it is granted; the consumer's `hasPointerCapture`
+ * check simply re-asks next move and is refused again.
+ */
+export function guardPointerCapture(host: HTMLElement): () => void {
+  const onGot = (e: Event) => {
+    const t = e.target as Element
+    t.releasePointerCapture?.((e as PointerEvent).pointerId)
+  }
+  host.addEventListener('gotpointercapture', onGot, true)
+  return () => host.removeEventListener('gotpointercapture', onGot, true)
+}
 
 /** Reference-counted document-capture wheel arbiter. Returns a release. */
 export function trackWheel(): () => void {

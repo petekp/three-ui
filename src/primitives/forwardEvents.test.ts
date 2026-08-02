@@ -15,7 +15,9 @@ import {
   deepestElementAt,
   forwardPointer,
   forwardWheel,
+  guardPointerCapture,
   silenceHoverMove,
+  trackDrag,
   trackFocusModality,
   trackWheel,
 } from './forwardEvents'
@@ -94,6 +96,12 @@ beforeEach(() => {
   record(sibling, 'sibling')
   record(root, 'root')
   record(document, 'document')
+
+  // Module-state hygiene: a prior test's forwarded down with no matching up
+  // leaves a surface drag live, and clearPointerState then defers (by
+  // design). Release it before every test, and only then start the log.
+  forwardPointer(root, 0.5, 0.5, 'up')
+  log = []
 })
 
 const typesAt = (at: string) => log.filter((l) => l.at === at).map((l) => l.type)
@@ -816,5 +824,114 @@ describe('the document-capture wheel arbiter', () => {
     const e = canvasWheel(40)
     expect(state.top).toBe(0)
     expect(e.defaultPrevented).toBe(false)
+  })
+})
+
+// Everything dispatched in tests is synthetic; the arbiter under test keys on
+// `isTrusted`, so trusted events are forged by shadowing the getter.
+function trusted<E extends Event>(e: E): E {
+  Object.defineProperty(e, 'isTrusted', { value: true })
+  return e
+}
+
+describe('the document-capture drag arbiter', () => {
+  let canvas: HTMLCanvasElement
+  let release: () => void
+  const at = uvOf(...TRIGGER_BOX)
+
+  beforeEach(() => {
+    canvas = document.createElement('canvas')
+    document.body.append(canvas)
+    release = trackDrag()
+  })
+  afterEach(() => {
+    // A forwarded release clears the module's surfaceDrag flag between tests.
+    forwardPointer(root, at.u, at.v, 'up')
+    release()
+  })
+
+  function canvasMove(init: PointerEventInit, forge = true) {
+    const e = new PointerEvent('pointermove', { bubbles: true, cancelable: true, ...init })
+    canvas.dispatchEvent(forge ? trusted(e) : e)
+    return e
+  }
+
+  it('carries the caller-supplied buttons state on forwarded moves', () => {
+    const seen: number[] = []
+    trigger.addEventListener('pointermove', (e) => seen.push((e as PointerEvent).buttons))
+    forwardPointer(root, at.u, at.v, 'move')
+    forwardPointer(root, at.u, at.v, 'move', 1)
+    expect(seen).toEqual([0, 1])
+  })
+
+  it('prevents trusted canvas moves while a surface drag is live', () => {
+    forwardPointer(root, at.u, at.v, 'down')
+    const e = canvasMove({ buttons: 1 })
+    expect(e.defaultPrevented).toBe(true)
+  })
+
+  it('leaves buttonless, synthetic, and non-canvas moves untouched', () => {
+    forwardPointer(root, at.u, at.v, 'down')
+    // No button held — a plain hover travelling over the canvas.
+    expect(canvasMove({ buttons: 0 }).defaultPrevented).toBe(false)
+    // Synthetic — the forwarder's own dispatches must not be eaten.
+    expect(canvasMove({ buttons: 1 }, false).defaultPrevented).toBe(false)
+    // Trusted with a button, but not aimed at a canvas.
+    const off = new PointerEvent('pointermove', { bubbles: true, cancelable: true, buttons: 1 })
+    document.body.dispatchEvent(trusted(off))
+    expect(off.defaultPrevented).toBe(false)
+  })
+
+  it('stands down after a forwarded release', () => {
+    forwardPointer(root, at.u, at.v, 'down')
+    forwardPointer(root, at.u, at.v, 'up')
+    expect(canvasMove({ buttons: 1 }).defaultPrevented).toBe(false)
+  })
+
+  it('stands down on a trusted release anywhere', () => {
+    forwardPointer(root, at.u, at.v, 'down')
+    // The pointer went up over the floor — no Surface handler ever hears it.
+    document.body.dispatchEvent(trusted(new PointerEvent('pointerup', { bubbles: true })))
+    expect(canvasMove({ buttons: 1 }).defaultPrevented).toBe(false)
+  })
+
+  it('defers a departure while the drag is live and unwinds it on release', async () => {
+    forwardPointer(root, at.u, at.v, 'down')
+    // Mid-drag, something announces the pointer left the surface. Capture
+    // semantics: no boundary events, and above all no buttons:0 burst moves
+    // — the signal a drag consumer reads as "released".
+    clearPointerState(root)
+    await settle()
+    expect(typesAt('trigger')).not.toContain('pointerleave')
+    expect(log.filter((l) => l.at === 'document' && l.type === 'pointermove' && l.x < 0)).toEqual([])
+
+    // The release unwinds the deferred departure: leave, then the burst.
+    forwardPointer(root, at.u, at.v, 'up')
+    await settle()
+    expect(typesAt('trigger')).toContain('pointerleave')
+    expect(
+      log.filter((l) => l.at === 'document' && l.type === 'pointermove' && l.x < 0).length,
+    ).toBeGreaterThan(0)
+  })
+})
+
+describe('the pointer-capture guard', () => {
+  it('releases a capture the instant it is granted, and detaches cleanly', () => {
+    const host = document.createElement('div')
+    const child = document.createElement('div')
+    host.append(child)
+    document.body.append(host)
+
+    const released: number[] = []
+    ;(child as unknown as { releasePointerCapture: (id: number) => void }).releasePointerCapture =
+      (id) => released.push(id)
+
+    const unguard = guardPointerCapture(host)
+    child.dispatchEvent(new PointerEvent('gotpointercapture', { bubbles: true, pointerId: 7 }))
+    expect(released).toEqual([7])
+
+    unguard()
+    child.dispatchEvent(new PointerEvent('gotpointercapture', { bubbles: true, pointerId: 7 }))
+    expect(released).toEqual([7])
   })
 })

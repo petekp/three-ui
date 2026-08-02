@@ -1364,3 +1364,86 @@ points at empty sky from another camera angle. (d) *Projecting the
 trigger's quad through UV plumbing* — exit points suffice (Radix's own
 doctrine), and the trigger element's world rect would re-introduce
 exactly the coordinate math the `container` lever exists to avoid.
+
+## 32. A held button is a capture — drag consumers and the three lies of the forwarded gesture (2026-08-01, lab 010)
+
+**Decision.** While a forwarded press is live (`surfaceDrag`, set by the
+forwarded pointerdown, cleared by any release), the forwarder emulates
+pointer-capture semantics, because that is what drag consumers actually
+asked for: (a) forwarded moves carry the REAL `buttons` state
+(`forwardPointer` gained the parameter; Surface passes
+`e.nativeEvent.buttons`); (b) `trackDrag` — the third document-capture
+seat in the wheel/hover family — `preventDefault`s trusted
+canvas-targeted moves that hold a button; (c) `guardPointerCapture` on
+every source-host container releases any pointer capture the instant
+it is granted; (d) `clearPointerState` DEFERS: no boundary events, no
+departure burst, until the drag ends, then unwinds honestly.
+
+**Context.** react-resizable-panels v4 is the worked example, and it is
+built the way most drag libraries are: `pointerdown` (document capture)
+hit-tests coordinates against its separator's rect and stores the start
+point; `pointermove` (document bubble) computes a delta from
+`clientX/Y`, front door `if (e.defaultPrevented) return`, deactivates
+on the first move with `buttons === 0`; `setPointerCapture` on the
+separator per move. Every piece works in parked coordinates — IF the
+narration is consistent. It wasn't, three ways:
+
+**Lie one — forwarded moves said no button was held.** The forwarder
+hardcoded `buttons: 0` on moves (hover was the only consumer that had
+existed). A drag consumer deactivates on its own first frame. Moves now
+carry the caller's state; down stays `1`, up stays `0`.
+
+**Lie two — the trusted move told screen coordinates to a document
+listener mid-gesture.** #26 silences trusted HOVER moves at the canvas
+(`buttons === 0` only, deliberately, so a drag that began on empty
+space keeps orbiting — that carve-out stands). A drag that began ON a
+surface leaks its trusted moves to document bubble: two narrators, two
+coordinate systems, interleaved in one delta stream. `trackDrag`
+prevents them at document capture. `preventDefault`, NOT
+`stopPropagation`: the consumer's front door checks `defaultPrevented`,
+and propagation must survive because r3f delivers the forwarding
+pipeline's own events from the canvas wrapper's bubble — a stop would
+cut the branch we're sitting on.
+
+**Lie three — our own departure burst announced `buttons: 0` from
+inside the gesture.** Measured killing a drag 13px into an 80px pull:
+mid-drag, a transient departure fired the #19 burst, whose moves are
+built for hover dismissal and say no button is held — the exact
+deactivation signal from lie one, this time self-inflicted. The
+capture the consumer asked for (and was refused) means precisely "no
+boundary events, no position reports from elsewhere, until release" —
+so `clearPointerState` defers to a pending set while `surfaceDrag` is
+live and flushes on release, up first, boundary events after, the
+order a real capture ends in. Deferred, not dropped: the hover state
+still has to unwind or it leaks past the gesture.
+
+**And the capture itself.** The consumer calls
+`setPointerCapture(pointerId)` on the parked separator. Synthetic
+events share `pointerId: 1` with the real mouse, so the parked element
+captures the REAL pointer — every trusted event thereafter retargets to
+parked DOM, the canvas goes silent, r3f stops raycasting, and the
+pipeline starves itself mid-gesture. `guardPointerCapture` (wired in
+`useSourceHost`) releases on `gotpointercapture`; the consumer's
+`hasPointerCapture` check simply re-asks next move and is refused
+again. Parked matter must never hold the real pointer.
+
+**Verified** (lab 010 workbench, vertical `ResizablePanelGroup`,
+trusted CDP input, Chrome 150): an 80 panel-px pull moves the layout
+exactly 80px, both directions, camera frozen throughout; a trusted
+down at the PARKED separator's page coordinates does not phantom-drag
+(v4's own occlusion filter sees the canvas painting above the parked
+group and stands down) and correctly orbits the camera instead (#26's
+carve-out); no `[data-hover]` leaks after the deferred unwind; idle 0
+paints. 7 unit tests: buttons pass-through, arming/disarming, the
+prevent's selectivity (synthetic, buttonless, and non-canvas moves
+untouched), release-anywhere, capture-refusal, and the deferral round
+trip.
+
+**Rejected.** (a) *Suppressing the burst instead of deferring it* —
+drops real hover state on the floor; the leave and its grace-area
+consequences still have to happen, just not mid-gesture. (b)
+*`stopPropagation` on trusted drag moves* — cuts r3f's own delivery
+path (see lie two). (c) *Patching or wrapping the panel library* — the
+seam is the forwarder's narration, not the consumer; every drag
+library reads `buttons`, `defaultPrevented`, and capture the same way,
+and fixing the narration fixes them all unpatched.
