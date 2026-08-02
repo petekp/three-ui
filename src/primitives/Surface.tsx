@@ -7,6 +7,7 @@ import {
   clampScale,
   clampTiers,
   maxTier,
+  seedTier,
   selectLodTier,
   tiersInRange,
 } from '../lib/lodTier'
@@ -193,16 +194,6 @@ function applyMirror(tex: THREE.Texture, mirrorU: boolean) {
   tex.repeat.x = mirrorU ? -1 : 1
 }
 
-// Mount seed for dynamic LOD: the ladder tier nearest 1×. Normally exactly
-// 1, but a range like [2, 4] seeds at 2 so the very first raster is already
-// in-range, and a Surface so wide the 4096 guard removed tier 1 seeds at
-// its clamped floor instead of transiently allocating an oversize canvas.
-function seedTier(ladder: readonly number[]): number {
-  let best = ladder[0]
-  for (const t of ladder) if (Math.abs(t - 1) < Math.abs(best - 1)) best = t
-  return best
-}
-
 export function Surface({
   html,
   label,
@@ -387,9 +378,11 @@ export function Surface({
     const source = createDomTextureSource(html, widthRef.current, heightRef.current, {
       label,
       // Pinned resolution ('max'/number) starts at its final scale;
-      // auto/range starts at the ladder tier nearest 1× and lets the first
-      // LOD evaluations settle it (~2 cheap re-rasters max).
-      scale: pinnedScaleRef.current ?? seedTier(tiersRef.current),
+      // auto/range starts at the ladder tier nearest the renderer's pixel
+      // ratio — density ≈ dpr is the right prior for a mesh that has never
+      // been projected (see seedTier) — and the first LOD evaluations
+      // settle any remaining gap.
+      scale: pinnedScaleRef.current ?? seedTier(tiersRef.current, gl.getPixelRatio()),
       onError: (err) => console.warn('[three-ui] Surface paint failed:', err),
     })
     sourceRef.current = source

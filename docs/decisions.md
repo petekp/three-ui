@@ -2426,3 +2426,63 @@ inverse question exists: moves are routed to whatever surface the ray
 currently hits, so dragging A's slider across B's face may forward A's
 moves into B. Real capture would retarget them to A. Plausible, unproven,
 no lab has hit it — noted here so the next drag bug checks it first.
+
+## 52. A Surface is born at the display's density — and a known flight plan pins it exactly (2026-08-02, lab 014)
+
+**Decision.** Two rules, one for each side of the library boundary:
+
+1. *Library:* dynamic-LOD Surfaces (`resolution` auto or range) seed their
+   first raster at the ladder tier nearest **the renderer's pixel ratio**
+   (`seedTier(ladder, gl.getPixelRatio())`), not nearest 1×.
+2. *Consumer pattern:* when a Surface's screen geometry is knowable —
+   lab 014's flight card lives on one plane under a static calibrated
+   camera — don't make the LOD loop guess. Pin the exact product:
+   `resolution={dpr * planeScale(camZ, LIFT_Z)}`. A pinned Surface is born
+   at its final scale and never re-rasters for density again.
+
+**Why.** Pete, on grabbing a card: *"the card content becomes jarringly
+blurry."* The lab's whole premise is that the page copy and the airborne
+card are the same matter, and the handoff (#46) is where the illusion is
+won or lost: the DOM card — rendered by the browser at full device
+density — hides on the exact frame the texture is revealed. The texture
+was being born at tier 1: `seedTier` picked the tier nearest 1× because
+birth density is unknowable (the mesh has never been projected when the
+first raster runs). On a dpr-2 display demanding ~2.23 texels per CSS px
+(dpr × the 1.114 lift magnification at a 720-high viewport), that first
+raster is a 2.2× upscale — bilinear soup — and the Schmitt trigger needs
+`LOD_EVERY × LOD_AGREE` frames of agreement before the corrective
+re-raster lands. Measured timeline (dpr 2 emulation, 2026-08-02): born at
+scale 1, tier-3 swap commits ~130ms later. Sharp → soup → pop, on every
+grab, at the exact seam the eye is watching.
+
+**Why dpr is the right prior.** Birth density is a prior, not a
+measurement — but it is not an uninformed prior: nearly every consumer
+calibrates world units to CSS pixels (#44) or close to it, which makes
+density ≈ dpr × O(1). The ladder the seed walks is already range-sliced
+and 4096-guarded, so an authored ceiling still wins (`[0.25, 1]` seeds at
+1 on any display) and an oversize Surface seeds at its clamped floor. The
+miss case — a Surface born far away — overshoots and relaxes downward
+through the gradual downshift path: memory pays for the transient, not
+the first impression. Measured on lab 009 (dpr 2): five Surfaces born at
+2, four relaxed to their true ~1.5 within 2s, idle paints 0/s after.
+
+**Why the lab pins instead of trusting the seed.** The seeded auto path
+would still round the card's 2.23 demand down to tier 2 (inside the 15%
+hysteresis band) and ride out the whole flight 8% undersupplied — a
+subtle softness, but "subtle" is exactly what a side-by-side with resting
+DOM reveals. The card's density is not a guess: held or floating it sits
+on the lift plane (`float` hangs at the grab point's world z, which IS
+the lift plane), so `dpr × planeScale(camZ, LIFT_Z)` is exact for its
+entire airborne life — texel : device-pixel = 1 : 1, recomputed on
+resize, re-rastered in place by the pinned-change path. Verified born at
+2.22807 (prediction matched to six decimals), zero tier swaps, two paints
+for the whole grab. The pin also buys the mip pyramid (pinned filter
+policy, #e057ea1's rule), which covers the brief minification while the
+card descends back to z = 0.
+
+**The general lesson.** The LOD ladder answers "how sharp must this
+texture be, given where the mesh turned out to be." Two moments fall
+outside that question: birth (nothing has been projected yet — use the
+display's prior) and known flight plans (the answer is a constant — state
+it). Guessing machinery should only run where there is genuinely
+something to guess.

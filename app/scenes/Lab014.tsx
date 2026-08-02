@@ -51,7 +51,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { SurfaceApp, useSurfaceTexture } from 'three-ui'
 import '../lab014.css'
-import { cameraDistance, screenToPlane } from './lab014Camera'
+import { cameraDistance, planeScale, screenToPlane } from './lab014Camera'
 import { attachLab014Gestures } from './lab014Gestures'
 import {
   atRest,
@@ -523,6 +523,20 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
   const cardRef = useRef<THREE.Group>(null)
   const shadowRef = useRef<THREE.Mesh>(null)
   const grabbed = useRef<(() => void) | null>(null)
+  const viewH = useThree((s) => s.size.height)
+  const dpr = useThree((s) => s.viewport.dpr)
+
+  // The card must be indistinguishable from the resting DOM it replaces, and
+  // its airborne density is not a guess: while held or floating it sits on
+  // the lift plane, magnified by exactly planeScale(camZ, LIFT_Z), on a
+  // display putting `dpr` device pixels under every CSS pixel. Pin the
+  // texture at that product — texel : device-pixel is then 1 : 1 for the
+  // whole airborne life, and a pinned Surface is BORN at its final scale, so
+  // the page→mesh handoff has no blurry first raster to hide (the auto path
+  // seeds at the dpr tier but would still round this 2.2× demand down to
+  // tier 2 and ride out the lift 8% undersupplied). Recomputed on resize;
+  // the pinned-change path re-rasters in place.
+  const airborneDensity = dpr * planeScale(cameraDistance(viewH, FOV), LIFT_Z)
 
   // Re-grabbing an airborne card cannot go through an r3f handler: `Surface`
   // installs its own `onPointerDown` AFTER spreading the caller's mesh props,
@@ -594,7 +608,7 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
           label={`lab014-${card.id}`}
           width={f.w}
           height={f.h}
-          resolution={[1, 3]}
+          resolution={airborneDensity}
           material="none"
           renderOrder={1}
           frustumCulled={false}

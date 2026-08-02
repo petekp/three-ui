@@ -62,6 +62,31 @@ export function selectLodTier(
 }
 
 /**
+ * Mount seed for dynamic LOD: the ladder tier nearest `target`, where
+ * `target` is the renderer's device-pixel ratio. A Surface's first raster
+ * happens before its mesh has ever been projected, so its true density is
+ * unknowable at birth — but almost every consumer calibrates (or
+ * approximates) world units to CSS pixels, which makes density ≈ dpr the
+ * right prior. Seeding at 1× regardless (the old rule) made every Surface
+ * on a retina display be BORN at half density and sharpen ~10–30 frames
+ * later — a visible blur-then-pop on anything revealed at mount: a popover
+ * opening, a toast, a page card handed off to a mesh mid-gesture.
+ *
+ * The ladder passed in is already range-sliced and 4096-guarded, so an
+ * authored ceiling still wins (range [0.25, 1] seeds at 1 on any display),
+ * and a Surface so wide the guard removed the dpr tier seeds at its
+ * clamped floor instead of transiently allocating an oversize canvas. A
+ * far-born Surface overshoots and relaxes downward — the downshift path is
+ * gradual by design — which is the right side to miss on: memory pays for
+ * the transient, not the first impression.
+ */
+export function seedTier(ladder: readonly number[], target = 1): number {
+  let best = ladder[0]
+  for (const t of ladder) if (Math.abs(t - target) < Math.abs(best - target)) best = t
+  return best
+}
+
+/**
  * Slice a ladder to an inclusive [min, max] density range — the tuple form
  * of Surface's `resolution` prop (shaped like r3f's `dpr`). The range
  * expresses *intent* (a floor/ceiling on texture density); the ladder's

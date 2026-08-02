@@ -4,6 +4,7 @@ import {
   clampScale,
   clampTiers,
   maxTier,
+  seedTier,
   selectLodTier,
   tiersInRange,
 } from './lodTier'
@@ -61,6 +62,48 @@ describe('selectLodTier', () => {
 
   it('adopts the nearest tier when current is not on the ladder', () => {
     expect(selectLodTier(1.0, 1.1, TIERS)).toBe(1)
+  })
+})
+
+describe('seedTier', () => {
+  // A Surface's first raster happens before its mesh has ever been
+  // projected, so birth density is a prior, not a measurement — and the
+  // prior is the renderer's pixel ratio (world ≈ CSS px for almost every
+  // consumer). Seeding at 1× regardless made retina Surfaces be born at
+  // half density: a visible blur-then-pop on every popover open and every
+  // page→mesh handoff (measured on lab 014, 2026-08-02: born tier 1,
+  // ~130ms of 2.2×-undersampled text, then the tier-3 swap).
+
+  it('seeds at the tier nearest the pixel ratio', () => {
+    expect(seedTier(DEFAULT_TIERS, 1)).toBe(1)
+    expect(seedTier(DEFAULT_TIERS, 2)).toBe(2)
+    // 1.5 sits exactly on a rung of the default ladder (Windows scaling).
+    expect(seedTier(DEFAULT_TIERS, 1.5)).toBe(1.5)
+    expect(seedTier(DEFAULT_TIERS, 3)).toBe(3)
+  })
+
+  it('defaults to the old nearest-1× behavior when no target is given', () => {
+    expect(seedTier(DEFAULT_TIERS)).toBe(1)
+    expect(seedTier([2, 4])).toBe(2)
+  })
+
+  it('an authored range still caps the seed (the ladder arrives pre-sliced)', () => {
+    // resolution={[0.25, 1]} on a dpr-2 display: the author said "never
+    // above 1×", and birth respects it.
+    expect(seedTier(tiersInRange(DEFAULT_TIERS, 0.25, 1), 2)).toBe(1)
+    // resolution={[2, 4]} on a dpr-1 display: floor wins upward too.
+    expect(seedTier(tiersInRange(DEFAULT_TIERS, 2, 4), 1)).toBe(2)
+  })
+
+  it('a 4096-clamped ladder seeds at its clamped ceiling, not above it', () => {
+    // A 3000-css-px-wide Surface loses every tier above 4096/3000 ≈ 1.37;
+    // dpr 2 must not resurrect an oversize allocation at birth.
+    expect(seedTier(clampTiers(DEFAULT_TIERS, 3000, 400), 2)).toBe(1)
+  })
+
+  it('ties break toward the lower (cheaper) tier', () => {
+    // dpr 1.75 sits exactly between 1.5 and 2 on the default ladder.
+    expect(seedTier(DEFAULT_TIERS, 1.75)).toBe(1.5)
   })
 })
 

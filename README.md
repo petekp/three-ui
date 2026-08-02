@@ -3207,3 +3207,31 @@ leave/enter stay non-bubbling; a foreign-drag move forwards nothing and
 hover resumes on release; and the one that will matter in a year — the
 departure burst must keep bubbling to document, so the next "simplification"
 that stops it fails in CI instead of in every consumer's tooltips. 304/304.
+
+## the card is born blurry — a texture's first frame is a prior
+
+Pete: *"when you begin to drag a card, the card content becomes jarringly
+blurry."* The handoff (#46) hides the browser-rendered page copy on the
+exact frame the texture is revealed, so whatever the texture looks like on
+its first frame is a hard cut from full device density. And its first frame
+was tier 1: the LOD seed picked the ladder tier nearest 1×, because when
+the first raster runs the mesh has never been projected and true density is
+unknowable. On a retina display the card demands ~2.23 texels per CSS px
+(dpr 2 × the 1.114 lift-plane magnification), so the reveal was a 2.2×
+bilinear upscale, and the Schmitt trigger's agreement window meant the
+corrective re-raster landed ~130ms later (measured under dpr-2 emulation:
+born at scale 1, tier-3 swap at +130ms). Sharp → soup → pop, every grab.
+
+Two fixes, one per side of the library line. The library now seeds dynamic
+LOD at the tier nearest the *renderer's pixel ratio* — birth density is a
+prior, and with world ≈ CSS px being the house calibration (#44), dpr is
+the informed one. Every consumer inherits this: lab 009's panels now come
+up at tier 2 on retina and relax to their measured ~1.5 within two
+seconds, instead of coming up soft and sharpening while you watch. And the
+lab pins its flight card outright: held or floating, the card sits on the
+lift plane under a static camera, so its density is not a guess but a
+constant — `dpr × planeScale(camZ, LIFT_Z)` — and a pinned Surface is born
+at its final scale. Verified: born at 2.22807 (the prediction, to six
+decimals), zero tier swaps, two paints for the whole grab, and no frame in
+the card's airborne life below full density. Decision #52: guessing
+machinery should only run where there is genuinely something to guess.
