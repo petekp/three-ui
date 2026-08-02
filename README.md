@@ -2124,3 +2124,45 @@ same doctrine — a score, not a performance: scroll-fade animates
 descendants, which is paint-level and rasterizes honestly. No vh/vw
 anywhere in the set; no component animates a drawn root. 240 tests,
 tsc and build clean, all labs load. Now the scene.
+
+## the scene opens black — a mask, and the claim it refuted
+
+The last entry closed with a claim I hadn't measured: scroll-fade "is
+paint-level and rasterizes honestly." Lab 010's first scene called the
+bluff. The chat panel — message-scroller with the seeded conversation,
+composer, verbatim everything — mounted, painted five times, reported
+zero errors, and rendered as a solid black slab with exactly two
+survivors: the scroll-to-end button and Send, both painted perfectly in
+the right theme. Healthy DOM behind it — computed background white, 928
+characters of text, every item laid out. The failure looked like a
+broken theme, then like a stale texture. It was neither; forcing extra
+repaints healed nothing.
+
+The culprit fell out of single-variable toggles on fresh mounts. Kill
+the viewport's `mask-image` alone: everything paints. Kill the
+scroll-timeline animation alone, leaving the mask computed to a fully
+opaque no-op gradient — a mask hiding *nothing*: still black. The mask
+property's mere presence voids the capture, and not scoped to the masked
+element — the viewport sat between a header and a footer and all three
+went black, the entire drawn root. The two survivors are exactly the
+elements wearing `transition` classes: independently composited, so they
+kept painting into the void. That's the treacherous shape — the blackout
+reaches *up* from a descendant and takes the whole record, then leaves a
+few widgets alive to point the diagnosis anywhere but the mask.
+
+Same compositor-owned family as the drawn root's opacity/transform
+freeze, so the fix follows the same doctrine: the score stays, the
+performance moves. `scroll-fade-b` remains in the verbatim markup;
+`app/shadcn.css` neutralizes the mask inside `.ui-root`/`.ui-layer`
+(unlayered, so it outranks the `@utility` layer without `!important`).
+Deviation 5, decisions #30, and a new platform.md section with the
+toggle table.
+
+With the mask gone the increment closed on measurement: wheel over the
+log scrolls the parked DOM with the camera frozen to the third decimal;
+wheel-down at the bottom hits `overscroll-contain` and moves *nothing*;
+wheel over the floor zooms the room. A probe-sent message became a user
+bubble, the reply streamed word-by-word — 147 paints for the flight,
+the honest cost of streaming text — autoscroll rode the growth, and the
+panel settled back to zero paints per second. The chat log is matter,
+and the scroll seam has its consumer.

@@ -47,9 +47,8 @@
 /* The registry's own base CSS imports this since the chat/AI set landed —
  * it carries the utilities those components wear (`scroll-fade-*` as
  * @property-registered mask fades, `no-scrollbar`, accordion keyframes).
- * Same doctrine as tw-animate above: a score. scroll-fade animates
- * registered custom props consumed by mask-image on DESCENDANTS, which
- * rasterizes correctly (paint property, record invalidates). */
+ * Same doctrine as tw-animate above: a score, not a performance — see the
+ * scroll-fade neutralization below. */
 @import 'shadcn/tailwind.css';
 
 @custom-variant hover (&:is(:hover, [data-hover]));
@@ -139,6 +138,22 @@
   .ui-layer {
     @apply font-sans text-foreground antialiased;
   }
+}
+
+/* Deviation 5 — scroll-fade is a score, not a performance. Measured
+ * 2026-08-01 (Chrome 150): a `mask-image` on ANY descendant of a drawn
+ * element blacks out the whole drawElementImage capture — the panel
+ * rasterizes as solid black except independently-composited descendants
+ * (the transition-bearing buttons), with clean paint events and no error.
+ * Even a mask computed to a fully opaque no-op gradient; the scroll-driven
+ * animation half of the utility is innocent (verified by toggling each
+ * alone). So inside rasterized subtrees the fade classes stay in verbatim
+ * markup and the mask is simply never mounted. Unlayered, so it outranks
+ * the @utility layer without !important. */
+.ui-root [class*='scroll-fade'],
+.ui-layer [class*='scroll-fade'] {
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 /* FocusScene stamps data-focus on the unit root (the Surface's source

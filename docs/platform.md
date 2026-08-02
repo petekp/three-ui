@@ -133,9 +133,47 @@ seam: the drawn element's own transform is handed to you *separately*,
 because it is not part of what gets replayed.
 
 **Untested, suspected compositor-side:** `<video>` frames, animated GIFs,
-`<canvas>` children, CSS filters, `will-change` side effects, scroll
-offsets inside the subtree. Assume broken until probed; route media around
-the DOM path (see authoring.md).
+`<canvas>` children, CSS filters, `will-change` side effects. Assume
+broken until probed; route media around the DOM path (see authoring.md).
+Two former members of this list have since been probed: scroll offsets
+inside the subtree **work** (a `scrollTop` change invalidates the record
+like any descendant mutation — decisions.md #29), and `mask-image` is
+**broken in the worst way** (next section).
+
+## `mask-image` on any descendant voids the whole capture (2026-08-01, lab 010)
+
+A `mask-image` anywhere inside the drawn subtree makes the capture come
+out **black** — not just the masked element: the entire drawn root,
+including flow siblings above and below it. The only survivors are
+descendants that are *independently composited* (in the observed case,
+two buttons wearing `transition` classes), which keep painting correctly
+into the otherwise-black texture. Paint events stay clean, `onpaint`
+fires, no error is reported anywhere — the failure is silent and
+visually indistinguishable from "the theme is broken" or "the texture is
+stale."
+
+Discriminating toggles (Chrome 150.0.7871.187, fresh mount each,
+shadcn's `scroll-fade-b` on a scroller viewport between a header and a
+footer):
+
+| Variant | Result |
+|---|---|
+| mask + scroll-timeline animation (as shipped) | whole root black except composited buttons |
+| `animation: none`, mask kept — computed to a **fully opaque no-op gradient** | still black |
+| `mask-image: none`, animation kept | **everything paints** |
+
+So the trigger is the mask *property being present*, not its visible
+effect (a mask that hides nothing still voids the record) and not the
+scroll-driven animation feeding it. Same compositor-owned family as the
+drawn root's own opacity/transform — but where that failure is scoped to
+the root's own record, this one reaches **up from a descendant** and
+takes the entire capture with it.
+
+Consequence: no `mask-image` inside rasterized subtrees, period.
+shadcn's `scroll-fade-*` utilities are neutralized in the consumer's
+dialect stylesheet (`app/shadcn.css`, decisions.md #30). When a Surface
+renders black-except-some-widgets with clean paints, grep the subtree
+for masks before suspecting anything else.
 
 ## A `layoutSubtree` canvas is a containing block, not a viewport (2026-07-31, lab 009)
 

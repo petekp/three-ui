@@ -1225,3 +1225,45 @@ paint per frame where one was enough. (c) *Toggling
 `controls.enableZoom` from hover state* — a mode flag racing pointer
 moves, and it breaks wheel-over-panel zoom, which is correct whenever
 nothing under the point can scroll.
+
+## 30. No `mask-image` inside a drawn subtree — the mask blacks out the capture (2026-08-01, lab 010)
+
+**Context.** Lab 010's chat panel mounted and rasterized *black* — the
+whole card — except two buttons that painted perfectly, with clean paint
+events, zero errors, and healthy DOM (computed background white, 928
+chars of text, items laid out). The only novel style in the tree:
+shadcn's `scroll-fade-b` on the message-scroller viewport, a
+`mask-image` fade driven by @property-registered custom props and a
+scroll-timeline animation.
+**Measured** (Chrome 150, controlled single-variable toggles on fresh
+mounts): with the mask on, black; `mask-image: none` alone, everything
+paints; `animation: none` alone (mask kept, computed to a *fully opaque
+no-op gradient* — fade size 0), still black. The mask is the killer,
+not the scroll-driven animation, and not the mask's visible effect —
+a mask that hides nothing still voids the capture.
+**The shape of the failure** is the treacherous part: the blackout is
+not scoped to the masked element. The viewport sat between a header
+and a footer, and *all three* went black — the entire drawn root —
+while the two elements that survived (`MessageScrollerButton`, the
+composer's Send) are exactly the ones wearing `transition` classes,
+i.e. independently composited. So the failure reads as "the panel is
+black except random widgets," which points everywhere except the mask.
+Same family as the drawn-root opacity/transform rule (#17's ancestor):
+compositor-owned rendering never reaches the paint record — but this
+one reaches *up* from a descendant and takes the whole capture with it.
+**Decision.** No `mask-image` anywhere inside a drawn subtree. The
+scroll-fade utilities stay in verbatim shadcn markup (a score, not a
+performance — same doctrine as tw-animate-css, #17) and the dialect
+stylesheet neutralizes the mechanism: `.ui-root/.ui-layer
+[class*='scroll-fade'] { mask-image: none }` in `app/shadcn.css`,
+unlayered so it outranks the `@utility` layer without `!important`.
+The scroll-timeline animation is left running; with no mask consuming
+its custom props it paints nothing.
+**Rejected.** (a) *Editing the vendored component* — the class is the
+authoring vocabulary; the port owns the dialect, not the score.
+(b) *A blanket `* { mask-image: none }` in `src/three-ui.css`* —
+silently restyling every consumer's content is the library overstepping;
+the constraint is documented (platform.md) and each dialect answers for
+its own utilities. (c) *Waiting for the platform* — the origin trial may
+well fix mask capture; when it does, delete the neutralization and the
+fades simply start working.

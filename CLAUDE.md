@@ -33,6 +33,13 @@ wants something that isn't exported, export it — don't reach around.
   2026-07-31 — platform.md was wrong about this until then), but cost one
   paint + one upload per frame; route them through
   `useAnimationConductor` or move the mesh (decisions.md #17).
+- **No `mask-image` anywhere inside a drawn subtree.** A mask on any
+  descendant — even one computed to a fully opaque no-op gradient — makes
+  the ENTIRE capture come out black except independently-composited
+  descendants, with clean paints and no error. shadcn's `scroll-fade-*`
+  utilities are neutralized in `app/shadcn.css`; a Surface rendering
+  black-except-some-widgets means grep the subtree for masks first
+  (platform.md, decisions.md #30).
 - **Don't unstop the native pointerdown in `Surface`.** The canvas is
   outside every portaled layer, so without
   `e.nativeEvent.stopPropagation()` any click into a Surface dismisses

@@ -9,13 +9,14 @@ import { Lab005 } from './scenes/Lab005'
 import { Lab006, Lab006Hud } from './scenes/Lab006'
 import { Lab008 } from './scenes/Lab008'
 import { Lab009 } from './scenes/Lab009'
+import { Lab010 } from './scenes/Lab010'
 import { ProbeScaleApp } from './scenes/ProbeScale'
 import { ProbeFocusApp } from './scenes/ProbeFocus'
 import { ProbeLayoutApp } from './scenes/ProbeLayout'
 import { ProbeStyleApp } from './scenes/ProbeStyle'
 import { detectHtmlInCanvas, FocusScene } from 'three-ui'
 
-type LabId = '001' | '002' | '003' | '004' | '005' | '006' | '008' | '009'
+type LabId = '001' | '002' | '003' | '004' | '005' | '006' | '008' | '009' | '010'
 
 // ?probe=N mounts the scale probe instead of the labs (see ProbeScale.tsx).
 function probeParams() {
@@ -99,6 +100,8 @@ export default function App() {
               <Lab008 />
             ) : lab === '009' ? (
               <Lab009 />
+            ) : lab === '010' ? (
+              <Lab010 />
             ) : (
               <Lab006 />
             )}
@@ -119,7 +122,7 @@ export default function App() {
         <h1>three-ui / lab {lab}</h1>
         <p className="sub">a component library made of real materials</p>
         <div className="tabs">
-          {(['001', '002', '003', '004', '005', '006', '008', '009'] as const).map((id) => (
+          {(['001', '002', '003', '004', '005', '006', '008', '009', '010'] as const).map((id) => (
             <button
               key={id}
               data-active={lab === id}
@@ -160,7 +163,9 @@ export default function App() {
                     ? 'Tab surveys · Enter approaches · Escape steps home — every import from the public barrel'
                     : lab === '009'
                       ? 'verbatim shadcn/ui painted as matter · click into a field and type · press Deploy'
-                      : 'double-click a panel to approach · double-click the floor to step back · drag a title bar · click into text and type'}
+                      : lab === '010'
+                        ? 'wheel over the log to scroll it · wheel over the floor to zoom · ask the agent something'
+                        : 'double-click a panel to approach · double-click the floor to step back · drag a title bar · click into text and type'}
       </div>
       {lab === '006' && <Lab006Hud />}
     </div>
