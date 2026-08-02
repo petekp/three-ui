@@ -13,6 +13,7 @@ import { Lab010 } from './scenes/Lab010'
 import { Lab011 } from './scenes/Lab011'
 import { Lab012 } from './scenes/Lab012'
 import { Lab013 } from './scenes/Lab013'
+import { Lab014App } from './scenes/Lab014'
 import { ProbeScaleApp } from './scenes/ProbeScale'
 import { ProbeFocusApp } from './scenes/ProbeFocus'
 import { ProbeLayoutApp } from './scenes/ProbeLayout'
@@ -21,7 +22,12 @@ import { detectHtmlInCanvas, FocusScene } from 'three-ui'
 
 type LabId =
   | '001' | '002' | '003' | '004' | '005' | '006'
-  | '008' | '009' | '010' | '011' | '012' | '013'
+  | '008' | '009' | '010' | '011' | '012' | '013' | '014'
+
+const LABS = [
+  '001', '002', '003', '004', '005', '006',
+  '008', '009', '010', '011', '012', '013', '014',
+] as const
 
 // ?probe=N mounts the scale probe instead of the labs (see ProbeScale.tsx).
 function probeParams() {
@@ -71,6 +77,21 @@ export default function App() {
   )
   const [lab, setLab] = useState<LabId>('006')
 
+  // Lab 014 is not a scene in the shared canvas — it IS a page, with its own
+  // overlay canvas on top of it. Every other lab is content inside one 3D
+  // room; this one inverts the relationship, so it takes the whole route and
+  // carries the lab chips itself.
+  const chips = (
+    <div className="tabs">
+      {LABS.map((id) => (
+        <button key={id} data-active={lab === id} onClick={() => setLab(id)}>
+          lab {id}
+        </button>
+      ))}
+    </div>
+  )
+
+  if (lab === '014') return <Lab014App chips={chips} />
   if (focusProbe) return <ProbeFocusApp />
   if (layoutProbe) return <ProbeLayoutApp />
   if (styleProbe) return <ProbeStyleApp />
@@ -132,19 +153,7 @@ export default function App() {
       <div className="hud">
         <h1>three-ui / lab {lab}</h1>
         <p className="sub">a component library made of real materials</p>
-        <div className="tabs">
-          {(
-            ['001', '002', '003', '004', '005', '006', '008', '009', '010', '011', '012', '013'] as const
-          ).map((id) => (
-            <button
-              key={id}
-              data-active={lab === id}
-              onClick={() => setLab(id)}
-            >
-              lab {id}
-            </button>
-          ))}
-        </div>
+        {chips}
         <ul className="features">
           <li data-ok={support.drawElementImage}>
             drawElementImage {support.drawElementImage ? '✓' : '✗'}

@@ -2874,3 +2874,127 @@ uniform traffic — the DOM is never told any of it happens. Clicking into
 the composer at raw screen coordinates focuses a real `<input>` that lives
 in a parked canvas and has never been in the visible document, and typing
 into it repaints only that one 1152×92 texture.
+
+## lab 014 — the page has a third dimension
+
+Every lab up to here built a *scene*: a canvas that owns its rectangle, and
+DOM that lives inside it as matter. Lab 014 turns that inside out. It starts
+from an ordinary page — a two-column board of task cards over a few hundred
+words of prose, scrollable, selectable, tabbable, styled with nothing but a
+plain stylesheet — and gives it a third dimension it can borrow when it wants
+one. Press a card and it peels off the page: the same component, still live,
+now a rigid plate with real inertia hanging off your pointer and casting a
+real shadow back down onto the paragraph it came from. Let go and it flies
+into whatever slot you were over, the document reflows around it for real,
+and it lies back down as ordinary DOM.
+
+The whole thing rests on one line of camera setup. Put the camera at
+`(viewportHeight/2) / tan(fov/2)` and the plane `z = 0` *is* the viewport,
+exactly. A card's `getBoundingClientRect()` is then already a world pose, and
+there is not one conversion function anywhere in the lab. Everything
+downstream follows for free: lifting a card toward the camera is honest
+perspective, so it gets bigger because it is nearer, and the LOD ladder
+re-rasterizes it sharper on the way up because it genuinely covers more
+pixels. A "1 px" spring constant in the physics file is a real pixel.
+
+**Nothing is ever moved.** The obvious implementation — reparent the card's
+DOM into the parked canvas — cannot work, because React's event delegation is
+rooted at the React root container: a node moved out of `#root` stops
+receiving synthetic events, and the controlled `<input>` inside the card goes
+dead the instant you pick it up. So the page copy does not go anywhere. It
+turns `visibility: hidden`, which keeps its box (the layout does not twitch,
+and the slot is already exactly the right size to be a drop target), while a
+second React root renders the *same component from the same state* into the
+parked subtree. For the two frames where both exist they are pixel-identical
+and in the same place, so there is no flash to hide and no freeze-frame clone
+to make.
+
+The physics is a rigid thin plate, and the reason it has to be one is the
+swing. Grab a card by a corner and pull, and the card must rotate — that is
+a lever arm between where the hand is and where the mass is, which is a
+torque, and a torque needs an orientation to act on. `Ixx = m·h²/12`,
+`Iyy = m·w²/12`, so a wide card resists yaw four times as hard when you
+double its width, and that is not a tuned feel, it is the aspect ratio.
+
+Two bugs in that file are worth keeping. The first is a **units** bug that
+only exists because the world unit is a pixel: the fingers' restoring torque
+was being divided by the inertia tensor like any other torque, and at pixel
+units a 320-wide plate has `I ≈ 8533`, so a gain that felt right in the
+abstract was four orders of magnitude too small and a tilted card took eight
+seconds to lie flat. The fix is a distinction worth naming — **the lever is
+physics and the fingers are a servo.** The lever is a real torque and pays
+the inertia tensor, because a big card really should swing lazily. The
+fingers are specified as an angular frequency and applied as angular
+acceleration directly, never touching the inertia, because a hand does not
+grip a large card more limply than a small one, and any gain expressed as a
+torque says that it does.
+
+The second was **roll blindness**. The restoring term crossed the plate's
+normal with the target normal, which is cheap and wrong in a way that only
+shows up at rest: the cross product of two normals cannot see rotation
+*about* the normal, so a card set down with a 6° in-plane twist stayed
+twisted forever — zero error, zero correction, a perfectly stable wrong
+answer. Fingers hold an orientation, not a direction, so the error has to be
+a full quaternion error, with the shortest-arc sign handling that comes with
+it. And a third one that was mine rather than the code's: a test asserting
+that the *centre* settles at the hand failed at 183.57, which is exactly
+`hypot(160, 90)` — the spring pulls the *grab point* to the target, and the
+centre is one lever arm away by construction.
+
+**The canvas is only solid where there is matter.** The overlay is
+`pointer-events: none` at rest — a canvas stretched over somebody's document
+must not be able to eat a click, a text selection or a scroll — and is
+switched to `auto` for exactly as long as a raycast says the pointer is over
+an airborne card. That is decisions #20 one level up: hit-test first, then
+decide whether you are there at all. It is also enforced twice, because r3f
+writes `position: relative` *and* `pointer-events: auto` onto its own wrapper
+div as **inline** styles, and inline outranks any class. That cost two
+separate bug hunts. First the overlay was laid out as an ordinary block after
+the article, a full viewport below the fold — the scene graph probed
+perfectly correct the entire time, camera, size, matrices, both programs
+compiled, and it was simply somewhere else. Then, once it was in the right
+place, an invisible full-viewport div sat over the whole page swallowing
+every `pointerdown`, so no card could be picked up at all and nothing
+anywhere reported an error.
+
+The gesture that makes the point is the **tap**. A card you have to keep the
+mouse button held down on is a card you cannot click *into*, so a press that
+does not go anywhere (< 6 px, < 320 ms) parks the card in mid-air instead of
+sending it home. It hangs there, still solid, still a live DOM subtree: you
+can put the caret in its note field and type, 96 px off the page, while it
+casts a shadow on the prose below it. Tap again or press Escape and it flies
+back. The float anchor rides the scroller, too — a card hanging over a
+particular paragraph has to keep hanging over that paragraph, or its shadow
+slides off the thing it is supposed to be falling on, which reads as fake
+instantly.
+
+Two smaller lessons, both about things being outside something. The airborne
+card's DOM is in the same *document* but nowhere near the page's root
+element, so every `.l14-*` class rule still matched and every custom property
+scoped to the page container silently did not exist. The tell was tiny and
+exact: the card kept all of its own colours and lost precisely the two
+declarations that read a variable — the tag went from blue to grey at the
+moment of liftoff. Inherited context is a dependency, and a component that
+can be rendered somewhere else has to carry its own. And the release listener
+was registered in an effect keyed on the flight state, which does not run
+until React commits the render that `pointerdown` scheduled — later than a
+quick tap's `pointerup`, so the listener that was supposed to hear the
+release did not exist yet.
+
+Measured, headed, at 1600×1000: with nothing in the air the overlay renders
+**zero GL frames** and holds zero programs — `frameloop` is `demand` until a
+card is airborne, because an overlay across somebody's document does not get
+to burn a frame every 8 ms for the privilege of being empty. With a card
+flying it is 120 fps vsync-pinned at two draw calls and four triangles. An
+eight-move drag with a swing, a throw across columns, the reflow and the
+landing cost **zero** rasterizations — a card's entire physical life is
+matrix traffic, and the DOM is never told any of it is happening. The only
+things that repaint are the things that actually change: about 2.4 paints per
+keystroke, and a steady ~2.5/s while the caret is blinking in a floating
+card, which is a real DOM repaint honestly reported rather than a leak.
+
+The loop closes in CSS. The physics writes `--l14-near` onto the slot it is
+aimed at, and the slot's `color-mix()` reads it — so a rigid-body simulation
+running in WebGL is restyling real DOM through an ordinary custom property,
+at the same time as that DOM is being rasterized into the material of the
+thing doing the simulating.

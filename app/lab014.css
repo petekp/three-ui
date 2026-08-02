@@ -1,0 +1,279 @@
+/* Lab 014 — a page that has a third dimension.
+ *
+ * Everything here styles ORDINARY DOM. There is no Surface-specific rule in
+ * this file and there deliberately can't be: the whole premise is that the
+ * cards are page elements first, and become matter only for as long as
+ * someone is holding one. The one thing that IS unusual is the pair of
+ * custom properties at the bottom — `--l14-lift` and `--l14-near` are
+ * written by the WebGL layer every frame, so a rigid-body simulation is
+ * driving real CSS on real elements. That is the loop closing.
+ */
+
+/* The tokens are declared on the page AND on a card, because a card is not
+ * always on the page. While one is airborne its DOM lives in a parked canvas
+ * subtree hanging off <body> — same document, so every `.l14-*` class rule
+ * still matches, but nowhere near `.l14`, so anything scoped to that ancestor
+ * simply is not there. The first version declared them only on `.l14`, and the
+ * tell was tiny and specific: the card kept every one of its own colours and
+ * lost exactly the two properties that read a variable — the tag went from
+ * blue to grey the instant it left the page. Inherited context is a dependency;
+ * a component that can be rendered elsewhere has to carry its own. */
+.l14,
+.l14-card {
+  --paper: #f6f4ef;
+  --ink: #16150f;
+  --muted: #6c675c;
+  --rule: #e2ddd2;
+  --accent: #275efe;
+}
+
+.l14-card {
+  /* Same reasoning: `.l14-note` says `font: inherit`, and off the page it
+   * would inherit the parking host's font rather than the page's. */
+  font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.l14 {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.l14-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 40px 32px 160px;
+}
+
+.l14 h1 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 620;
+  letter-spacing: -0.022em;
+}
+
+.l14 .l14-lede {
+  margin: 8px 0 0;
+  max-width: 62ch;
+  color: var(--muted);
+}
+
+.l14-board {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+  margin-top: 34px;
+}
+
+.l14-col > h2 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 640;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.l14-col > ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-height: 140px;
+}
+
+/* The slot keeps the card's space in normal flow. When a card lifts off,
+ * its slot stays exactly the height it was — which is why the rest of the
+ * page does not so much as twitch at the moment of handoff. */
+.l14-slot {
+  margin: 0 0 14px;
+  border-radius: 14px;
+}
+
+/* …and what an empty slot looks like once the freeze-frame is gone. The
+ * `--l14-near` channel is written from the physics: how close the held card
+ * is to landing here, 0–1. */
+.l14-slot[data-empty="true"] {
+  border: 1.5px dashed color-mix(in oklab, var(--rule), var(--accent) calc(var(--l14-near, 0) * 70%));
+  background: color-mix(in oklab, transparent, var(--accent) calc(var(--l14-near, 0) * 9%));
+  transition: background 140ms linear, border-color 140ms linear;
+}
+
+.l14-card {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 15px 16px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 1px 0 rgb(22 21 15 / 4%), 0 6px 18px -12px rgb(22 21 15 / 30%);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.l14-card:active {
+  cursor: grabbing;
+}
+
+.l14-card .l14-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.l14-card h3 {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  flex: 1;
+}
+
+.l14-tag {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.l14-card p {
+  margin: 6px 0 11px;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+/* Anything the pointer should reach INSTEAD of starting a drag says so. */
+.l14-card [data-nodrag] {
+  cursor: auto;
+  user-select: auto;
+}
+
+.l14-note {
+  box-sizing: border-box;
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 9px;
+  background: #fbfaf7;
+  color: var(--ink);
+}
+
+.l14-note:focus {
+  outline: 2px solid color-mix(in oklab, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+  border-color: transparent;
+  background: #fff;
+}
+
+.l14-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.l14-check input {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+
+.l14-card[data-done="true"] h3 {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+/* Long-form text below the board, so the page genuinely scrolls and the
+ * text is genuinely selectable — an overlay canvas that made either of
+ * those stop working would have given the trick away for free. */
+.l14-prose {
+  margin-top: 46px;
+  padding-top: 26px;
+  border-top: 1px solid var(--rule);
+  max-width: 66ch;
+}
+
+.l14-prose h2 {
+  font-size: 18px;
+  margin: 26px 0 8px;
+  letter-spacing: -0.015em;
+}
+
+.l14-prose p {
+  margin: 0 0 12px;
+  color: #35322a;
+}
+
+.l14-prose code {
+  font: 12.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #edeade;
+  padding: 1.5px 5px;
+  border-radius: 5px;
+}
+
+/* The overlay. `pointer-events: none` is the default state and the honest
+ * one: a canvas with nothing in it must not be able to intercept a click,
+ * a text selection, or a scroll. It is switched to `auto` for exactly as
+ * long as the pointer is over a piece of matter — see `SolidWhereMatterIs`
+ * in Lab014.tsx, which toggles the canvas one level inside this wrapper.
+ *
+ * `position` and `pointer-events` are ALSO set inline in Lab014.tsx and have
+ * to be: r3f writes both onto this same wrapper as inline styles, which
+ * outrank anything here. They are left in the file because they say what the
+ * element is for. */
+.l14-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* Belt and braces: the canvas is only solid when JS says so. */
+.l14-overlay > canvas {
+  pointer-events: none;
+}
+
+.l14-hud {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  background: color-mix(in oklab, var(--paper) 86%, transparent);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid var(--rule);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.l14-hud button {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--rule);
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}

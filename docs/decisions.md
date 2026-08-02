@@ -2016,3 +2016,159 @@ nothing in the ink path has eight of anything.
 Distance-to-eye is a different quantity that happens to be monotonic in
 depth for a narrow cone around the view axis. Any sort that used the
 easy one and was validated on a centred scene is carrying this bug.
+
+## 44. The world unit is a CSS pixel — calibrate the camera, delete the conversions (2026-08-02, lab 014)
+
+**Decision.** When a scene overlays a document, put the perspective camera at
+`(viewportHeight / 2) / tan(fov / 2)` and give it the viewport's aspect. The
+plane `z = 0` is then pixel-exact with the viewport, and one world unit is
+one CSS pixel.
+
+**Why.** Every DOM↔3D lab before this one carried a conversion layer:
+some `pxToWorld`, some scale factor threaded through props, a place where a
+sign flips. That layer is where the bugs live, and it is entirely optional.
+Calibrate once and `getBoundingClientRect()` is *already* a world pose — a
+card's rect gives its position and size with no arithmetic beyond re-centring
+the origin and flipping y. `Lab014.tsx` has no conversion function in it at
+all.
+
+The consequences keep paying out:
+
+- Lifting toward the camera is honest perspective. The card gets bigger
+  because it is nearer, not because something multiplied a scale.
+- The LOD ladder needs no help. A lifted card really does cover more pixels,
+  so the existing density-matched re-raster (#37) sharpens it on the way up.
+- The physics can be written in the units of the problem. `ks = 420` is
+  420 px/s² per pixel of stretch; a 320×180 card's inertia is the inertia of
+  a 320×180 plate.
+
+**The trap that comes with it.** Pixel-scale units make the inertia tensor
+*enormous* — a thin plate 320 px wide has `I ≈ 8533` for unit mass, where the
+same plate in metres has `I ≈ 8.5e-4`, seven orders of magnitude apart. Any
+gain you carry over from a metres-scale intuition will be wrong by that much.
+See #45.
+
+**Cost.** The camera is no longer free to move; anything that orbits gives up
+the identity. Labs that want both need to treat the calibrated pose as a home
+state to return to, not as an invariant.
+
+## 45. The lever is physics, the fingers are a servo (2026-08-02, lab 014)
+
+**Decision.** A held object has two rotational channels and they are specified
+in **different units on purpose**. The lever — `r × F` from pulling the body
+at an off-centre grab point — is a real torque, integrated through the real
+inertia tensor. The fingers — the hand's insistence that the object stay
+oriented a particular way — are a second-order servo, specified as `ω₀²` and
+`2ζω₀` and applied **directly as angular acceleration**, never touching the
+inertia tensor.
+
+**Why.** They model different things. The lever is the world: a card twice as
+wide really should swing four times as lazily, because that is what its mass
+distribution does. The fingers are a *controller*: a hand does not grip a
+large card more limply than a small one. Express the finger gain as a torque
+and you have asserted that it does — and since inertia scales as dimension²,
+the assertion gets worse the bigger the object is.
+
+**How it was found.** In lab 014 the finger term was a torque, divided by
+`invI` like the lever. At pixel units (#44) that made a stiffness of 62 four
+orders of magnitude too weak, and a card tilted 51° took the better part of
+eight seconds to lie flat while the positional spring — which was fine —
+looked crisp. Two channels that *look* like the same kind of quantity, tuned
+against each other, is a very slow bug: neither number is obviously wrong,
+and moving either one improves something.
+
+**A second, independent bug in the same term.** The orientation error was
+computed as `n_current × n_target`, a cross product of two normals. That is
+cheap, and it is blind to rotation *about* the normal — so a plate set down
+with an in-plane twist reported **zero** facing error and stayed twisted
+forever. It is stable, silent and wrong. Fingers hold an *orientation*, not a
+*direction*: the error must be a full quaternion error converted to a
+rotation vector, `qe = q_target · q_current⁻¹`, with the `w < 0` sign flip so
+the servo takes the short way round instead of talking itself into a 350°
+correction.
+
+**Corollary for tests.** A spring at a grab point pulls the *grab point* to
+the target; the centre of mass settles one lever arm away. An assertion on
+the centre will fail by exactly `|hold|`, which looks like instability and
+is not.
+
+## 46. Nothing is moved at the handoff — the page copy is hidden, not relocated (2026-08-02, lab 014)
+
+**Decision.** To hand a live page element over to the 3D layer, do **not**
+reparent its DOM. Set `visibility: hidden` on the page copy and render the
+same component from the same state into the parked source subtree via a
+second React root (`SurfaceApp`).
+
+**Why.**
+
+1. **React's event delegation is rooted at the React root container.** A node
+   moved out of `#root` stops receiving synthetic events. In lab 014 that
+   would kill the controlled `<input>` inside the card at the exact moment
+   you picked the card up — the one thing the lab exists to demonstrate.
+2. **`visibility: hidden` keeps the box.** The page does not reflow at
+   handoff, so there is no twitch to hide; and the vacated slot is already
+   exactly the right height to be a drop target, for free.
+3. **No freeze-frame is needed.** Both copies are the same component from the
+   same state, so for the frames where both exist they are pixel-identical
+   and in the same place. The page copy is hidden only once the Surface
+   reports a paint — there is no moment to catch.
+
+**The consequence you must pay.** The parked subtree is in the same
+*document* but nowhere near the page's container element, so anything scoped
+to an ancestor is simply absent. Class rules still match (they are global);
+**custom properties, inherited fonts and any `:where(.page) &`-style scoping
+do not.** In lab 014 the tell was exact and tiny: the airborne card kept
+every one of its own colours and lost precisely the two declarations that
+read a `var()` — the tag went from blue to grey at liftoff. **A component
+that can be rendered somewhere else has to carry its own tokens.** Declare
+them on the component selector as well as on the page.
+
+## 47. r3f's wrapper div is styled inline — `position` and `pointer-events` must be too (2026-08-02, lab 014)
+
+**Decision.** When an r3f `<Canvas>` is used as an overlay, set `position`,
+`inset` **and** `pointerEvents` in the `style` prop, not in a class.
+
+**Why.** `<Canvas>` writes `position: relative` and `pointer-events: auto`
+onto its own wrapper div as inline styles, and an inline declaration outranks
+any class. A stylesheet that says `position: fixed; pointer-events: none`
+loses silently, twice over, with no warning anywhere:
+
+- **Laid out in the wrong place.** The overlay became an ordinary block after
+  the article — a full viewport below the fold. Everything probed correct:
+  camera distance, viewport size, object world matrices, `map: true`, both
+  programs `ok`. The scene was complete and rendering the whole time and was
+  simply somewhere else. When a scene graph audits clean and you still see
+  nothing, stop probing the graph and ask where the canvas *is*.
+- **Swallowing the page.** Once positioned, an invisible full-viewport div
+  with `pointer-events: auto` sat over the entire document eating every
+  `pointerdown`. Nothing errored; the page just stopped responding to presses.
+
+**Related.** Toggle the **canvas**, one level down, not the wrapper — a child
+may re-enable `pointer-events` under a `none` parent, which is exactly the
+arrangement wanted: the wrapper is permanently transparent to the pointer and
+the canvas is solid only while a raycast says the pointer is over matter.
+This is #20's content-gating rule applied one layer up, and the same
+justification holds: hit-test first, then decide whether you are there at all.
+
+**And `frameloop`.** An overlay across somebody's document should be
+`frameloop="demand"` whenever there is nothing in it. Measured in lab 014:
+zero GL frames and zero live programs while idle, 120 fps at two draw calls
+while a card is in flight.
+
+## 48. Register pointer-gesture listeners unconditionally, not on committed state (2026-08-02, lab 014)
+
+**Decision.** Window-level `pointermove`/`pointerup`/`pointercancel` handlers
+for a drag gesture go in an effect with **no dependency on the state the
+`pointerdown` just set**. Gate inside the handler on a ref, which is written
+synchronously.
+
+**Why.** An effect keyed on `flyingId` does not run until React has committed
+the render that `pointerdown` scheduled. A quick tap's `pointerup` arrives
+*before* that commit, so the listener that was supposed to hear the release
+did not exist yet — and the object stays glued to a pointer whose button is
+already up. The bug is invisible in testing that drags slowly and appears
+100% of the time for anyone who taps.
+
+The general shape: **`useRef` is the gesture's state; `useState` is only how
+the gesture asks React to render something.** Anything that must be correct
+within the same event loop turn reads the ref.
