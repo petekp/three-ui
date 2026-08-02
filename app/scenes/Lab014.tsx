@@ -52,6 +52,7 @@ import * as THREE from 'three'
 import { SurfaceApp, useSurfaceTexture } from 'three-ui'
 import '../lab014.css'
 import { cameraDistance, screenToPlane } from './lab014Camera'
+import { attachLab014Gestures } from './lab014Gestures'
 import {
   atRest,
   corners,
@@ -651,6 +652,12 @@ function SolidWhereMatterIs({ active }: { active: boolean }) {
     const ray = new THREE.Raycaster()
     const ndc = new THREE.Vector2()
     const test = (e: PointerEvent) => {
+      // Same rule as the gesture handlers (lab014Gestures.ts): this asks
+      // "is the HAND over matter", and the surface protocol's retold events
+      // — parked-local coordinates, the (−16,−16) departure burst — bubble to
+      // window too. Ray-testing one of those would toggle the canvas off
+      // while the real cursor is still over the card.
+      if (!e.isTrusted) return
       ndc.set((e.clientX / size.width) * 2 - 1, -(e.clientY / size.height) * 2 + 1)
       ray.setFromCamera(ndc, camera)
       const hit = ray.intersectObjects(scene.children, true).some((h) => h.object.userData.matter)
@@ -843,72 +850,14 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
   // `pointerdown` scheduled — and a quick tap's `pointerup` arrives before
   // that, so the listener that was supposed to hear the release did not exist
   // yet and the card stayed glued to a pointer whose button was already up.
-  // Every handler here reads `flight.current`, which is set synchronously, so
-  // there is nothing to gate: with no flight they all return on the first line.
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      const f = flight.current
-      if (!f) return
-      f.px = e.clientX
-      f.py = e.clientY
-      if (f.mode !== 'held') return
-
-      const t = dropTarget(e.clientX, e.clientY, f.id)
-      if (t) {
-        snapshot()
-        moveTo(t.col, t.index, f.id)
-      }
-    }
-
-    const onUp = () => {
-      const f = flight.current
-      if (!f || f.mode !== 'held') return
-
-      // A tap is a gesture, a drag is a different gesture, and the only thing
-      // that separates them is that a tap did not go anywhere. 6 px is the
-      // usual slop for "the hand did not mean to move"; 320 ms is long enough
-      // that a slow, deliberate pick-up still counts.
-      const moved = Math.hypot(f.px - f.downX, f.py - f.downY)
-      const tap = moved < 6 && performance.now() - f.downAt < 320
-      if (tap && !f.floated) {
-        f.floated = true
-        f.mode = 'float'
-        // Hang it exactly where the fingers were, not where the centre is —
-        // otherwise a card tapped by its corner jumps half its width sideways
-        // at the moment of release.
-        f.anchor.copy(f.hold).applyQuaternion(f.plate.q).add(f.plate.p)
-        f.anchorScroll = scrollTop()
-        return
-      }
-
-      f.mode = 'home'
-      // Hand the swing over as real velocity. It is already world px/s on
-      // the plane the card was flying at, because that is what the damper
-      // needed it to be — so there is no conversion to get wrong and no
-      // screen-y-is-down sign to flip.
-      f.plate.v.add(f.handVel)
-    }
-
-    // Escape always puts it back. A floating card is a modeless state and
-    // modeless states need an exit that does not require aim.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      const f = flight.current
-      if (!f || f.mode === 'home') return
-      f.mode = 'home'
-    }
-
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [dropTarget, moveTo, snapshot, scrollTop])
+  // Every handler reads `flight.current`, which is set synchronously, so
+  // there is nothing to gate: with no flight they all return on the first
+  // line. The handlers themselves live in lab014Gestures.ts — they filter
+  // `isTrusted`, and the test file is the story of why.
+  useEffect(
+    () => attachLab014Gestures({ flight, dropTarget, moveTo, snapshot, scrollTop }),
+    [dropTarget, moveTo, snapshot, scrollTop],
+  )
 
   const onLanded = useCallback(() => {
     flight.current = null

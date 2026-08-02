@@ -2287,3 +2287,54 @@ the other end attached to*. If the answer is "the world" and the thing at the
 near end is being dragged by a user, the model has a stationary hand in it, and
 you will pay for it in a lag that scales with how fast someone moves — which
 they will report as almost anything except lag.
+
+## 50. The library forges pointers by design — page-level gestures filter on `isTrusted` (2026-08-02, lab 014)
+
+**Decision.** Any listener that reads pointer coordinates off `window` or
+`document` while a Surface exists in the page must begin with
+`if (!e.isTrusted) return`. Same guard on any r3f pointer handler that
+raycasts against page-space geometry (`SolidWhereMatterIs`). Keyboard
+handlers are deliberately **not** guarded: the library forges no keyboard —
+typing through a surface is real focus and real keys (#24).
+
+**Why.** Pete's third drag report: *"it seems to jump towards the top left of
+the screen, sometimes even getting stuck there as long as I move my mouse in
+a particular way while dragging and then keep it stationary."* Lab 014's
+flight gesture listens on `window` for the hand. But `window` is a party
+line: the surface pointer protocol retells pointer events into parked
+subtrees — that is how a card you are hovering *in WebGL* shows `:hover` at
+all — and those retold events bubble back up to the same window, **by
+design** (#19/#20: Radix listens for them on `document`; suppressing the
+bubble breaks every grace area). The parked host is fixed at page (0, 0), so
+parked-**local** coordinates *are* screen coordinates near the top-left
+corner; and every exit fires the three-frame departure burst at
+`(−16, −16)` (`AWAY_MARGIN_PX`, #19). One wiggle-and-flick drag put **32
+forged moves** on the lab's window listener. When the burst is the last thing
+to fire and the mouse then goes still, nothing ever corrects the coordinates
+— "stuck in the corner as long as I move in a particular way" is a precise
+description of burst-last event ordering.
+
+**Why `isTrusted` and not a marker of our own.** The platform already stamps
+every event with exactly the distinction needed — did a device produce this?
+— and a constructed event *cannot lie about it*: `isTrusted` is not settable
+from script through any dispatch path. A bespoke `__forged` flag would guard
+against this library's retellings only; `isTrusted` also excludes any other
+script's synthetic events for free, and costs one property read.
+
+**Cost.** Test harnesses that drive gestures through `dispatchEvent` stop
+working — which is the guard doing its job, since that is the forgery path.
+CDP-driven input (`agent-browser mouse …`) is trusted and still works. Unit
+tests shadow `isTrusted` with `defineProperty`, which is honest: only the
+platform mints trusted events, and the platform is what the test stands in
+for. The forgeries themselves keep flowing — measured post-fix, a drag still
+puts ~10 forged events on window and the card no longer cares.
+
+**The general shape.** Labs #44, #49 and #50 are one mistake at three scales:
+*which plane* answers "where is the cursor", *which body* answers "how fast
+is the card moving", *which hand* answers "who is speaking on window". A
+codebase that builds a second speaker — and this one's whole premise is
+retelling events through glass — must ask about provenance at every listener
+that assumed there was only ever one voice. And when a trace contains a
+suspiciously specific constant, grep for the constant: the `(−16, −16)`
+entries were dismissed twice as "the pointer leaving the window" while
+`AWAY_MARGIN_PX = 16` sat one grep away the entire time.

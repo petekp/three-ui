@@ -1,0 +1,143 @@
+// @vitest-environment happy-dom
+//
+// The window-level flight gesture vs the surface protocol's forgeries.
+//
+// Pete's report, verbatim: "when i drag a card, it seems to jump towards the
+// top left of the screen, sometimes even getting stuck there as long as i
+// move my mouse in a particular way while dragging and then keep it
+// stationary." The mechanism: the library retells pointer events into a
+// card's parked subtree — hover moves at parked-LOCAL coordinates (the host
+// is fixed at page (0,0)) and, on every exit, a three-frame departure burst
+// at (−16, −16). Those bubble to window by design, the lab's window listener
+// read `e.clientX` off them as if they were the hand, and the drag target
+// teleported to the top-left corner — permanently, if the burst was the last
+// event before the mouse went still. Measured in Chrome: 32 forged moves on
+// window in one short drag.
+
+import { afterEach, describe, expect, it } from 'vitest'
+import * as THREE from 'three'
+import { attachLab014Gestures, type GestureFlight } from './lab014Gestures'
+
+function makeFlight(over: Partial<GestureFlight> = {}): GestureFlight {
+  return {
+    id: 'card-1',
+    mode: 'held',
+    px: 369,
+    py: 284,
+    downAt: performance.now(),
+    downX: 369,
+    downY: 284,
+    floated: false,
+    anchor: new THREE.Vector3(),
+    anchorScroll: 0,
+    hold: new THREE.Vector3(-40, 20, 0),
+    handVel: new THREE.Vector3(120, -60, 0),
+    plate: {
+      p: new THREE.Vector3(300, -80, 96),
+      v: new THREE.Vector3(),
+      q: new THREE.Quaternion(),
+    },
+    ...over,
+  }
+}
+
+/**
+ * happy-dom constructs every event with `isTrusted: false` — which is exactly
+ * what the library's forgeries look like. For the hand we shadow the property
+ * on the instance, which is also honest: only the platform can mint a trusted
+ * event, and the platform is what we are standing in for.
+ */
+function pointer(type: string, x: number, y: number, trusted: boolean) {
+  const e = new Event(type, { bubbles: true }) as PointerEvent
+  Object.defineProperties(e, {
+    clientX: { value: x },
+    clientY: { value: y },
+    isTrusted: { value: trusted },
+  })
+  return e
+}
+
+let detach: (() => void) | null = null
+afterEach(() => {
+  detach?.()
+  detach = null
+})
+
+function attach(flight: { current: GestureFlight | null }) {
+  const calls: string[] = []
+  detach = attachLab014Gestures({
+    flight,
+    dropTarget: () => null,
+    moveTo: () => calls.push('moveTo'),
+    snapshot: () => calls.push('snapshot'),
+    scrollTop: () => 0,
+  })
+  return calls
+}
+
+describe('the hand is the only pointer that moves a held card', () => {
+  it('a trusted move updates the flight (the harness can speak as the hand)', () => {
+    const flight = { current: makeFlight() }
+    attach(flight)
+    window.dispatchEvent(pointer('pointermove', 700, 400, true))
+    expect(flight.current.px).toBe(700)
+    expect(flight.current.py).toBe(400)
+  })
+
+  it('the departure burst and parked-local retellings do not drag the card to the top-left', () => {
+    const flight = { current: makeFlight() }
+    attach(flight)
+    window.dispatchEvent(pointer('pointermove', 700, 400, true))
+
+    // What one edge-crossing actually puts on window (captured from Chrome):
+    // the hover retold at parked-local coordinates, then the burst.
+    window.dispatchEvent(pointer('pointermove', 256, 38, false))
+    window.dispatchEvent(pointer('pointermove', -16, -16, false))
+    window.dispatchEvent(pointer('pointermove', -16, -16, false))
+    window.dispatchEvent(pointer('pointermove', -16, -16, false))
+
+    // The hand has not moved, so neither has the target — the burst being the
+    // LAST thing to fire is precisely the "stuck in the corner" report.
+    expect(flight.current.px).toBe(700)
+    expect(flight.current.py).toBe(400)
+  })
+
+  it('a forged pointerup does not release the hold', () => {
+    const flight = { current: makeFlight() }
+    attach(flight)
+    window.dispatchEvent(pointer('pointermove', 700, 400, true))
+    window.dispatchEvent(pointer('pointerup', -16, -16, false))
+
+    expect(flight.current.mode).toBe('held')
+    expect(flight.current.floated).toBe(false)
+    expect(flight.current.plate.v.length()).toBe(0)
+  })
+
+  it('a trusted up still ends the gesture: drift past slop throws the card home', () => {
+    const flight = { current: makeFlight() }
+    attach(flight)
+    window.dispatchEvent(pointer('pointermove', 700, 400, true))
+    window.dispatchEvent(pointer('pointerup', 700, 400, true))
+
+    expect(flight.current.mode).toBe('home')
+    // The throw carried the hand's velocity — the damper's own vector.
+    expect(flight.current.plate.v.x).toBe(120)
+    expect(flight.current.plate.v.y).toBe(-60)
+  })
+
+  it('a trusted up with no travel is a tap, and parks the card in the air', () => {
+    const flight = { current: makeFlight() }
+    attach(flight)
+    window.dispatchEvent(pointer('pointermove', 372, 286, true))
+    window.dispatchEvent(pointer('pointerup', 372, 286, true))
+
+    expect(flight.current.mode).toBe('float')
+    expect(flight.current.floated).toBe(true)
+    // Anchored at the grab point, not the centre.
+    const grab = flight.current.hold
+      .clone()
+      .applyQuaternion(flight.current.plate.q)
+      .add(flight.current.plate.p)
+    expect(flight.current.anchor.distanceTo(grab)).toBe(0)
+  })
+})

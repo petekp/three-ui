@@ -3096,3 +3096,56 @@ answered "where is the cursor" on the wrong plane; the second answered "how
 fast is the card moving" relative to the wrong body. Neither is a physics
 error you can see by reading the physics — you have to name the frame out loud
 and ask whether it is the one you meant.
+
+Then Pete dragged a card a third time: *"it seems to jump towards the top left
+of the screen, sometimes even getting stuck there as long as I move my mouse
+in a particular way while dragging and then keep it stationary."* Not a
+physics bug at all this time — and the evidence had been in my own traces
+twice, dismissed twice.
+
+The lab's flight gesture listens on `window` for the hand. But in this
+codebase `window` is a party line. The surface pointer protocol *retells*
+pointer events into a card's parked DOM subtree — that is the entire reason a
+card you hover in WebGL shows `:hover` — and those retold events bubble back
+up to the same window, on purpose, because Radix listens for them on
+`document` and builds its grace areas out of them (#19/#20). The parked host
+is fixed at page (0, 0), so parked-*local* coordinates **are** coordinates
+near the screen's top-left corner. And every exit fires the three-frame
+departure burst at `(−16, −16)`. One wiggle-and-flick drag put **32 forged
+moves** on my window listener, each one read off as the hand. Card flies to
+the corner. When the burst happens to land *last* and the mouse then goes
+still, nothing ever corrects it — "stuck there as long as I move my mouse in
+a particular way" is a bug report of event *ordering*, stated more precisely
+than my first two hypotheses managed.
+
+During the damper hunt those `(−16, −16)` entries were sitting in my debug
+traces and I wrote them off as "harness artifact — pointer leaving the
+window." Twice. The number was the answer, printed, both times:
+`AWAY_MARGIN_PX = 16` was one grep away. When a "harness artifact" contains a
+suspiciously specific constant, grep for the constant.
+
+The fix is one line of question: `if (!e.isTrusted) return`. The user's hand
+is the only pointer that can say trusted — the platform stamps it, and a
+constructed event cannot lie about it through any dispatch path. The window
+half of the gesture moved into `lab014Gestures.ts` where happy-dom can test
+it, and happy-dom turned out to be the perfect forger: it constructs every
+event with `isTrusted: false`, exactly like the library. The test replays the
+captured Chrome sequence verbatim — hover retold at (256, 38), then the
+triple burst — and asserts the drag target never moves. Red run, guards
+commented out: `expected -16 to be 700`. The same guard went on the raycast
+handler that decides whether the canvas is solid, and *didn't* go on the
+Escape handler, because the library forges no keyboard — typing through a
+surface is real focus and real keys (#24).
+
+Verified in a fresh session: the forgeries still flow (ten on window in one
+drag — they are load-bearing and this fix doesn't touch them), the card sits
+at the cursor plus the hold offset to the pixel, burst-last-then-stationary
+leaves it exactly there, and reflow, tap-to-float, regrab and Escape all
+still work. Decision #50.
+
+Three reports, three bugs, one family. Wrong plane, wrong body — and now
+wrong *speaker*. The first two were frames of reference; this one is
+provenance. A library whose whole premise is retelling events through glass
+had, of course, built a second voice into the page, and a listener I wrote
+assumed there was only ever one. The question every window listener here has
+to ask isn't "where is the pointer" — it's "*whose* pointer is this."
