@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_TIERS, clampTiers, selectLodTier, tiersInRange } from './lodTier'
+import {
+  DEFAULT_TIERS,
+  clampScale,
+  clampTiers,
+  maxTier,
+  selectLodTier,
+  tiersInRange,
+} from './lodTier'
 
 // density = desired texels per CSS px (projected device px per css px).
 // selectLodTier is a Schmitt trigger over a quantized tier ladder: the
@@ -103,6 +110,44 @@ describe('tiersInRange', () => {
     const sliced = tiersInRange(DEFAULT_TIERS, 0.5, 2)
     expect(selectLodTier(4, 1, sliced)).toBe(2)
     expect(selectLodTier(4, 2, sliced)).toBe(2)
+  })
+})
+
+describe('maxTier', () => {
+  it('resolves to the highest tier the guard admits (the lab-012 cases)', () => {
+    // Card 360×440: 6× = 2640 fits → 6. Wall 880×560: 6× = 5280 is out,
+    // 4× = 3520 fits → 4.
+    expect(maxTier(DEFAULT_TIERS, 360, 440)).toBe(6)
+    expect(maxTier(DEFAULT_TIERS, 880, 560)).toBe(4)
+  })
+
+  it('stays on the ladder, not at the guard boundary', () => {
+    // 880 admits densities up to 4.65, but the answer is the RUNG 4 — a
+    // later switch to auto/range finds the texture already seated.
+    expect(maxTier(DEFAULT_TIERS, 880, 100)).toBe(4)
+  })
+
+  it('degrades to the ladder floor when even it exceeds the guard', () => {
+    expect(maxTier(DEFAULT_TIERS, 20000, 100)).toBe(0.25)
+  })
+})
+
+describe('clampScale', () => {
+  it('passes scales the guard admits through unchanged', () => {
+    expect(clampScale(2, 880, 560)).toBe(2)
+    expect(clampScale(6, 360, 440)).toBe(6)
+  })
+
+  it('clamps to the exact guard boundary, not a tier', () => {
+    // The caller asked for a density, not a rung: 880 css px admits up to
+    // 4096/880 ≈ 4.65 — closer to the request than tier 4 would be.
+    expect(clampScale(6, 880, 560)).toBeCloseTo(4096 / 880, 10)
+  })
+
+  it('tolerates degenerate sizes; Infinity clamps to the boundary', () => {
+    expect(clampScale(3, 0, 0)).toBe(3)
+    expect(clampScale(Number.NaN, 400, 300)).toBeNaN()
+    expect(clampScale(Number.POSITIVE_INFINITY, 400, 300)).toBe(4096 / 400)
   })
 })
 

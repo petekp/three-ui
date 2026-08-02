@@ -1564,3 +1564,48 @@ the same correctness in N renders because occlusion is transitive
 along the view axis. Open, deliberately: N-panel cost is N scene
 renders/frame — the shared-buffer variant or the screen-space SDF
 compositor (increment 2, the liquid look) is the scale answer.
+
+## 35. "Max" is the library's word — `resolution="max"` and the guard applies to every form (2026-08-01, lab 012)
+
+**Decision.** The `resolution` prop accepts `'max'`: pin the texture at
+the highest tier the 4096px long-edge guard admits for this Surface's
+size, resolved inside the library (`maxTier`) and re-resolved when the
+Surface resizes. No LOD evaluations run, same as a fixed number. And
+fixed numbers now actually honor the guard: a value that would exceed
+it is clamped to the exact guard boundary (`clampScale` — a density,
+not a rung) with a console warning.
+
+**Context.** The glass demo wanted "always render at max res." The API
+could pin (`resolution={n}`) but could not express *max*: the answer
+depends on the tier ladder and the guard, both deliberately private to
+`lodTier.ts` — so the scene hand-copied `[6, 4, 3, 2, 1.5, 1]` and the
+4096 constant to compute card/pill 6×, wall 4×. That is the worst kind
+of boundary breach: duplication doesn't break the build when the
+ladder changes, it silently drifts. The decisive argument for a
+keyword over an exported helper: a MEASURED Surface (fit-to-content
+floating layers) doesn't know its size in time to ask — only the
+library, at resize time, can resolve "max" and keep it resolved.
+
+**The hazard this closed.** The prop doc promised "every form respects
+the 4096px guard" but the fixed-number path never consulted it —
+`resolution={6}` on the 880px wall would have allocated a 5280px
+canvas, past GPU comfort, with no error. Warn-and-clamp, not silent
+clamp: deviating from what the caller wrote without saying so is its
+own bug.
+
+**Shape notes.** `'max'` stays ON the ladder (wall → tier 4, not the
+4.65 guard boundary) so a later switch to auto/range finds the texture
+seated on a rung; a clamped *number* lands on the exact boundary
+because the caller asked for a density, not a rung. Number-means-
+pinned-and-off stays as is — one prop whose type carries the mode
+beats a separate `lod={false}` flag that could contradict it.
+
+**Verified.** lodTier suite (maxTier/clampScale, 272 total); browser:
+lab 012 on `resolution="max"` resolves 4/6/6 identical to the
+hand-computed pins, near/far camera sweep holds 0 paints.
+
+**Rejected.** (a) *Exported `maxResolution(w, h)` helper* — solves the
+authored-size case only; measured Surfaces still can't call it in
+time. (b) *"Freeze at current tier"* recording mode — subsumed by
+'max' for any scene that can afford the memory; build it when a real
+scene can't. (c) *Silent clamp* — see above.

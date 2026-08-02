@@ -100,6 +100,42 @@ export function tiersInRange(
 }
 
 /**
+ * The tier `resolution="max"` resolves to: the highest ladder tier the
+ * long-edge guard admits for a given CSS size. "As sharp as the library
+ * allows" is a relational answer — it depends on the ladder and the guard,
+ * both private to this module — so the library resolves it, not the caller
+ * (a measured Surface doesn't even know its size in time to ask). Stays ON
+ * the ladder rather than at the exact guard boundary, so a later switch to
+ * auto/range finds the texture already seated on a tier.
+ */
+export function maxTier(
+  tiers: readonly number[],
+  cssWidth: number,
+  cssHeight: number,
+  maxDim = 4096,
+): number {
+  const kept = clampTiers(tiers, cssWidth, cssHeight, maxDim)
+  return kept[kept.length - 1]
+}
+
+/**
+ * Clamp a caller-chosen fixed scale to the same long-edge guard the ladder
+ * obeys. Unlike tiers a fixed scale is continuous, so the clamp lands on
+ * the exact guard boundary — the caller asked for a density, not a rung,
+ * and gets the closest legal one.
+ */
+export function clampScale(
+  scale: number,
+  cssWidth: number,
+  cssHeight: number,
+  maxDim = 4096,
+): number {
+  const longEdge = Math.max(cssWidth, cssHeight)
+  if (!(longEdge > 0) || Number.isNaN(scale)) return scale
+  return Math.min(scale, maxDim / longEdge)
+}
+
+/**
  * Restrict a tier ladder so no tier would allocate a canvas larger than
  * `maxDim` on its long edge (GPU texture ceilings, memory sanity). Always
  * keeps the smallest tier so every Surface has a valid floor.

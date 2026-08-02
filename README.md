@@ -2519,3 +2519,19 @@ ladder tier under the 4096px long-edge guard: card and pill at 6, the
 wall at 4. Verified with a close-approach → pull-back → return camera
 sweep: zero paints, scales immobile at 4/6/6 — a pinned Surface is
 idle-free exactly like an auto one, it just never renegotiates.
+
+Then the reflection the pin earned. Getting to those numbers meant
+hand-copying the tier ladder and the 4096 guard into the scene —
+duplication of library-private knowledge, which never breaks the
+build, it just drifts. So the library learned the word the demo
+actually meant: `resolution="max"` pins at the highest tier the guard
+admits, resolved per-surface inside the library and re-resolved on
+resize — which is the part a helper function could never do, because a
+measured Surface doesn't know its size in time to ask. And the audit
+caught the prop doc promising what the code didn't deliver: fixed
+numbers bypassed the guard entirely (`resolution={6}` on the wall
+would have silently allocated a 5280px canvas). Now every form is
+guarded — numbers clamp to the exact boundary with a warning, `'max'`
+stays on the ladder rung. The scene deleted its copied constants and
+says `resolution="max"`; the browser resolves the same 4/6/6.
+Decisions #35.

@@ -42,16 +42,12 @@ const CARD_H = 440
 const PILL_W = 220
 const PILL_H = 72
 
-// LOD off for the glass demo: a fixed `resolution` number pins the DOM
-// texture scale, so distance never softens the ink or the wall and no tier
-// swap can re-raster mid-shot. "Max" here follows the library's own rule —
-// the highest ladder tier whose canvas stays under the 4096px long-edge
-// guard (card/pill land on 6, the wall on 4). This is TEXEL density of the
-// rasterized DOM; the refraction buffers are a separate, viewport-matched
-// resolution (see GlassPanel).
-const RES_TIERS = [6, 4, 3, 2, 1.5, 1]
-const maxResolution = (w: number, h: number) =>
-  RES_TIERS.find((t) => t * Math.max(w, h) <= 4096) ?? 1
+// LOD off for the glass demo: `resolution="max"` pins every DOM texture at
+// the sharpest tier the library's 4096px long-edge guard admits (card/pill
+// land on 6×, the wall on 4×), so distance never softens the ink and no
+// tier swap can re-raster mid-shot. This is TEXEL density of the rasterized
+// DOM; the refraction buffers are a separate, viewport-matched resolution
+// (see GlassPanel).
 
 // ---- geometry: an extruded rounded rect --------------------------------
 
@@ -223,7 +219,7 @@ function GlassPanel({
         width={width}
         height={height}
         material="none"
-        resolution={maxResolution(width, height)}
+        resolution="max"
         content={content}
       >
         <primitive object={geo} attach="geometry" />
@@ -419,7 +415,7 @@ export function Lab012() {
         label="lab012-wall"
         width={WALL_W}
         height={WALL_H}
-        resolution={maxResolution(WALL_W, WALL_H)}
+        resolution="max"
         position={[0, 1.7, -0.8]}
         content={<WallArt />}
       >

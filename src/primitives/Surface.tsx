@@ -2,7 +2,14 @@ import { use, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree, type ThreeElements, type ThreeEvent } from '@react-three/fiber'
 import { createDomTextureSource, type DomTextureSource } from '../lib/htmlInCanvas'
-import { DEFAULT_TIERS, clampTiers, selectLodTier, tiersInRange } from '../lib/lodTier'
+import {
+  DEFAULT_TIERS,
+  clampScale,
+  clampTiers,
+  maxTier,
+  selectLodTier,
+  tiersInRange,
+} from '../lib/lodTier'
 import {
   clearPointerState,
   deepestElementAt,
@@ -83,12 +90,18 @@ export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children' | '
    *   `[1, 6]` never lets text drop below 1:1 (kiosk/hero panels),
    *   `[0.25, 2]` caps memory in panel-heavy scenes, `[1, Infinity]`
    *   sets a floor with no ceiling. Same machinery, sliced ladder.
+   * - `'max'` — pinned at the highest tier the guard admits for this
+   *   Surface's size: "as sharp as the library allows", resolved here
+   *   rather than by the caller (the ladder is private, and a measured
+   *   Surface doesn't know its size in time to ask) and re-resolved on
+   *   resize. No LOD evaluations run.
    * - `number` — pins texels-per-CSS-px (1 = legacy behavior, 2 = fixed
    *   retina). No LOD evaluations run.
    *
-   * Every form still respects the 4096px long-edge texture guard.
+   * Every form respects the 4096px long-edge texture guard — a fixed
+   * number that would exceed it is clamped, with a console warning.
    */
-  resolution?: 'auto' | number | [min: number, max: number]
+  resolution?: 'auto' | 'max' | number | [min: number, max: number]
   side?: THREE.Side
   roughness?: number
   metalness?: number
@@ -221,7 +234,6 @@ export function Surface({
   // Everything the source-creation effect needs to READ but must not RE-RUN
   // for. See that effect's dependency note — it is the most consequential
   // line in this file.
-  const resolutionRef = useLatest(resolution)
   const hitTestRef = useLatest(hitTest)
   const mirrorURef = useLatest(mirrorU)
   const widthRef = useLatest(width)
@@ -280,6 +292,27 @@ export function Surface({
     return clampTiers(ladder, width, height)
   }, [width, height, rangeMin, rangeMax])
   const tiersRef = useLatest(tiers)
+  // `'max'` and fixed numbers resolve to a single pinned scale; null means
+  // dynamic (auto/range). 'max' re-resolves when the Surface resizes; a
+  // number is clamped to the same long-edge guard the ladder obeys — with a
+  // warning, because silently deviating from what the caller wrote is its
+  // own bug, but letting a 5000px canvas through is a worse one.
+  const pinnedScale = useMemo(() => {
+    if (resolution === 'max') return maxTier(DEFAULT_TIERS, width, height)
+    if (typeof resolution === 'number') {
+      const safe = clampScale(resolution, width, height)
+      if (safe !== resolution) {
+        console.warn(
+          `[three-ui] Surface${label ? ` "${label}"` : ''}: resolution ${resolution} ` +
+            `exceeds the 4096px long-edge texture guard at ${width}×${height} CSS px; ` +
+            `clamped to ${safe}.`,
+        )
+      }
+      return safe
+    }
+    return null
+  }, [resolution, width, height, label])
+  const pinnedScaleRef = useLatest(pinnedScale)
   const lodRef = useRef({ tier: 1, proposed: 1, agree: 0, frame: 0 })
   const lodPhase = useMemo(() => lodSeq++ % LOD_EVERY, [])
 
@@ -344,13 +377,10 @@ export function Surface({
   useEffect(() => {
     const source = createDomTextureSource(html, widthRef.current, heightRef.current, {
       label,
-      // Fixed resolution starts at its final scale; auto/range starts at
-      // the ladder tier nearest 1× and lets the first LOD evaluations
-      // settle it (~2 cheap re-rasters max).
-      scale:
-        typeof resolutionRef.current === 'number'
-          ? resolutionRef.current
-          : seedTier(tiersRef.current),
+      // Pinned resolution ('max'/number) starts at its final scale;
+      // auto/range starts at the ladder tier nearest 1× and lets the first
+      // LOD evaluations settle it (~2 cheap re-rasters max).
+      scale: pinnedScaleRef.current ?? seedTier(tiersRef.current),
       onError: (err) => console.warn('[three-ui] Surface paint failed:', err),
     })
     sourceRef.current = source
@@ -404,17 +434,18 @@ export function Surface({
     texture.needsUpdate = true
   }, [texture, mirrorU])
 
-  // Fixed-resolution changes re-raster in place — never recreate the source
+  // Pinned-resolution changes re-raster in place — never recreate the source
   // (that would destroy live DOM state: focus, form values, selection).
+  // Keyed on the RESOLVED scale, not the prop: 'max' re-resolves when
+  // width/height change, and this effect is how the new answer lands.
   useEffect(() => {
     const source = sourceRef.current
-    if (typeof resolution === 'number' && source) {
+    if (pinnedScale !== null && source) {
       const prev = source.scale()
-      source.setScale(resolution)
+      source.setScale(pinnedScale)
       if (source.scale() !== prev) reallocAfterRef.current = source.paintCount()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolution, texture])
+  }, [pinnedScale, texture])
 
   // Size changes re-LAYOUT in place, for the same reason resolution re-rasters
   // in place: `width`/`height` used to sit in the creation effect's deps, so
