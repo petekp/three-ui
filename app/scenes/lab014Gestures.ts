@@ -34,6 +34,13 @@ export interface GestureDeps<Col> {
   moveTo: (col: Col, index: number, id: string) => void
   snapshot: () => void
   scrollTop: () => number
+  /**
+   * Carry a freshly captured float anchor up to the lift plane, screen
+   * position preserved (`lab014Camera.carryToPlane` with the lab's camera).
+   * A tap releases mid-rise, and an anchor left below the lift plane hangs
+   * the card where its pinned texture is minified forever.
+   */
+  toLiftPlane: (a: THREE.Vector3) => void
 }
 
 /**
@@ -60,6 +67,7 @@ export function attachLab014Gestures<Col>({
   moveTo,
   snapshot,
   scrollTop,
+  toLiftPlane,
 }: GestureDeps<Col>) {
   const onMove = (e: PointerEvent) => {
     if (!e.isTrusted) return
@@ -92,8 +100,14 @@ export function attachLab014Gestures<Col>({
       f.mode = 'float'
       // Hang it exactly where the fingers were, not where the centre is —
       // otherwise a card tapped by its corner jumps half its width sideways
-      // at the moment of release.
+      // at the moment of release. "Where the fingers were" is a SCREEN
+      // place, though, not a world one: the tap interrupted the rise partway,
+      // and an anchor left at that height hangs the card below the plane its
+      // texture is pinned for — texels squeezed into fewer pixels, a card
+      // that never comes into focus. The carry finishes the climb without
+      // moving the anchor's screen position.
       f.anchor.copy(f.hold).applyQuaternion(f.plate.q).add(f.plate.p)
+      toLiftPlane(f.anchor)
       f.anchorScroll = scrollTop()
       return
     }

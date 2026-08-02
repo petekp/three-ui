@@ -3235,3 +3235,60 @@ at its final scale. Verified: born at 2.22807 (the prediction, to six
 decimals), zero tier swaps, two paints for the whole grab, and no frame in
 the card's airborne life below full density. Decision #52: guessing
 machinery should only run where there is genuinely something to guess.
+
+## still blurry — because the blur was never the tier
+
+Pete, after all of that shipped: *"hm it looks exactly the same to me,
+still a stark difference in clarity."* The pin was real — stats reported
+2.22807, zero swaps — and it didn't matter. The lesson sits at the top of
+this entry as a correction to the last one: supply was never the dominant
+term. Cue the instrument this lab should have built first: copy the flight
+card's source canvas into the page (`drawImage` to a probe canvas shown at
+1 canvas px = 1 CSS px, `image-rendering: pixelated`), so a single
+screenshot holds the texture's actual texels, the mesh rendering those
+texels, and resting DOM, side by side, then read all three at 4×
+nearest-neighbor. The texels were crisp — `drawElementImage` rasterizes
+perfect glyphs at fractional scales; capture was innocent all along. The
+same texture on screen was fat and smeared. Everything wrong was
+downstream of a perfect raster.
+
+Three convictions. First: a *tapped* card never reached the lift plane.
+The float anchor keeps whatever z the plate had when the fingers let go —
+a 100ms tap releases mid-rise at z ≈ 20 — so the card hung there forever,
+573 texels squeezed into ~515 screen px, 11% minified. The 4× crops
+measured it directly: the on-screen glyphs were 11% smaller than the
+texels. `carryToPlane` now finishes the climb the tap interrupted, along
+the anchor's own line of sight, so it rises in place instead of sliding.
+Second: even at exactly 1 : 1, a mesh at a fractional screen position
+resamples every texel at that fraction — bilinear at half-phase is a two-
+pixel box blur, the fattened-fuzzy look in every "held still" screenshot.
+And third, the grab moment itself: the texture was born at *altitude*
+density, so the #46 hard cut minified it into the resting rect on the
+exact frame crisp DOM vanished beneath it. Jarring, one frame after
+perfect, precisely where the eye was pointed.
+
+The fixes are #53's three-part answer. The pin became a *schedule* —
+page density on the page, altitude density at altitude, toggled by the
+driver on the plate's actual z — so both handoffs (grab and landing) are
+pixel-for-pixel copies of the DOM they exchange with, and cruise is
+exactly 1 : 1; two re-rasters per round trip, both hidden inside motion.
+And at rest, the *presentation* quantizes: when plate speed dies, the
+group — never the plate, same truth/presentation split as the grounded
+damper — glides onto the device-pixel grid, footprint set to exactly the
+texture's texel count, corner on an integer device pixel, residual tilt
+slerped flat. Bilinear degenerates to the identity map. A moving card is
+pure physics; a resting card is pure grid; the blend is plate speed, so
+nothing pops.
+
+The bisect also caught a fourth thing that was never blur: the gloss
+shader sampled the sRGB texture (which the GPU hands over as linear) and
+wrote it back out raw — linear values into an sRGB canvas, every AA
+midtone sunk, the card's text darker and heavier than its own pixels.
+One line — `#include <colorspace_fragment>` — and now a new hard rule,
+because that failure has no error and looks exactly like "the texture is
+slightly wrong somehow." Final state, measured at dpr 1 and emulated
+dpr 2: the floating card's 4× crops are indistinguishable from the texel
+probe, the texel probe indistinguishable from resting DOM, and on retina
+the rest state is literally an identity map — projected footprint
+1145.0000 × 351.0000 device px, corner residue 0.0000. The card at rest
+is its own pixels again, in position, in size, and in color.

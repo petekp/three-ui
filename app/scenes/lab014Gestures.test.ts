@@ -16,7 +16,13 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
+import { cameraDistance, carryToPlane, planeToScreen } from './lab014Camera'
 import { attachLab014Gestures, type GestureFlight } from './lab014Gestures'
+
+// The lab's calibration at the reference viewport — the tests hand the
+// gesture the same lift-plane carry the Board does.
+const CAM_Z = cameraDistance(720, 42)
+const LIFT_Z = 96
 
 function makeFlight(over: Partial<GestureFlight> = {}): GestureFlight {
   return {
@@ -71,6 +77,7 @@ function attach(flight: { current: GestureFlight | null }) {
     moveTo: () => calls.push('moveTo'),
     snapshot: () => calls.push('snapshot'),
     scrollTop: () => 0,
+    toLiftPlane: (a) => carryToPlane(a, CAM_Z, LIFT_Z),
   })
   return calls
 }
@@ -126,18 +133,34 @@ describe('the hand is the only pointer that moves a held card', () => {
   })
 
   it('a trusted up with no travel is a tap, and parks the card in the air', () => {
-    const flight = { current: makeFlight() }
+    // A quick tap releases MID-RISE: the plate never reached the lift plane.
+    const flight = {
+      current: makeFlight({
+        plate: {
+          p: new THREE.Vector3(300, -80, 34),
+          v: new THREE.Vector3(),
+          q: new THREE.Quaternion(),
+        },
+      }),
+    }
+    const grab = flight.current.hold
+      .clone()
+      .applyQuaternion(flight.current.plate.q)
+      .add(flight.current.plate.p)
     attach(flight)
     window.dispatchEvent(pointer('pointermove', 372, 286, true))
     window.dispatchEvent(pointer('pointerup', 372, 286, true))
 
     expect(flight.current.mode).toBe('float')
     expect(flight.current.floated).toBe(true)
-    // Anchored at the grab point, not the centre.
-    const grab = flight.current.hold
-      .clone()
-      .applyQuaternion(flight.current.plate.q)
-      .add(flight.current.plate.p)
-    expect(flight.current.anchor.distanceTo(grab)).toBe(0)
+    // Anchored at the grab point, not the centre — but carried the rest of
+    // the way up to the lift plane, where the texture's pin is 1 : 1. The
+    // carry preserves the SCREEN position: the card climbs in place instead
+    // of sliding sideways, and it does not hang minified at tap height.
+    expect(flight.current.anchor.z).toBe(LIFT_Z)
+    const before = planeToScreen(grab, 1280, 720, CAM_Z)
+    const after = planeToScreen(flight.current.anchor, 1280, 720, CAM_Z)
+    expect(after.x).toBeCloseTo(before.x, 10)
+    expect(after.y).toBeCloseTo(before.y, 10)
   })
 })

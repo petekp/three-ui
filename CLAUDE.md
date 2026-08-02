@@ -104,6 +104,14 @@ wants something that isn't exported, export it — don't reach around.
   is a foreign capture — the forwarder stays silent until release
   (OrbitControls' rotate anchor was measured taking a departure burst as a
   10px→teleport delta; decisions.md #50/#51).
+- **A custom `ShaderMaterial` sampling `useSurfaceTexture` must end its
+  fragment shader with `#include <colorspace_fragment>`.** The texture is
+  `SRGBColorSpace`, so the sampler hands the shader LINEAR values; built-in
+  materials re-encode on output, a raw shader does not, and the miss writes
+  linear into the sRGB canvas — every AA midtone sinks, text renders darker
+  and heavier than the same pixels at rest, no error anywhere. Sampling
+  softness is a different diagnosis path: texels vs screen vs DOM in one
+  screenshot (decisions.md #53).
 
 ## Verifying changes
 

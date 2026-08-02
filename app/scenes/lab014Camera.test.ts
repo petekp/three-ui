@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import {
   cameraDistance,
+  carryToPlane,
   planeScale,
   planeToScreen,
   screenToPlane,
@@ -89,6 +90,27 @@ describe('screenToPlane', () => {
     const ca = screenToPlane(900, 0, VW, VH, CAM, LIFT, _v).clone()
     const cb = screenToPlane(1000, 0, VW, VH, CAM, LIFT, _v).clone()
     expect(planeToScreen(cb, VW, VH, CAM).x - planeToScreen(ca, VW, VH, CAM).x).toBeCloseTo(100, 9)
+  })
+
+  it('carryToPlane climbs a point without moving it on screen', () => {
+    // A tapped card's anchor is captured mid-rise; the carry finishes the
+    // climb. Screen position must be exactly preserved — the card rises in
+    // place — and the destination must be exactly the lift plane, where the
+    // texture's pin is 1 : 1 with the display.
+    for (const [x, y, z] of [
+      [220, -180, 12],
+      [-600, 340, 55],
+      [0, 0, 0],
+      [700, 480, 96],
+    ]) {
+      const p = _v.set(x, y, z).clone()
+      const before = planeToScreen(p, VW, VH, CAM)
+      carryToPlane(p, CAM, LIFT)
+      const after = planeToScreen(p, VW, VH, CAM)
+      expect(p.z).toBe(LIFT)
+      expect(after.x).toBeCloseTo(before.x, 9)
+      expect(after.y).toBeCloseTo(before.y, 9)
+    }
   })
 
   it('agrees with an actual three.js unprojected ray', () => {

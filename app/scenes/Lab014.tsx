@@ -51,7 +51,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { SurfaceApp, useSurfaceTexture } from 'three-ui'
 import '../lab014.css'
-import { cameraDistance, planeScale, screenToPlane } from './lab014Camera'
+import { cameraDistance, carryToPlane, planeScale, screenToPlane } from './lab014Camera'
 import { attachLab014Gestures } from './lab014Gestures'
 import {
   atRest,
@@ -191,6 +191,12 @@ interface Flight {
   handSeeded: boolean
   /** 0 → 1 as the card leaves the page. */
   lift: number
+  /**
+   * Is the texture currently pinned at ALTITUDE density? The driver flips
+   * this as the plate crosses the lift plane's approach, and `Flying` turns
+   * it into a `resolution` change — see the density schedule there.
+   */
+  hiDensity: boolean
   /** r3f frames since mount — the page copy hides once the quad has painted. */
   frames: number
   /** Set by the driver, read by React: the card has landed. */
@@ -278,6 +284,16 @@ const CARD_FRAG = /* glsl */ `
     float band = pow(s, 6.0) - pow(L.z, 6.0);
     c.rgb += uGloss * band;
     gl_FragColor = c;
+    // The texture is SRGBColorSpace, so the sampler above hands this shader
+    // LINEAR values — and the renderer presents an sRGB canvas. Built-in
+    // materials get this encode appended automatically; a raw ShaderMaterial
+    // does not, and shipping without it wrote linear values into an sRGB
+    // framebuffer: every AA midtone sank, and the card's text rendered
+    // visibly darker and heavier than the same pixels at rest (measured in
+    // the texel-vs-screen bisect, 2026-08-02). At rest band is exactly zero,
+    // so with the encode the mesh is exactly its own pixels — in color, not
+    // just in geometry.
+    #include <colorspace_fragment>
   }
 `
 
@@ -357,6 +373,10 @@ interface DriverProps {
   cardRef: React.RefObject<THREE.Group | null>
   shadowRef: React.RefObject<THREE.Mesh | null>
   onPainted: () => void
+  /** The texture's CURRENT pin, texels per CSS px — the density schedule's live value. */
+  density: number
+  /** Flip the schedule: true as the plate climbs through the approach, false for home. */
+  onAltitude: (hi: boolean) => void
 }
 
 const FLAT = new THREE.Quaternion()
@@ -396,9 +416,20 @@ function trackHand(f: Flight, dt: number, target: THREE.Vector3) {
   f.prevTarget.copy(target)
 }
 
-function Driver({ flight, slotRect, scrollTop, onLanded, cardRef, shadowRef, onPainted }: DriverProps) {
+function Driver({
+  flight,
+  slotRect,
+  scrollTop,
+  onLanded,
+  cardRef,
+  shadowRef,
+  onPainted,
+  density,
+  onAltitude,
+}: DriverProps) {
   const size = useThree((s) => s.size)
   const camera = useThree((s) => s.camera)
+  const dpr = useThree((s) => s.viewport.dpr)
 
   useFrame((_, rawDt) => {
     const f = flight.current
@@ -452,8 +483,68 @@ function Driver({ flight, slotRect, scrollTop, onLanded, cardRef, shadowRef, onP
       }
     }
 
+    // ── the density schedule ──
+    //
+    // Page density on the page, altitude density at altitude, toggled where
+    // the plate actually is — not where a mode flag says it should be (a
+    // regrabbed float is `held` with `lift` long finished; the plate's z is
+    // the only honest witness). Hysteresis so a card bobbing on its spring
+    // near the boundary cannot flap the pin. Descent flips low immediately
+    // (`home` at any height): the fall is the motion mask for the re-raster,
+    // and what matters is arriving at the page 1 : 1.
+    const hi =
+      f.mode !== 'home' && f.plate.p.z > LIFT_Z * (f.hiDensity ? 0.5 : 0.65)
+    if (hi !== f.hiDensity) {
+      f.hiDensity = hi
+      onAltitude(hi)
+    }
+
+    // ── the presented pose: physics truth, then the pixel-grid settle ──
+    //
+    // At rest the card must be indistinguishable from resting DOM, and rest
+    // is the only time anyone can stare: even at exactly 1 : 1 density, a
+    // texture whose corner sits at a fractional screen position is resampled
+    // by bilinear at that fraction — every glyph edge smeared across two
+    // device pixels, the fattened-fuzzy look the bisect shots measured. So
+    // when the plate is still (and only then), the PRESENTATION quantizes:
+    // projected footprint to exactly the texture's texel count, projected
+    // top-left corner to an integer device pixel, residual tilt to flat.
+    // The physics never hears about it — same truth/presentation split as
+    // the grounded damper (#49) — and the blend runs on plate speed, so a
+    // moving card is pure truth and nothing pops in between.
     group.position.copy(f.plate.p)
     group.quaternion.copy(f.plate.q)
+    group.scale.set(1, 1, 1)
+
+    const mag = planeScale(camZ, f.plate.p.z)
+    const supply = density / dpr
+    // Only meaningful where the texture can be 1 : 1 at all — the pin and
+    // the plane must agree (they diverge mid-rise and mid-descent, where
+    // speed keeps the blend at zero anyway; the gate is for the edges).
+    if (Math.abs(mag - supply) < supply * 0.02) {
+      const edge = Math.hypot(f.w, f.h) / 2
+      const speed = f.plate.v.length() + f.plate.w.length() * edge
+      const settle = 1 - Math.min(1, Math.max(0, (speed - 2) / 28))
+      if (settle > 0) {
+        const tw = Math.round(f.w * density)
+        const th = Math.round(f.h * density)
+        // Footprint: exactly tw × th device px (a 0.07% size lie at most —
+        // without it the phase drifts across the card even when the corner
+        // is pinned, because 514 · 1.114 is not an integer).
+        const sx = tw / (f.w * mag * dpr)
+        const sy = th / (f.h * mag * dpr)
+        // Corner: the top-left of that footprint, in device px, onto the
+        // integer grid. World y is up and screen y is down — mind the sign.
+        const tlx = (vw / 2 + f.plate.p.x * mag) * dpr - tw / 2
+        const tly = (vh / 2 - f.plate.p.y * mag) * dpr - th / 2
+        const dx = (Math.round(tlx) - tlx) / (dpr * mag)
+        const dy = (Math.round(tly) - tly) / (dpr * mag)
+        group.position.x += settle * dx
+        group.position.y -= settle * dy
+        group.quaternion.slerp(FLAT, settle)
+        group.scale.set(1 + settle * (sx - 1), 1 + settle * (sy - 1), 1)
+      }
+    }
 
     // ── the shadow, from the plate's own corners ──
     const sh = shadowRef.current
@@ -526,17 +617,37 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
   const viewH = useThree((s) => s.size.height)
   const dpr = useThree((s) => s.viewport.dpr)
 
-  // The card must be indistinguishable from the resting DOM it replaces, and
-  // its airborne density is not a guess: while held or floating it sits on
-  // the lift plane, magnified by exactly planeScale(camZ, LIFT_Z), on a
-  // display putting `dpr` device pixels under every CSS pixel. Pin the
-  // texture at that product — texel : device-pixel is then 1 : 1 for the
-  // whole airborne life, and a pinned Surface is BORN at its final scale, so
-  // the page→mesh handoff has no blurry first raster to hide (the auto path
-  // seeds at the dpr tier but would still round this 2.2× demand down to
-  // tier 2 and ride out the lift 8% undersupplied). Recomputed on resize;
-  // the pinned-change path re-rasters in place.
+  // The card must be indistinguishable from the resting DOM it replaces —
+  // and it lives on TWO planes, so it needs two densities, not one.
+  //
+  // On the page (z ≈ 0) a CSS pixel is a device pixel × dpr, full stop. At
+  // altitude the card sits on the lift plane, magnified by exactly
+  // planeScale(camZ, LIFT_Z), so the same content needs that many more
+  // texels to stay 1 : 1 with the display. Pinning the ALTITUDE density for
+  // the whole flight was measured to be the grab-moment blur itself: the
+  // texture is born 11% too dense for the page, and the #46 hard cut swaps
+  // crisp DOM for that texture minified into the resting rect — mush, one
+  // frame after perfect, precisely when the eye is looking at it.
+  //
+  // So the pin follows the card: born at page density (the handoff frame is
+  // a pixel-for-pixel copy of the DOM it replaces), re-pinned to altitude
+  // density as the plate climbs through the approach (the swap re-rasters in
+  // place, hidden by the rise), and back to page density on the way home so
+  // the landing swap is a pixel copy too. The driver owns the toggle — it is
+  // the only thing that watches z every frame.
   const airborneDensity = dpr * planeScale(cameraDistance(viewH, FOV), LIFT_Z)
+  const [atAltitude, setAtAltitude] = useState(false)
+  const density = atAltitude ? airborneDensity : dpr
+
+  // Scene hook (the __lab005 convention): the flight ref and the card's
+  // transform group, alive exactly while a card is airborne.
+  useEffect(() => {
+    const w = window as unknown as { __lab014?: unknown }
+    w.__lab014 = { flight, cardRef }
+    return () => {
+      delete w.__lab014
+    }
+  }, [flight])
 
   // Re-grabbing an airborne card cannot go through an r3f handler: `Surface`
   // installs its own `onPointerDown` AFTER spreading the caller's mesh props,
@@ -589,6 +700,8 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
         cardRef={cardRef}
         shadowRef={shadowRef}
         onPainted={onPainted}
+        density={density}
+        onAltitude={setAtAltitude}
       />
 
       <mesh ref={shadowRef} renderOrder={0} frustumCulled={false}>
@@ -608,7 +721,7 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
           label={`lab014-${card.id}`}
           width={f.w}
           height={f.h}
-          resolution={airborneDensity}
+          resolution={density}
           material="none"
           renderOrder={1}
           frustumCulled={false}
@@ -827,6 +940,7 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
         downX: e.clientX,
         downY: e.clientY,
         floated: false,
+        hiDensity: false,
         px: e.clientX,
         py: e.clientY,
         handVel: new THREE.Vector3(),
@@ -868,9 +982,16 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
   // there is nothing to gate: with no flight they all return on the first
   // line. The handlers themselves live in lab014Gestures.ts — they filter
   // `isTrusted`, and the test file is the story of why.
+  // The gesture's lift-plane carry, with the lab's own camera. The canvas
+  // fills the window here, so `innerHeight` is the calibration height.
+  const toLiftPlane = useCallback(
+    (a: THREE.Vector3) => carryToPlane(a, cameraDistance(window.innerHeight, FOV), LIFT_Z),
+    [],
+  )
+
   useEffect(
-    () => attachLab014Gestures({ flight, dropTarget, moveTo, snapshot, scrollTop }),
-    [dropTarget, moveTo, snapshot, scrollTop],
+    () => attachLab014Gestures({ flight, dropTarget, moveTo, snapshot, scrollTop, toLiftPlane }),
+    [dropTarget, moveTo, snapshot, scrollTop, toLiftPlane],
   )
 
   const onLanded = useCallback(() => {

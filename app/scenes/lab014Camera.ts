@@ -57,6 +57,28 @@ export function screenToPlane(
 }
 
 /**
+ * Move a world point onto the plane `z` along its own line of sight: the
+ * carried point projects to exactly the same screen position as the original.
+ * Similar triangles once more — world x/y scale by the ratio of the two
+ * magnifications.
+ *
+ * A tapped card needs this. The float anchor is captured wherever the plate
+ * happened to be when the fingers let go — mid-rise, on no plane in
+ * particular — but the texture is pinned for the LIFT plane, and a card
+ * hanging below it shows its texels squeezed into fewer screen pixels:
+ * permanently minified, permanently soft. Carrying the anchor up finishes
+ * the climb the tap interrupted, without the card sliding sideways while it
+ * rises.
+ */
+export function carryToPlane(p: THREE.Vector3, camZ: number, z: number) {
+  const k = planeScale(camZ, p.z) / planeScale(camZ, z)
+  p.x *= k
+  p.y *= k
+  p.z = z
+  return p
+}
+
+/**
  * Where a world point lands on screen, in client px. The inverse of
  * `screenToPlane`, and only used to prove that it is one.
  */

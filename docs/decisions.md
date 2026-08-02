@@ -2486,3 +2486,93 @@ outside that question: birth (nothing has been projected yet — use the
 display's prior) and known flight plans (the answer is a constant — state
 it). Guessing machinery should only run where there is genuinely
 something to guess.
+
+**Addendum (2026-08-02, same day).** Two of this entry's claims did not
+survive the texel-vs-screen bisect (#53). *"Born at its final scale, so
+the handoff has no blurry first raster to hide"* — inverted: being born
+at ALTITUDE density is what made the handoff blurry, because the #46 cut
+happens at z ≈ 0, where that texture is 11% minified into the resting
+rect. And *"`float` hangs at the grab point's world z, which IS the lift
+plane"* — false: a tap releases mid-rise, and the anchor kept whatever z
+the plate had reached (~20–60), hanging the card permanently minified.
+The pin's VALUE was exactly right; pinning it for the whole flight was
+not. #53 replaces the constant with a two-value schedule and fixes the
+float's altitude.
+
+## 53. Crispness is a rest state — snap the presentation, schedule the pin, encode the output (2026-08-02, lab 014)
+
+**Decision.** Three mechanisms, convicted by one instrument and fixed
+separately:
+
+1. *The pin is a schedule, not a constant.* Page density (`dpr`) on the
+   page, altitude density (`dpr × planeScale(camZ, LIFT_Z)`) at altitude,
+   toggled by the driver on the plate's actual z (hysteresis at 0.65/0.5
+   of LIFT_Z; `home` flips low immediately). Born at page density, so the
+   #46 handoff frame is a pixel-for-pixel copy of the DOM it replaces;
+   re-pinned mid-rise, so cruise is exactly 1 : 1; re-pinned back
+   mid-descent, so the landing swap is a pixel copy too. Cost: two
+   re-rasters per round trip, both hidden by motion.
+2. *A tapped card finishes its climb.* The float anchor is captured
+   mid-rise; `carryToPlane` (lab014Camera) moves it to the lift plane
+   along its own line of sight — same screen position, correct altitude —
+   instead of hanging the card where its texture is minified forever.
+3. *At rest, the presentation quantizes to the device-pixel grid.* When
+   plate speed ≈ 0 (and the pin agrees with the plane), the driver snaps
+   the GROUP — never the plate — so the projected footprint is exactly
+   the texture's texel count (`round(w·density) × round(h·density)`
+   device px) and the projected top-left is an integer device pixel;
+   residual tilt slerps flat. Blend runs on plate speed: a moving card is
+   pure physics truth, a resting card is pure grid, nothing pops. Same
+   truth/presentation split as the grounded damper (#49).
+
+Plus one that is not sampling at all: a custom `ShaderMaterial` over
+`useSurfaceTexture` must end with `#include <colorspace_fragment>`. The
+texture is `SRGBColorSpace`, so the sampler hands the shader LINEAR
+values; built-ins re-encode on output, a raw shader does not, and the
+card rendered its midtones sunk — text visibly darker and heavier than
+the same pixels at rest.
+
+**Why.** Pete, after #52 shipped: *"hm it looks exactly the same to me,
+still a stark difference in clarity."* He was right; #52's fix was real
+but not the mechanism. The instrument that settled it: copy the source
+canvas into the page (`drawImage` onto a probe canvas, displayed at
+1 canvas px = 1 CSS px, `image-rendering: pixelated`) so one screenshot
+holds the texture's actual texels, the mesh's screen rendering, and
+resting DOM side by side, then compare at 4× nearest-neighbor. Verdict:
+texels crisp — capture innocent, `drawElementImage` rasterizes perfect
+glyphs at fractional scales — while the same texture on screen was
+fattened and smeared. Display-side, twice over: the float hung below the
+lift plane (573 texels squeezed into ~515 px, the zoom shots' glyph-size
+ratio measured the ~11% minification directly), and even at exact 1 : 1
+a mesh at fractional screen position resamples every texel at that
+fraction — bilinear at half-phase is a 2-px box blur, which is precisely
+the "fattened + fuzzy" signature. The grab-moment jar was the same
+arithmetic at the other end: born at altitude density, minified into the
+resting rect on the exact frame crisp DOM disappears under it.
+
+**Why snap the presentation and not the physics.** The plate is the
+truth the springs, the shadow, and the gestures all consume; feeding it
+quantized positions would put a 0.5-px sawtooth into the damper's error
+term. The group is where pose becomes pixels — the one place a ≤ half
+device-pixel lie is invisible by construction and exactly what makes
+bilinear degenerate to the identity map. (The footprint correction is
+the same move in scale: `514 × 1.114` is not an integer, so without it
+the phase drifts across the card even with a pinned corner — a 0.07%
+size lie buys zero drift.)
+
+**Measured (2026-08-02).** dpr 1: float settles at z = 96.000, snap
+offsets ~0.1 world px, footprint scale (1.000672, 0.997473 — the card's
+CSS height is fractional, and the texture's rounded texel count is the
+honest target), 2 paints for tap → float → cruise; 4× crops of the
+floating title/body indistinguishable from the texel probe, texel probe
+indistinguishable from resting DOM. dpr 2 (emulated): pin 2.22807399,
+texture 1145 × 351, projected footprint 1145.0000 × 351.0000 device px,
+corner residue 0.0000 — the rest state is an identity map on retina.
+Landing: sources unmount, stats empty, idle board pure DOM.
+
+**The general lesson.** Sharpness has three independent budgets —
+supply (texels per pixel), phase (where texels land on the grid), and
+transfer (what the shader does to the values) — and "it looks blurry"
+does not say which one is overdrawn. The bisect that separates them is
+cheap: put the texture's own texels on the page next to the mesh that
+displays them. Everything upstream of the seam that differs is innocent.
