@@ -1,11 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import type { Group } from 'three'
-import { FocusGroup, SurfaceApp, useStyleChannel } from 'three-ui'
+import { toast } from 'sonner'
+import { FocusGroup, SurfaceApp, useStyleChannel, ViewerSurface } from 'three-ui'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { Button } from '@/components/ui/button'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandShortcut,
+} from '@/components/ui/command'
 import { Kbd } from '@/components/ui/kbd'
 import {
   Message,
@@ -25,6 +35,7 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
+import { Toaster } from '@/components/ui/sonner'
 
 // Lab 010 — an agentic coding UI in full 3D.
 //
@@ -370,6 +381,106 @@ function SessionSidebar({ position, rotation }: {
   )
 }
 
+// ── The viewer chrome ──────────────────────────────────────────────────────
+//
+// The command palette belongs to the eye, not to any panel — it rides the
+// ViewerSurface slab, where `position: fixed` means "fixed to the frame"
+// because a layoutSubtree canvas is the containing block for its fixed
+// descendants. cmdk is verbatim; ⌘K is a document listener (keydown reaches
+// the page no matter which parked subtree holds focus). The toast stack
+// shares the slab, so palette actions have a voice.
+
+function ViewerHud() {
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setOpen((o) => !o)
+      } else if (e.key === 'Escape' && open) {
+        // claim it before FocusScene's ladder reads defaultPrevented
+        e.preventDefault()
+        setOpen(false)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open])
+
+  const run = useCallback((fn: () => string) => {
+    setOpen(false)
+    toast(fn())
+  }, [])
+
+  return (
+    <>
+      <Toaster position="bottom-right" />
+      <div className="fixed bottom-4 left-4 flex items-center gap-1.5 rounded-md border bg-background/80 px-2.5 py-1.5 text-xs text-muted-foreground">
+        <Kbd>⌘</Kbd>
+        <Kbd>K</Kbd> command palette
+      </div>
+      {open ? (
+        <div className="fixed inset-0 grid place-items-center bg-black/40 pt-0">
+          <Command className="animate-in fade-in-0 zoom-in-95 w-[520px] rounded-xl border bg-popover shadow-lg duration-150 **:data-[slot=command-input-wrapper]:h-12">
+            <CommandInput autoFocus placeholder="Type a command…" />
+            <CommandList>
+              <CommandEmpty>No results found.</CommandEmpty>
+              <CommandGroup heading="Agent">
+                <CommandItem
+                  onSelect={() =>
+                    run(() => {
+                      window.__lab010?.send('What did the mask do to the capture?')
+                      return 'Asked the agent about the mask'
+                    })
+                  }
+                >
+                  Ask about the mask bug
+                  <CommandShortcut>⏎</CommandShortcut>
+                </CommandItem>
+                <CommandItem
+                  onSelect={() =>
+                    run(() => {
+                      window.__lab010?.send('Summarize what this lab proves so far.')
+                      return 'Asked for a summary'
+                    })
+                  }
+                >
+                  Ask for a lab summary
+                </CommandItem>
+              </CommandGroup>
+              <CommandGroup heading="Log">
+                <CommandItem
+                  onSelect={() =>
+                    run(() => {
+                      const vp = window.__lab010?.viewport()
+                      if (vp) vp.scrollTop = 0
+                      return 'Scrolled the log to the top'
+                    })
+                  }
+                >
+                  Scroll log to top
+                </CommandItem>
+                <CommandItem
+                  onSelect={() =>
+                    run(() => {
+                      const vp = window.__lab010?.viewport()
+                      if (vp) vp.scrollTop = vp.scrollHeight
+                      return 'Scrolled the log to the bottom'
+                    })
+                  }
+                >
+                  Scroll log to bottom
+                </CommandItem>
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </div>
+      ) : null}
+    </>
+  )
+}
+
 interface Lab010Window extends Window {
   __lab010?: {
     send: (text?: string) => void
@@ -410,6 +521,8 @@ export function Lab010() {
       </group>
 
       <SessionSidebar position={[-1.72, 1.55, 0.28]} rotation={[0, 0.38, 0]} />
+
+      <ViewerSurface label="lab010-hud" content={<ViewerHud />} />
     </>
   )
 }

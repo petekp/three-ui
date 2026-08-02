@@ -2188,3 +2188,41 @@ frame *forever*. 417 paints before the first screenshot finished.
 `animate-none` keeps the shape and kills the loop; the idle contract
 (0 paints/s) is the budget every decorative animation has to clear,
 and an unbounded one never can.
+
+## the palette belongs to the eye — ⌘K on the viewer slab
+
+Third pose. The chat panel belongs to the room and the sidebar angles
+toward it, but a command palette belongs to no panel — it belongs to
+the *viewer*, which is exactly what ViewerSurface is for. `cmdk` comes
+in verbatim, the palette mounts on the eye-slab behind a `bg-black/40`
+backdrop (occlusion that is matter, same as the dialog in inc 3), and a
+persistent ⌘K hint chip sits in the slab's corner via `position:
+fixed` — the containing-block-not-viewport rule doing chrome layout
+with zero math.
+
+The wiring is two document-level listeners. ⌘K works from anywhere
+because keydown is delivered to the page regardless of which parked
+subtree holds focus — the keyboard never needed forwarding, only the
+pointer did. Escape is the interesting one: FocusScene's ladder also
+listens for it, so the palette claims the key with `preventDefault` and
+FocusScene's `defaultPrevented` gate stands down. Verified: Escape
+closes the palette and the camera holds [0, 2, 3.4] to the third
+decimal — the ladder never fired.
+
+cmdk holds *native* focus inside the parked subtree, so typing filters
+through the texture with no forwarding at all — "mask" narrows the
+list to the one matching item. And that native caret turned out to be
+the increment's honest cost: an open palette paints twice a second,
+the input's blinking caret, a real animation the compositor reports
+like any other. Closed, the slab returns to zero. A caret is the
+smallest possible violation of the idle contract, and it's not a
+violation — it's the contract working: things that are genuinely
+animating cost paints, things that aren't cost nothing.
+
+The actions are the demo's connective tissue: Enter on "Ask about the
+mask bug" closes the palette, reaches into the chat panel's React root
+— a different Surface, a different tree — and streams a reply about
+this very bug into the log; "Scroll log to top" moves another
+surface's viewport to 0 and confirms with a toast on the same slab it
+was invoked from. Three surfaces, three poses, one keystroke touching
+all of them. Idle after: 0 paints/2s across every source.
