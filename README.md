@@ -2417,3 +2417,70 @@ threshold. Measured trace: enter 0.132 → 0.817 → 0.995 → 1 (eased —
 0.817 at 53% of the flight is the style engine's ease-out, not ours),
 hold at 1, exit back to 0, idle 0 paints after settle, 0 errors.
 Decisions #33.
+
+## lab 012 — the glass spike: the world bends through it, the ink sits on it
+
+The liquid-glass direction needed three questions answered before any
+shader gets written: can a Surface wear a physically-based transmission
+material, does refraction survive multiple levels of glass, and does
+the DOM stay live and legible through all of it. All three: yes,
+measured.
+
+Architecture — the second consumer of lab 011's material-slot seam. A
+glass panel is a `material="none"` Surface on an extruded rounded rect
+(flat faces, rounded corner *edges* — a card, not a soap bar) wearing
+drei's `MeshTransmissionMaterial`, with the DOM riding a hair-lifted
+transparent quad that samples `useSurfaceTexture()` at true UV. The
+rule that makes it read as glass rather than soup: **the world bends
+through the slab; the ink sits on it and never refracts.**
+
+Research first (three's transmission internals, drei MTM source,
+Heckel's per-channel-IOR technique, the 2025 liquid-glass SDF
+recipes). The load-bearing fact: three's built-in transmission buffer
+renders OPAQUES ONLY — a glass panel behind a glass panel simply
+vanishes through the front one, structurally, no knob to turn. drei's
+MTM instead hides only itself from its own per-material FBO, which is
+why stacked MTM panels can see each other and why it's the shipping
+answer for glass-through-glass.
+
+Two defects, both browser-bought, both about what's IN the buffer:
+
+**The ink ghosted behind its own glass.** MTM's hide is a
+DiscardMaterial swap on the host mesh — children keep rendering, so
+the content quad landed in its own refraction buffer and every label
+appeared twice, one crisp, one refracted. Fix: MTM's `buffer` prop
+(hand it a texture and it renders nothing itself) fed by a scene-level
+coordinator that renders one FBO per panel with that panel's WHOLE
+group hidden — glass and ink together.
+
+**The hall of mirrors.** With naive hide-only-yourself buffers, ghost
+"Continue" copies appeared inside the pill — via the CARD's
+refraction. These are screen-space buffers rendered from the camera,
+so the card's buffer contained the pill (which is physically in FRONT
+of the card), and the card's glass sampled the pill's image right
+behind the pill itself. A panel's refraction must contain only what is
+BEHIND it: the coordinator sorts panels near→far and hides
+cumulatively — when panel P's buffer renders, P and everything nearer
+are hidden. The rear panel still appears in the front panel's buffer;
+the front one never appears in the rear's. (Matched detail from MTM's
+own pass: buffer renders run under NoToneMapping or glass double
+tonemaps.)
+
+The ledger: pill glass visibly bends the password field's outline with
+dispersion fringing at the rim — three depth levels in one frame (pill
+glass → card glass + ink → wall, all live DOM). **121 fps with both
+per-panel buffers rendering every frame; idle paints 0/0/0** — the
+glass pipeline is pure GPU and the upload-on-paint contract never
+hears about it. Trusted click through the glass landed native focus in
+the email field (through EXTRUDED geometry — the ink quad's proper
+plane UVs carry the forwarding), typed `glass@lab.dev` with live caret
+(52 bounded paints), no ring on the text input (decisions #24's
+carve-out), hover twin stamps through glass. Every transmission
+parameter is live on `window.__lab012` for tuning.
+
+Cost model to carry forward: one extra scene render per panel per
+frame. Fine at 2–4 panels; the shared-buffer variant (one FBO, every
+panel samples it) is the documented fallback at scale, and the
+screen-space SDF compositor — one render + one full-screen pass, true
+multi-level by construction, native squircle-bezel lensing — is the
+increment-2 direction for the actual liquid look. Decisions #34.

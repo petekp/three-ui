@@ -1501,3 +1501,66 @@ shader to three's material internals; a clean slot is simpler and
 strictly more capable. (c) *Compositing DOM into a second canvas the
 shader reads* — an extra copy per paint for nothing; the
 `CanvasTexture` is already the shared substrate.
+
+## 34. Glass buffers are occlusion-ordered — a panel refracts only what is behind it (2026-08-01, lab 012 spike)
+
+**Decision.** Glass panels (Surface `material="none"` + drei
+`MeshTransmissionMaterial`) never let MTM render its own refraction
+buffer. A scene-level coordinator owns one FBO per panel and feeds it
+through MTM's `buffer` prop (which short-circuits its internal pass
+entirely: `if (ref.current.buffer === fboMain.texture)`). Per frame,
+panels sort near→far by camera distance and hide CUMULATIVELY: when
+panel P's buffer renders, P and every panel nearer than P are
+invisible. Buffer renders run under `NoToneMapping`, exactly as MTM's
+internal pass does.
+
+**Context — two measured artifacts, one cause: what's in the buffer.**
+(a) MTM's self-hide is a DiscardMaterial swap on the HOST MESH ONLY
+(`parent.material = discardMaterial`, verified in drei 10.7.7 source)
+— children render into the buffer, so a Surface's content overlay quad
+ghosted behind its own glass: every label doubled, one crisp copy, one
+refracted. (b) These are screen-space buffers rendered from the
+camera: hide-only-yourself leaves a panel that is physically IN FRONT
+of you inside your buffer, and your refraction shows it — measured as
+ghost "Continue" copies inside the front pill, delivered via the rear
+card's refraction of the pill (a hall of mirrors, glaring on text,
+invisible on blobs, which is why MTM's default survives in demos).
+Physics is the tiebreak: light reaching a panel's back face never
+passed through anything in front of that panel.
+
+**Why not three's built-in transmission.** Its buffer renders opaques
+only (`renderTransmissionPass(opaqueObjects, …)` in WebGLRenderer) —
+a glass panel BEHIND another one vanishes entirely through the front
+one. Structural; maintainers say "modify the renderer." MTM's
+per-material FBO is the established glass-through-glass answer; the
+coordinator keeps that property (rear panels render into front
+panels' buffers with their own materials, one frame stale) while
+fixing (a) and (b).
+
+**The panel anatomy this banks.** World bends THROUGH the slab; ink
+sits ON it: extruded rounded-rect glass body (never samples the DOM) +
+transparent overlay quad reading `useSurfaceTexture()` at true UV,
+lifted past the bevel. Both live under one group so one `visible`
+flip hides the whole panel. Forwarding note: ExtrudeGeometry UVs are
+shape-space garbage — pointer forwarding works because the ray's
+first hit is the overlay quad's proper plane UVs; a glass panel
+without an ink quad would need a UV-mapped geometry or
+`hitTest="content"` reasoning of its own.
+
+**Verified** (lab 012, Chrome 150, trusted input): three depth levels
+in one frame — pill glass bending the password field's outline
+(dispersion fringing at the rim) over card glass + ink over the DOM
+wall; 121 fps with 2 per-panel buffer renders/frame (768² + 512²);
+idle 0 paints on all three sources; click-through-glass landed native
+focus, typing live with caret, hover twin stamped; 0 texture errors.
+
+**Rejected.** (a) *MTM default self-render* — artifacts (a)+(b) above.
+(b) *three built-in transmission (`transmissionSampler`)* — rear glass
+vanishes; also surrenders buffer control. (c) *Excluding ALL ink quads
+from every buffer* — kills the demo's best shot (rear panel's text
+magnified through front glass) and isn't physical. (d) *depth-sorted
+per-pair buffers (N² correctness)* — cumulative near→far hiding gets
+the same correctness in N renders because occlusion is transitive
+along the view axis. Open, deliberately: N-panel cost is N scene
+renders/frame — the shared-buffer variant or the screen-space SDF
+compositor (increment 2, the liquid look) is the scale answer.

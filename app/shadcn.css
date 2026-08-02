@@ -138,6 +138,13 @@
   .ui-layer {
     @apply font-sans text-foreground antialiased;
   }
+  /* Glass panels (lab 012): the DOM rides a transparent overlay above a
+   * refracting mesh, so the drawn root must rasterize with real alpha —
+   * bg-background would paint the whole slab opaque. The content root
+   * declares itself glass; this is an app choice, not a library rule. */
+  .ui-root:has(> [data-glass-root]) {
+    background: transparent;
+  }
 }
 
 /* Deviation 5 — scroll-fade is a score, not a performance. Measured
