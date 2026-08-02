@@ -298,12 +298,20 @@ function crossBoundary(
   }
 }
 
+// Roots whose mirror is currently hovering — the set a wheel event consults
+// to find which surface (if any) is under the pointer. A WeakMap can't be
+// iterated, and the wheel arrives on the CANVAS with screen coordinates, so
+// the only way back to the parked point is through the mirrors that already
+// know it.
+const hoverRoots = new Set<HTMLElement>()
+
 function updateHover(
   root: HTMLElement,
   target: Element,
   init: PointerEventInit & MouseEventInit,
 ) {
   const m = mirrorOf(root)
+  hoverRoots.add(root)
   if (m.hovered === target) return
   // Mirror first, dispatch second: the browser has :hover applied before it
   // fires the boundary events, so a handler reading [data-hover] must see the
@@ -358,6 +366,7 @@ let lastForward: { root: HTMLElement; x: number; y: number } | null = null
 export function clearPointerState(root: HTMLElement) {
   const m = mirrors.get(root)
   if (!m) return
+  hoverRoots.delete(root)
   if (m.hovered) {
     // Leave from where the pointer actually was. The grace polygon is
     // anchored at these coordinates, so reporting the away point here would
@@ -549,4 +558,148 @@ export function forwardPointer(
 export function nudgeSelect(el: HTMLSelectElement) {
   el.selectedIndex = (el.selectedIndex + 1) % el.options.length
   el.dispatchEvent(new Event('change', { bubbles: true }))
+}
+
+// ---- wheel / scroll forwarding ------------------------------------------
+//
+// Scroll RASTERIZES fine — a scrollTop change invalidates the paint record
+// like any descendant mutation (measured 2026-08-01: instant jump = 1 paint,
+// smooth scroll = 1 paint/frame while gliding, pixels verified). What the
+// platform will not do is scroll FOR us: the default scrolling action only
+// runs for trusted wheel events, and everything the forwarder dispatches is
+// synthetic. So the forwarder performs the scroll itself, the way the
+// browser would have: dispatch the (cancelable) wheel to the DOM first, and
+// if no handler claims it, walk up from the target for the nearest scroll
+// container that can still move in the delta's direction and move it.
+//
+// The return value is the arbitration verdict the SCENE needs: `true` means
+// the surface consumed the wheel (a handler claimed it, a scroller moved, or
+// an `overscroll-behavior: contain|none` boundary swallowed it), and the
+// camera must not also zoom. `false` means the wheel fell all the way
+// through — over a panel with nothing scrollable, the room itself is the
+// next scroll container, exactly like scroll chaining reaching the page.
+
+/** Can `el` still scroll in the direction of `delta` on `axis`? */
+function canScroll(el: Element, axis: 'x' | 'y', delta: number): boolean {
+  if (delta === 0) return false
+  const cs = getComputedStyle(el)
+  const overflow = axis === 'y' ? cs.overflowY : cs.overflowX
+  if (overflow !== 'auto' && overflow !== 'scroll') return false
+  const max =
+    axis === 'y' ? el.scrollHeight - el.clientHeight : el.scrollWidth - el.clientWidth
+  if (max <= 0) return false
+  const pos = axis === 'y' ? el.scrollTop : el.scrollLeft
+  // Half a pixel of slack: scroll positions are fractional on scaled sources.
+  return delta > 0 ? pos < max - 0.5 : pos > 0.5
+}
+
+/** Is `el` a scroll container on `axis` whose overscroll must not chain? */
+function overscrollStops(el: Element, axis: 'x' | 'y'): boolean {
+  const cs = getComputedStyle(el)
+  const overflow = axis === 'y' ? cs.overflowY : cs.overflowX
+  if (overflow !== 'auto' && overflow !== 'scroll') return false
+  const behavior =
+    (axis === 'y' ? cs.overscrollBehaviorY : cs.overscrollBehaviorX) ||
+    cs.overscrollBehavior
+  return behavior === 'contain' || behavior === 'none'
+}
+
+/**
+ * Forward a wheel at page point (x, y) into `root`. Returns true when the
+ * surface consumed it (the camera must stand down), false when it chained
+ * through to the scene.
+ */
+export function forwardWheel(
+  root: HTMLElement,
+  x: number,
+  y: number,
+  wheel: { deltaX: number; deltaY: number; deltaMode?: number },
+): boolean {
+  const target = deepestElementAt(root, x, y)
+  if (!target) return false
+
+  // The retelling: consumers hear the wheel whether or not anything scrolls
+  // (cmdk, carousels, custom scrollers all listen). A preventDefault is a
+  // claim, honored the way the browser would.
+  const ev = new WheelEvent('wheel', {
+    clientX: x,
+    clientY: y,
+    deltaX: wheel.deltaX,
+    deltaY: wheel.deltaY,
+    deltaMode: wheel.deltaMode ?? 0,
+    bubbles: true,
+    cancelable: true,
+    view: window,
+  })
+  if (!target.dispatchEvent(ev)) return true
+
+  // Line/page deltas normalized to pixels before moving anything (real
+  // devices send pixels; some mice send lines).
+  const unit = wheel.deltaMode === 1 ? 16 : wheel.deltaMode === 2 ? 100 : 1
+  const dx = wheel.deltaX * unit
+  const dy = wheel.deltaY * unit
+
+  // Scroll chaining, target → root: the nearest scroll container that can
+  // move takes the delta; a container at its end with overscroll containment
+  // stops the chain cold, consuming nothing — the chat log at its bottom must
+  // not become a camera zoom.
+  for (const el of chainOf(root, target)) {
+    const x2 = canScroll(el, 'x', dx)
+    const y2 = canScroll(el, 'y', dy)
+    if (x2 || y2) {
+      // Direct mutation, not scrollBy: user scrolling is exempt from CSS
+      // scroll-behavior, so instant is the faithful semantics — and it costs
+      // exactly one paint. scroll events fire from the mutation for free.
+      if (x2) el.scrollLeft += dx
+      if (y2) el.scrollTop += dy
+      return true
+    }
+    if ((dx !== 0 && overscrollStops(el, 'x')) || (dy !== 0 && overscrollStops(el, 'y')))
+      return true
+  }
+  return false
+}
+
+// The wheel cannot be arbitrated where it is heard. OrbitControls listens on
+// the CANVAS element — the wheel's real target — so by the time r3f's own
+// wrapper-level handler (and any mesh onWheel) runs, the camera has already
+// zoomed. The only seat ahead of the canvas is document capture. From there,
+// the mirrors already know whether the pointer is over a surface and where
+// its parked point is; if that surface consumes the wheel, the event is
+// stopped before OrbitControls ever hears it.
+let wheelRefs = 0
+let untrackWheel: (() => void) | null = null
+
+/** Reference-counted document-capture wheel arbiter. Returns a release. */
+export function trackWheel(): () => void {
+  if (wheelRefs++ === 0) {
+    const onWheel = (e: WheelEvent) => {
+      // Only wheels aimed at a canvas are ours to arbitrate — page scrolling
+      // outside the scene stays untouched, and the synthetic wheel dispatched
+      // by forwardWheel (whose target is parked DOM, never a canvas) can't
+      // re-enter here.
+      if (!(e.target instanceof HTMLCanvasElement)) return
+      for (const rootEl of hoverRoots) {
+        const m = mirrors.get(rootEl)
+        if (!m?.hovered) continue
+        if (forwardWheel(rootEl, m.at.x, m.at.y, e)) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          return
+        }
+      }
+    }
+    document.addEventListener('wheel', onWheel, { capture: true, passive: false })
+    untrackWheel = () =>
+      document.removeEventListener('wheel', onWheel, { capture: true })
+  }
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (--wheelRefs === 0) {
+      untrackWheel?.()
+      untrackWheel = null
+    }
+  }
 }

@@ -2054,3 +2054,50 @@ primary API: a subscription can miss its first event; a live read
 cannot be stale.
 
 The board is clear. Lab 010 is next.
+
+## lab 010 opens — the wheel finds its seat
+
+Lab 010 is the destination the whole board was clearing toward: an
+agentic coding UI in full 3D, every shadcn/ui component including the
+new chat set (`message`, `message-scroller`, `bubble`, `attachment` —
+the registry inventory confirmed all four ship today). The handoff's
+orders were to design around the seams, and the deepest one listed was
+scroll containers: no lab has ever put a scrolling region inside a
+Surface, and a chat log is nothing but one.
+
+Measurement dissolved most of it before any code. Scroll *rasterizes*:
+a `scrollTop` jump invalidates the paint record like any descendant
+mutation — one paint, pixels verified — and smooth scrolling glides at
+a paint per frame. The hit test never cared: `elementsFromPoint` reads
+scrolled geometry natively. The seam was input, and input alone: the
+platform only scrolls for TRUSTED wheels, and every event the forwarder
+tells is synthetic. A forwarded wheel runs your handlers and moves
+nothing.
+
+So the forwarder became the scroll engine. `forwardWheel` dispatches
+the cancelable wheel first (a preventDefault is a claim), then walks up
+from the target for the nearest scroll container that can still move
+and mutates it directly — instant, because user scrolling is exempt
+from CSS `scroll-behavior`, and one paint, with `scroll` events firing
+from the mutation for free. `overscroll-behavior: contain` stops the
+chain cold, which matters more here than on any page: shadcn's scroller
+viewport declares it, so a chat log at its bottom refuses to hand the
+wheel onward — and onward, in this medium, means the camera.
+
+That's the finding worth the entry: **the room is the outermost scroll
+container.** On a page, a wheel that chains through every scroller
+reaches the document and scrolls the page; here it reaches the scene
+and zooms the camera. `forwardWheel`'s boolean is exactly that chain
+boundary. And it cannot be enforced from inside r3f — OrbitControls
+listens on the canvas, the wheel's real target, so any mesh-level
+handler hears about the wheel after the camera has already moved. The
+arbiter (`trackWheel`) sits at document capture, the only seat ahead of
+the target phase, asks the hover mirrors which surface owns the pointer,
+and stops consumed wheels before the camera ever hears them.
+
+Verified with trusted wheels end to end: over the scroller, the parked
+DOM scrolls and the camera holds; over the card's plain body, the
+camera zooms; at the contained scroller's end, *nothing* moves — scroll
+pinned, camera pinned; over empty canvas, the room takes it. Decisions
+#29. The chat log now has everything it needs; next, the components
+themselves come in byte-verbatim.

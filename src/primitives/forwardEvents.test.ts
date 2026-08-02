@@ -14,8 +14,10 @@ import {
   clearPointerState,
   deepestElementAt,
   forwardPointer,
+  forwardWheel,
   silenceHoverMove,
   trackFocusModality,
+  trackWheel,
 } from './forwardEvents'
 
 const ROOT = { left: 0, top: 0, right: 360, bottom: 460 }
@@ -615,5 +617,177 @@ describe('stacking order (z-index) in the hit test', () => {
     ;(document as { elementsFromPoint?: unknown }).elementsFromPoint = () => []
     const on = uvOf(...TRIGGER_BOX)
     expect(deepestElementAt(root, on.x, on.y)).toBe(trigger)
+  })
+})
+
+describe('wheel forwarding and scroll chaining', () => {
+  // happy-dom has no layout, so scroll metrics are stubbed per element the
+  // same way boxes are. Overflow is declared inline (happy-dom reflects
+  // inline styles into computed style, which canScroll reads).
+  function scroller(
+    el: HTMLElement,
+    opts: { max: number; pos?: number; overflow?: string; overscroll?: string },
+  ) {
+    el.style.overflowY = opts.overflow ?? 'auto'
+    if (opts.overscroll) el.style.overscrollBehaviorY = opts.overscroll
+    const state = { top: opts.pos ?? 0 }
+    Object.defineProperties(el, {
+      scrollTop: {
+        get: () => state.top,
+        set: (v: number) => {
+          state.top = Math.max(0, Math.min(opts.max, v))
+        },
+        configurable: true,
+      },
+      scrollHeight: { get: () => 100 + opts.max, configurable: true },
+      clientHeight: { get: () => 100, configurable: true },
+      scrollWidth: { get: () => 100, configurable: true },
+      clientWidth: { get: () => 100, configurable: true },
+    })
+    return state
+  }
+
+  it('dispatches the wheel to the deepest element at the point', () => {
+    // Coordinates are asserted only by delta here: happy-dom's WheelEvent
+    // drops clientX/Y from its init (Chrome's, a real MouseEvent subclass,
+    // carries them — browser-verified).
+    const heard: number[] = []
+    trigger.addEventListener('wheel', (e) => heard.push(e.deltaY))
+    const at = uvOf(...TRIGGER_BOX)
+    const consumed = forwardWheel(root, at.x, at.y, { deltaX: 0, deltaY: 40 })
+    expect(heard).toEqual([40])
+    expect(consumed).toBe(false) // nothing scrollable anywhere
+  })
+
+  it('honors a preventDefault as a claim', () => {
+    trigger.addEventListener('wheel', (e) => e.preventDefault())
+    const at = uvOf(...TRIGGER_BOX)
+    expect(forwardWheel(root, at.x, at.y, { deltaX: 0, deltaY: 40 })).toBe(true)
+  })
+
+  it('scrolls the nearest scrollable ancestor and consumes the wheel', () => {
+    const state = scroller(root, { max: 300 })
+    const at = uvOf(...TRIGGER_BOX)
+    expect(forwardWheel(root, at.x, at.y, { deltaX: 0, deltaY: 50 })).toBe(true)
+    expect(state.top).toBe(50)
+  })
+
+  it('chains past a scroller at its end to one that can still move', () => {
+    const inner = scroller(trigger, { max: 200, pos: 200 })
+    const outer = scroller(root, { max: 300, pos: 0 })
+    const at = uvOf(...TRIGGER_BOX)
+    expect(forwardWheel(root, at.x, at.y, { deltaX: 0, deltaY: 30 })).toBe(true)
+    expect(inner.top).toBe(200)
+    expect(outer.top).toBe(30)
+  })
+
+  it('overscroll containment stops the chain without moving anything', () => {
+    scroller(trigger, { max: 200, pos: 200, overscroll: 'contain' })
+    const outer = scroller(root, { max: 300, pos: 0 })
+    const at = uvOf(...TRIGGER_BOX)
+    expect(forwardWheel(root, at.x, at.y, { deltaX: 0, deltaY: 30 })).toBe(true)
+    expect(outer.top).toBe(0)
+  })
+
+  it('an upward wheel at the top falls through; scrolled down, it consumes', () => {
+    const state = scroller(root, { max: 300, pos: 0 })
+    const at = uvOf(...TRIGGER_BOX)
+    expect(forwardWheel(root, at.x, at.y, { deltaX: 0, deltaY: -40 })).toBe(false)
+    state.top = 100
+    expect(forwardWheel(root, at.x, at.y, { deltaX: 0, deltaY: -40 })).toBe(true)
+    expect(state.top).toBe(60)
+  })
+
+  it('normalizes line-mode deltas to pixels', () => {
+    const state = scroller(root, { max: 300 })
+    const at = uvOf(...TRIGGER_BOX)
+    forwardWheel(root, at.x, at.y, { deltaX: 0, deltaY: 3, deltaMode: 1 })
+    expect(state.top).toBe(48) // 3 lines × 16px
+  })
+})
+
+describe('the document-capture wheel arbiter', () => {
+  let canvas: HTMLCanvasElement
+  let release: () => void
+
+  beforeEach(() => {
+    canvas = document.createElement('canvas')
+    document.body.append(canvas)
+    release = trackWheel()
+  })
+  afterEach(() => release())
+
+  function scrollableRoot(max: number, pos = 0) {
+    root.style.overflowY = 'auto'
+    const state = { top: pos }
+    Object.defineProperties(root, {
+      scrollTop: {
+        get: () => state.top,
+        set: (v: number) => {
+          state.top = Math.max(0, Math.min(max, v))
+        },
+        configurable: true,
+      },
+      scrollHeight: { get: () => 100 + max, configurable: true },
+      clientHeight: { get: () => 100, configurable: true },
+      scrollWidth: { get: () => 100, configurable: true },
+      clientWidth: { get: () => 100, configurable: true },
+    })
+    return state
+  }
+
+  function canvasWheel(dy: number) {
+    const e = new WheelEvent('wheel', {
+      deltaY: dy,
+      bubbles: true,
+      cancelable: true,
+    })
+    canvas.dispatchEvent(e)
+    return e
+  }
+
+  it('consumes a canvas wheel for the hovered surface and stops it cold', () => {
+    const state = scrollableRoot(300)
+    const at = uvOf(...TRIGGER_BOX)
+    forwardPointer(root, at.u, at.v, 'move') // arm the mirror
+
+    // OrbitControls' seat: a listener on the canvas itself.
+    let orbitHeard = 0
+    canvas.addEventListener('wheel', () => orbitHeard++)
+
+    const e = canvasWheel(40)
+    expect(state.top).toBe(40)
+    expect(e.defaultPrevented).toBe(true)
+    expect(orbitHeard).toBe(0)
+  })
+
+  it('lets an unconsumed wheel through to the scene', () => {
+    const at = uvOf(...TRIGGER_BOX)
+    forwardPointer(root, at.u, at.v, 'move')
+    let orbitHeard = 0
+    canvas.addEventListener('wheel', () => orbitHeard++)
+    const e = canvasWheel(40)
+    expect(e.defaultPrevented).toBe(false)
+    expect(orbitHeard).toBe(1)
+  })
+
+  it('ignores wheels not aimed at a canvas', () => {
+    const state = scrollableRoot(300)
+    const at = uvOf(...TRIGGER_BOX)
+    forwardPointer(root, at.u, at.v, 'move')
+    const e = new WheelEvent('wheel', { deltaY: 40, bubbles: true, cancelable: true })
+    document.body.dispatchEvent(e)
+    expect(state.top).toBe(0)
+    expect(e.defaultPrevented).toBe(false)
+  })
+
+  it('stands down once the pointer has left the surface', () => {
+    const state = scrollableRoot(300)
+    const at = uvOf(...TRIGGER_BOX)
+    forwardPointer(root, at.u, at.v, 'move')
+    clearPointerState(root)
+    const e = canvasWheel(40)
+    expect(state.top).toBe(0)
+    expect(e.defaultPrevented).toBe(false)
   })
 })

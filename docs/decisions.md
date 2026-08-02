@@ -1166,3 +1166,62 @@ compose (a variant can flip a channel that a spring then chases).
 (b) *A push-only API* — a subscription that misses its first event
 before React commits reads stale forever; the pull getter is
 self-healing by construction.
+
+## 29. The forwarder is the scroll engine — wheel arbitration at document capture (2026-08-01, lab 010)
+
+**Context.** No lab had ever put a scrolling region inside a Surface; the
+handoff listed scroll containers as the deepest unsolved seam (paint
+records, forwarded wheel, and scroll offset vs the hit test all open).
+**Measured first:** the rasterization half was never broken. A
+`scrollTop` change invalidates the paint record like any descendant
+mutation — instant jump = exactly 1 paint, `behavior:'smooth'` = 1
+paint/frame while gliding, pixels verified (rows 37–39 baked at the
+bottom of an injected scroller). The hit test was never broken either:
+`elementsFromPoint` and `getBoundingClientRect` both read scrolled
+geometry natively. The seam is *input only*: the default scrolling
+action runs exclusively for TRUSTED wheel events, and everything the
+forwarder dispatches is synthetic — a forwarded wheel runs handlers and
+scrolls nothing.
+**Decision.** `forwardWheel` performs the scroll the way the browser
+would have: dispatch the cancelable wheel to the deepest element first
+(a `preventDefault` is a claim — cmdk and friends are honored), then
+walk target→root for the nearest scroll container that can still move
+in the delta's direction and mutate `scrollTop`/`scrollLeft` directly.
+Direct mutation, not `scrollBy`: user scrolling is exempt from CSS
+`scroll-behavior`, so instant is the faithful semantics — and `scroll`
+events fire from the mutation for free (measured; message-scroller's
+autoscroll machinery runs on them). A container at its end with
+`overscroll-behavior: contain|none` stops the chain cold, consuming
+nothing — shadcn's scroller viewport declares `overscroll-contain`, so
+a chat log at its bottom refuses to become a camera zoom with zero
+consumer code.
+**The return value is the camera's verdict.** `true` = the surface
+consumed it (handler claim, scroller moved, or containment boundary);
+`false` = the wheel chained through everything — the ROOM is the next
+scroll container, and the camera zooming is exactly scroll chaining
+reaching the page.
+**Where it listens, and why:** document capture (`trackWheel`,
+reference-counted like `trackFocusModality`). OrbitControls listens on
+the CANVAS — the wheel's real target — so a mesh-level `onWheel` hears
+the wheel *after* the camera has already zoomed; the only seat ahead of
+the target phase is capture above it. From there the hover mirrors
+already know which surface is under the pointer and where its parked
+point is (`hoverRoots`, maintained by updateHover/clearPointerState —
+the WeakMap of mirrors can't be iterated). Consumed → `preventDefault` +
+`stopImmediatePropagation`, so OrbitControls never hears it; scoped to
+`e.target instanceof HTMLCanvasElement`, so page scrolling outside the
+scene is untouched and the synthetic wheel (targeting parked DOM) can't
+re-enter.
+**Verified** (Chrome 150, trusted CDP wheel): wheel over the scroller
+scrolls the parked DOM with the camera frozen; over the non-scrollable
+card body the camera zooms; wheel-down at the contained scroller's end
+moves *nothing* (scroll pinned, camera pinned); over empty canvas the
+camera zooms. 11 happy-dom tests pin the protocol (claim, chain,
+containment, direction, line-mode normalization, arbiter seat).
+**Rejected.** (a) *Mesh-level `onWheel`* — arbitrates after the zoom
+already happened (see above). (b) *`scrollBy` with smooth behavior* —
+wrong spec semantics for user scrolling, and an animated scroll pays a
+paint per frame where one was enough. (c) *Toggling
+`controls.enableZoom` from hover state* — a mode flag racing pointer
+moves, and it breaks wheel-over-panel zoom, which is correct whenever
+nothing under the point can scroll.

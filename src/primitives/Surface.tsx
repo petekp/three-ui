@@ -10,6 +10,7 @@ import {
   nudgeSelect,
   silenceHoverMove,
   trackFocusModality,
+  trackWheel,
 } from './forwardEvents'
 import { FocusGroupContext } from './focusContext'
 import { SurfaceContext, type SurfaceContextValue } from './SurfaceContext'
@@ -292,6 +293,9 @@ export function Surface({
   // The document-level half of the focus-modality mirror (see forwardEvents).
   // Reference-counted — any number of Surfaces share one set of listeners.
   useEffect(() => trackFocusModality(), [])
+  // Wheel arbitration lives at document capture — the only seat ahead of
+  // OrbitControls' canvas listener. See forwardEvents' wheel section.
+  useEffect(() => trackWheel(), [])
 
   // Creating the source is a TEARDOWN. It destroys the live DOM subtree and
   // with it everything that was alive in there: focus, form values, text
