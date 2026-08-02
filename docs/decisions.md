@@ -2204,3 +2204,86 @@ already up. The bug is invisible in testing that drags slowly and appears
 The general shape: **`useRef` is the gesture's state; `useState` is only how
 the gesture asks React to render something.** Anything that must be correct
 within the same event loop turn reads the ref.
+
+## 49. A damper connects two things — say which two (2026-08-02, lab 014)
+
+**Decision.** In `stepHeld`, the grab point's damper resists its velocity
+**relative to the hand**, not relative to the world. The caller supplies
+`handVel`; the physics timestep is fixed at 1/240 and the frame rate decides
+only how many substeps to take; `ks` is chosen for anchoring and `grip` for
+character, because after the first two changes those are finally independent.
+
+**Why.** Pete dragged a card and said it *"changes position erratically and
+doesn't stay anchored to the cursor."* Every test in `lab014Plate.test.ts`
+passed, and all of them measured the same thing: where the card came to
+**rest**. A system with any amount of tracking lag passes a test like that. It
+had a lot.
+
+```
+_pointVel.copy(plate.w).cross(_r).add(plate.v)   // ← relative to WHAT?
+_f.addScaledVector(_pointVel, -g.kd)
+```
+
+A damper is a connection between two bodies and it resists their *relative*
+motion. This one names only one body, so the other end is implicitly bolted to
+the world — the model is a card being dragged through treacle by a hand nailed
+to the floor. Treacle needs a standing force to push through, a spring can only
+make force out of displacement, so the card flies a fixed distance behind the
+cursor: `kd / ks` seconds' worth of travel, which at 41/420 is 98 ms, which at
+an ordinary drag speed is a hundred pixels. Measured in the browser at four
+speeds, the median error was **26 → 47 → 74 → 123 px**, and 74.2 px at 750 px/s
+is 0.099 s — `kd / ks` to three figures.
+
+And with a lever it is also a phantom *torque*, so the card flew at a permanent
+speed-dependent tilt. Both terms scale with speed and both reverse when you
+turn around, which is why none of it read as anything as legible as lag. It
+read as the card having opinions.
+
+The fix is `.sub(handVel)`. At a constant drag speed a hand exerts no net force
+on what it is holding, so there is nothing left to lag by, and what remains is
+the honest `m·a / ks` — the give in your fingers when you accelerate something
+with mass.
+
+**Two things fell out of it that are worth as much as the fix.**
+
+*The velocity estimate's lag is not free.* `handVel` is differentiated from the
+target track and smoothed, and one time constant of smoothing tells the damper
+the hand is slower than it is by `τ·a`. The spring pays that too, so the total
+error is `(m·a / ks)·(1 + kd·τ)`. At `kd = 41, τ = 45 ms` the surcharge was
+**1.8×** the real compliance — the smoothing constant was most of the residual
+error, which is not something you would ever guess by looking at it.
+
+*Gains were secretly coupled to the frame rate.* Stiffening `ks` to 1400 made
+the anchor firm and made the sim **diverge at 60 Hz**, because an explicit
+integrator's stability limit is a statement about `ω·dt`, and the term that
+runs out of headroom first is not the spring — it is the lever turning the grab
+point's damper into an angular damping rate of `grip · kd · |r|² / I`. So the
+physics timestep is now fixed and the frame rate only chooses how many
+substeps to take (two at 120 Hz, eight at the driver's 1/30 clamp, about thirty
+flops each). Gains are chosen for feel and nothing else, which is the only
+reason they *can* be.
+
+That is what made the retune safe, and the retune is the point: **stiffening
+the grip buys anchoring and costs nothing in character**, because the lever
+torque is `grip · (r × F)` and at any sustained acceleration `F ≈ m·a`
+regardless of how stiff the spring is. Position and swing turned out to be
+separate knobs — but only once a phantom drag force stopped setting `F`.
+
+**Measured.** Median tracking error, same four speed buckets, driven at one
+pointer sample per frame across a 480-frame lissajous: **26 / 47 / 74 / 123 px
+→ 4.9 / 5.0 / 5.3 / 7.1 px**, and flat instead of proportional, which is the
+signature that matters. Unchanged when the pointer polls at half the display
+rate. In the unit tests the remaining error is under half a frame of hand
+travel at every speed — i.e. the physics contributes nothing and what is left
+is the input pipeline, which no amount of tuning in this file can reach.
+
+**Cost.** `stepHeld` needs a caller who knows how fast the hand is moving.
+That turned out to be a saving: the same vector is the honest throw velocity,
+so lab 014's screen-space `Swing` estimator — which had to be unit-converted at
+the release site and had a `screen-y-is-down` sign flip in it — was deleted.
+
+**The general shape.** Ask any damper, spring, or constraint in a UI *what is
+the other end attached to*. If the answer is "the world" and the thing at the
+near end is being dragged by a user, the model has a stationary hand in it, and
+you will pay for it in a lag that scales with how fast someone moves — which
+they will report as almost anything except lag.

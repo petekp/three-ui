@@ -58,7 +58,6 @@ import {
   makePlate,
   stepFree,
   stepHeld,
-  Swing,
   type Plate,
 } from './lab014Plate'
 
@@ -173,7 +172,22 @@ interface Flight {
   /** Live pointer, client px. */
   px: number
   py: number
-  swing: Swing
+  /**
+   * The hand's own velocity, world px/s on the plane the card is on.
+   *
+   * `stepHeld`'s damper resists the card's motion RELATIVE to the hand, so
+   * it needs this; a damper that does not know the hand is moving models a
+   * hand nailed to the floor, and bills the difference to the spring as a
+   * permanent speed-proportional lag. It is also the honest throw velocity —
+   * the screen-space estimator it replaced had to be converted by hand and
+   * had a sign flip in it, and neither of those is a thing you can get wrong
+   * twice if the number is already in the right space.
+   */
+  handVel: THREE.Vector3
+  /** Previous frame's target — `handVel` is its derivative. */
+  prevTarget: THREE.Vector3
+  /** False until `prevTarget` means something. */
+  handSeeded: boolean
   /** 0 → 1 as the card leaves the page. */
   lift: number
   /** r3f frames since mount — the page copy hides once the quad has painted. */
@@ -354,6 +368,33 @@ const _corners: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3] = [
 ]
 const _centroid = new THREE.Vector3()
 
+/**
+ * One time constant of smoothing on the hand's velocity. Pointer samples do
+ * not arrive one per frame — they come in bursts, and some frames get none —
+ * so the raw frame-to-frame difference is a staircase whose derivative is
+ * spikes. It is not free: the estimate lags the hand by one time constant,
+ * the damper is told the hand is slower than it is, and the spring pays the
+ * difference — `kd·τ·a / ks` on top of the honest `m·a / ks`. At 41 and 45 ms
+ * that surcharge was nearly TWICE the real compliance, so this number is not
+ * a smoothing preference, it is most of the tracking error. Short enough that
+ * the surcharge is a third of the honest term; long enough that the ripple
+ * from a mouse polling slower than the display cannot reach the card.
+ */
+const HAND_TAU = 0.022
+const _handRaw = new THREE.Vector3()
+
+function trackHand(f: Flight, dt: number, target: THREE.Vector3) {
+  if (!f.handSeeded) {
+    f.handSeeded = true
+    f.prevTarget.copy(target)
+    f.handVel.set(0, 0, 0)
+    return
+  }
+  _handRaw.copy(target).sub(f.prevTarget).divideScalar(Math.max(dt, 1e-4))
+  f.handVel.lerp(_handRaw, 1 - Math.exp(-dt / HAND_TAU))
+  f.prevTarget.copy(target)
+}
+
 function Driver({ flight, slotRect, scrollTop, onLanded, cardRef, shadowRef, onPainted }: DriverProps) {
   const size = useThree((s) => s.size)
   const camera = useThree((s) => s.camera)
@@ -387,7 +428,8 @@ function Driver({ flight, slotRect, scrollTop, onLanded, cardRef, shadowRef, onP
       // decisions #4 has always said intersect the ray with the DRAG plane;
       // this is that rule, on the plane that is actually being dragged on.
       screenToPlane(f.px, f.py, vw, vh, camZ, LIFT_Z * e, _target)
-      stepHeld(f.plate, dt, _target, f.hold, FLAT)
+      trackHand(f, dt, _target)
+      stepHeld(f.plate, dt, _target, f.hold, FLAT, f.handVel)
     } else if (f.mode === 'float') {
       // Identical machinery, with the hand replaced by a fixed point in the
       // air. The card settles flat and stays there — and because it is still
@@ -396,7 +438,8 @@ function Driver({ flight, slotRect, scrollTop, onLanded, cardRef, shadowRef, onP
       // up, so the anchor moves the same way by the same amount.
       _target.copy(f.anchor)
       _target.y += scrollTop() - f.anchorScroll
-      stepHeld(f.plate, dt, _target, f.hold, FLAT)
+      trackHand(f, dt, _target)
+      stepHeld(f.plate, dt, _target, f.hold, FLAT, f.handVel)
     } else {
       const r = slotRect(f.id)
       if (r) _target.set(r.left + r.width / 2 - vw / 2, vh / 2 - (r.top + r.height / 2), 0)
@@ -664,7 +707,6 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
   const flight = useRef<Flight | null>(null)
   const slots = useRef(new Map<string, HTMLLIElement>())
   const boardEl = useRef<HTMLDivElement>(null)
-  const lastMove = useRef(0)
 
   const scroller = useRef<HTMLDivElement>(null)
 
@@ -747,9 +789,6 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
         window.innerHeight / 2 - (el.top + el.height / 2),
         0,
       )
-      const swing = new Swing()
-      swing.reset(e.clientX, e.clientY)
-
       flight.current = {
         id,
         w: el.width,
@@ -769,12 +808,13 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
         floated: false,
         px: e.clientX,
         py: e.clientY,
-        swing,
+        handVel: new THREE.Vector3(),
+        prevTarget: new THREE.Vector3(),
+        handSeeded: false,
         lift: 0,
         frames: 0,
         done: false,
       }
-      lastMove.current = performance.now()
       setPainted(false)
       setFlyingId(id)
     },
@@ -790,11 +830,12 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
     f.done = false
     f.px = cx
     f.py = cy
-    f.swing.reset(cx, cy)
+    // The target jumps from the float anchor to wherever the ray now lands;
+    // differentiating across that would read as a flick nobody performed.
+    f.handSeeded = false
     f.downAt = performance.now()
     f.downX = cx
     f.downY = cy
-    lastMove.current = performance.now()
   }, [])
 
   // Registered once and always, NOT gated on `flyingId`. An effect keyed on
@@ -808,12 +849,8 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
     const onMove = (e: PointerEvent) => {
       const f = flight.current
       if (!f) return
-      const now = performance.now()
-      const dt = (now - lastMove.current) / 1000
-      lastMove.current = now
       f.px = e.clientX
       f.py = e.clientY
-      f.swing.push(e.clientX, e.clientY, dt)
       if (f.mode !== 'held') return
 
       const t = dropTarget(e.clientX, e.clientY, f.id)
@@ -841,16 +878,15 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
         // at the moment of release.
         f.anchor.copy(f.hold).applyQuaternion(f.plate.q).add(f.plate.p)
         f.anchorScroll = scrollTop()
-        f.swing.reset(f.px, f.py)
         return
       }
 
       f.mode = 'home'
-      // Hand the swing over as real velocity. Screen y is down, world y is
-      // up — the sign is the difference between a card that follows your
-      // throw and one that jumps backwards out of your hand.
-      f.plate.v.x += f.swing.v.x
-      f.plate.v.y -= f.swing.v.y
+      // Hand the swing over as real velocity. It is already world px/s on
+      // the plane the card was flying at, because that is what the damper
+      // needed it to be — so there is no conversion to get wrong and no
+      // screen-y-is-down sign to flip.
+      f.plate.v.add(f.handVel)
     }
 
     // Escape always puts it back. A floating card is a modeless state and

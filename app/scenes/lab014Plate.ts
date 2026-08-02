@@ -85,7 +85,48 @@ export interface Grip {
   cUp: number
 }
 
-export const HAND: Grip = { ks: 420, kd: 41, grip: 0.3, wUp: 121, cUp: 22 }
+// `ks` is the COMPLIANCE OF THE GRIP and nothing else. Once the damper is
+// connected to the hand the only steady-state displacement left is the
+// honest one — `m·a / ks`, the give in your fingers when you accelerate
+// something with mass — so this number alone decides how firmly the card is
+// anchored. It does NOT decide how much the card swings: the lever torque is
+// `grip · (r × F)` and at any sustained acceleration `F ≈ m·a` regardless of
+// how stiff the spring is. Stiffening it therefore buys anchoring and costs
+// nothing in character, which is exactly the trade this lab wanted and could
+// not have while a phantom drag force was setting `F`.
+//
+// ω₀ = √1400 = 37 rad/s, and semi-implicit Euler is stable while ω₀·dt < 2 —
+// the driver clamps dt at 1/30, so the worst case is 1.25. `kd` is 2√ks: the
+// grip is critically damped, because a hand does not ring.
+export const HAND: Grip = { ks: 1400, kd: 75, grip: 0.3, wUp: 121, cUp: 22 }
+
+const ZERO = new THREE.Vector3()
+
+/**
+ * The physics timestep is NOT the frame timestep.
+ *
+ * An explicit integrator's stability limit is a statement about `ω·dt`, so
+ * leaving `dt` up to the display couples every gain in this file to whatever
+ * hardware happens to be running it: the same numbers that are serene at
+ * 120 Hz can walk themselves apart at 60, and the driver clamps a hitch at
+ * 1/30, which is worse still. Stiffening the grip to `ks = 1400` is what made
+ * that concrete — it diverged at 60 Hz on the first try, because the lever
+ * turns the grab point's damper into an angular damping rate of
+ * `grip · kd · |r|² / I`, and THAT is the term that runs out of headroom
+ * first, several times before the spring does.
+ *
+ * So the loop below fixes the timestep and lets the frame rate decide only
+ * how many of them to take. Gains are now chosen for feel and nothing else,
+ * which is the only reason they can be. Two substeps at 120 Hz, eight at the
+ * clamp; the body of one is about thirty flops.
+ */
+const MAX_H = 1 / 240
+
+function substep(dt: number, once: (h: number) => void) {
+  const n = Math.max(1, Math.ceil(dt / MAX_H))
+  const h = dt / n
+  for (let i = 0; i < n; i++) once(h)
+}
 
 const _r = new THREE.Vector3()
 const _f = new THREE.Vector3()
@@ -104,6 +145,9 @@ const _qi = new THREE.Quaternion()
  *
  * `faceTo` is the orientation the fingers want — normally identity (flat to
  * the screen) but a caller may hand it the pointer's own tilt.
+ *
+ * `handVel` is how fast the hand itself is moving, and leaving it out is how
+ * this file spent its first day being wrong — see the damper below.
  */
 export function stepHeld(
   plate: Plate,
@@ -111,7 +155,20 @@ export function stepHeld(
   target: THREE.Vector3,
   hold: THREE.Vector3,
   faceTo: THREE.Quaternion,
+  handVel: THREE.Vector3 = ZERO,
   g: Grip = HAND,
+) {
+  substep(dt, (h) => heldOnce(plate, h, target, hold, faceTo, handVel, g))
+}
+
+function heldOnce(
+  plate: Plate,
+  dt: number,
+  target: THREE.Vector3,
+  hold: THREE.Vector3,
+  faceTo: THREE.Quaternion,
+  handVel: THREE.Vector3,
+  g: Grip,
 ) {
   // Where the grab point actually IS right now: centre + the held corner
   // rotated into the world.
@@ -120,7 +177,20 @@ export function stepHeld(
   // than the centre is what makes a swinging card lose its swing; damping
   // only the centre leaves a card that oscillates about a hand that is
   // standing still.
-  _pointVel.copy(plate.w).cross(_r).add(plate.v)
+  //
+  // …RELATIVE TO THE HAND. A damper is a connection between two things and
+  // it resists their relative motion; subtracting `handVel` is what says the
+  // other end of this one is attached to the hand rather than bolted to the
+  // floor. Without it the model is a card being dragged through treacle,
+  // and the consequence is not subtle: the treacle needs a standing force to
+  // overcome, the spring can only make force out of displacement, so the
+  // card flies a fixed distance BEHIND the cursor — `kd / ks` seconds' worth
+  // of travel, which at 41/420 is 98 ms, which at a normal drag speed is a
+  // hundred pixels. It also flies at a permanent tilt, because with a lever
+  // that phantom force is a phantom torque. Both scale with speed and both
+  // reverse when you turn around, which is why it read as the card wandering
+  // rather than as anything as legible as lag.
+  _pointVel.copy(plate.w).cross(_r).add(plate.v).sub(handVel)
 
   _f.copy(target).sub(plate.p).sub(_r).multiplyScalar(g.ks)
   _f.addScaledVector(_pointVel, -g.kd)
@@ -175,6 +245,19 @@ export function stepFree(
   kd = 33,
   wUp = 196,
   cUp = 28,
+) {
+  substep(dt, (h) => freeOnce(plate, h, target, faceTo, ks, kd, wUp, cUp))
+}
+
+function freeOnce(
+  plate: Plate,
+  dt: number,
+  target: THREE.Vector3,
+  faceTo: THREE.Quaternion,
+  ks: number,
+  kd: number,
+  wUp: number,
+  cUp: number,
 ) {
   _f.copy(target).sub(plate.p).multiplyScalar(ks).addScaledVector(plate.v, -kd)
 
@@ -256,29 +339,4 @@ export function corners(
     out[i].set(sx[i], sy[i], 0).applyQuaternion(plate.q).add(plate.p)
   }
   return out
-}
-
-/** Impulse-style velocity estimate from a pointer track, px/s. */
-export class Swing {
-  private lastX = 0
-  private lastY = 0
-  private seeded = false
-  readonly v = new THREE.Vector3()
-
-  reset(x: number, y: number) {
-    this.lastX = x
-    this.lastY = y
-    this.seeded = true
-    this.v.set(0, 0, 0)
-  }
-
-  /** Exponentially smoothed so one jittery sample can't launch a card. */
-  push(x: number, y: number, dt: number, tau = 0.06) {
-    if (!this.seeded || dt <= 0) return this.reset(x, y)
-    const k = 1 - Math.exp(-dt / tau)
-    this.v.x += ((x - this.lastX) / dt - this.v.x) * k
-    this.v.y += ((y - this.lastY) / dt - this.v.y) * k
-    this.lastX = x
-    this.lastY = y
-  }
 }

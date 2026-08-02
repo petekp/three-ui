@@ -3034,3 +3034,65 @@ is fighting it" are what a *velocity* error feels like from the outside, and my
 first three hypotheses were all about things that oscillate. A constant 8%
 overspeed feels exactly the same from the driver's seat, and the only way to
 tell them apart was to stop watching the motion and project a single point.
+
+Then Pete dragged a card again: *"it still changes position erratically and
+doesn't stay anchored to the cursor."* Two reports, two different bugs, and
+the first fix was real — it just wasn't the whole thing.
+
+This one is embarrassing in a useful way. Every test in `lab014Plate.test.ts`
+passed, and every one of them measured where the card came to **rest**. A
+system with any amount of tracking lag passes a test like that. So the first
+thing I wrote was a test that drags a hand in a straight line and asks where
+the grab point is *while it is moving*, and it reported 44.6 px of lag at
+500 px/s, 89.3 at 1000, 178 at 2000 — a tenth of a second of travel, whatever
+that happened to be worth.
+
+The line:
+
+```js
+_pointVel.copy(plate.w).cross(_r).add(plate.v)   // ← relative to WHAT?
+_f.addScaledVector(_pointVel, -g.kd)
+```
+
+A damper connects two bodies and resists their relative motion. That one names
+one body, so the other end is bolted to the world: a card dragged through
+treacle by a hand nailed to the floor. Treacle needs a standing force to push
+through, a spring can only make force out of displacement, so the card sits
+`kd / ks` seconds of travel behind the cursor — 98 ms of it, which at a normal
+drag speed is a hundred pixels. With a lever it is a phantom torque too, so the
+card also flew at a permanent speed-dependent tilt. Both scale with speed and
+both reverse when you turn around, which is why it never read as lag. It read
+as the card having opinions. The fix is `.sub(handVel)`.
+
+Two things fell out that I value more than the fix. First: **the smoothing
+constant on my own velocity estimate was most of the remaining error.** One
+time constant of smoothing tells the damper the hand is slower than it is by
+`τ·a`, and the spring pays for that too — total error `(m·a/ks)·(1 + kd·τ)`,
+which at 41 and 45 ms made the surcharge nearly twice the honest compliance.
+Second: **the gains were secretly coupled to the frame rate.** Stiffening the
+grip made the anchor firm and made the whole thing diverge at 60 Hz, because
+the term that runs out of integrator headroom first isn't the spring — it's the
+lever turning the grab point's damper into an angular damping rate of
+`grip·kd·|r|²/I`. The physics timestep is fixed now and the frame rate only
+picks how many substeps to take, which is what made the retune safe.
+
+And the retune is the actual lesson. Stiffening the grip buys anchoring and
+costs *nothing* in character, because the lever torque is `grip · (r × F)` and
+at any sustained acceleration `F ≈ m·a` no matter how stiff the spring is.
+Position and swing are separate knobs — but only once a phantom drag force
+stops setting `F`. Before, they were the same knob, which is why the lab felt
+like it had to choose between tracking the cursor and having weight.
+
+Measured in the browser, one pointer sample per frame across a 480-frame
+lissajous, median error in four speed buckets: **26 / 47 / 74 / 123 px →
+4.9 / 5.0 / 5.3 / 7.1 px** — and flat instead of proportional, which is the
+signature that matters. Unchanged with the pointer polling at half the display
+rate. The screen-space throw estimator got deleted on the way past: the
+world-space hand velocity the damper needed is the same number, already in the
+right units, without the `screen-y-is-down` sign flip the old one carried.
+
+Both bugs in this lab were the same mistake at different scales. The first
+answered "where is the cursor" on the wrong plane; the second answered "how
+fast is the card moving" relative to the wrong body. Neither is a physics
+error you can see by reading the physics — you have to name the frame out loud
+and ask whether it is the one you meant.
