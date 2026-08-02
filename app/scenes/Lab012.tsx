@@ -18,7 +18,7 @@ import {
   sdfPanelParams,
   type GlassBlob,
   type GlassRipple,
-} from './lab012Glass'
+} from './glassSdf'
 
 // Lab 012 — the glass spike, and then the compositor that replaced it.
 //
@@ -32,7 +32,7 @@ import {
 // scene render per panel. `?glass=sdf` (the default) runs inc 2: no glass
 // geometry at all — one scene render, then one screen-space pass per panel
 // that intersects the eye ray with the panel's plane and evaluates a rounded
-// rect as a distance field there. See lab012Glass.tsx / lab012Sdf.ts. The
+// rect as a distance field there. See glassSdf.tsx / glassSdfShader.ts. The
 // switch exists so the comparison is a console call, not a git checkout.
 //
 // Architecture per MTM glass panel, all through the lab-011 material-slot seam:
@@ -306,7 +306,7 @@ function MtmGlassPanel({
 // ---- the liquid part ----------------------------------------------------
 //
 // Three circles sharing the sign-in card's plane, smooth-min-unioned into
-// its distance field (lab012Sdf.ts). They orbit on an ellipse whose radii
+// its distance field (glassSdfShader.ts). They orbit on an ellipse whose radii
 // BREATHE, so each bead cycles through the whole interesting range: tucked
 // inside the card (the union is just the card, with a faint swell where the
 // bead pushes the rim out), grazing it (a neck forms and stretches), and

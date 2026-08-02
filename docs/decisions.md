@@ -1920,3 +1920,99 @@ would buy reflection and interference, but needs a per-panel ping-pong
 target and a fixed timestep. The analytic impulse is stateless, exact at
 any frame rate, and resumable — worth revisiting only if panels need to
 interact through the same sheet.
+
+## 41. A layout is one distance field — the union of rounded rects (2026-08-02, lab 013)
+
+**Decision.** `fieldAt` unions an optional base rect with up to
+`MAX_RECTS` (12) rounded-rect satellites and `MAX_BLOBS` circles, all
+through the same `smin`. A panel is no longer *a* shape; it is a set of
+shapes that happen to share a plane, a pass and a texture. Lab 013's rail
+is one panel holding a header strip and five thread rows; its transcript
+is one panel holding N message bubbles.
+
+**Why it matters more than it sounds.** The old model priced a UI at one
+screen-space pass per piece of glass. This one prices it per *plane*.
+Five thread rows, six bubbles and a composer cost four passes total, and
+adding a seventh message costs nothing — the field just has one more term.
+That is the difference between a demo with a fixed cast and a layout.
+
+**The split is a shape animation, not a layout animation.** The sign-in
+card's field is two rects that start *coincident* — `smin(d, d, k)` is
+`d - k/4`, the same shape dilated by a quarter of the blend radius, which
+at k = 0.035 is a pixel and a half nobody will ever see. So frame zero is
+a card, and nothing in the shader knows it is about to become an app. The
+two rects then walk to the rail's and the pane's ends on separate curves:
+height first (`raw / 0.62`), then the tear sideways (`(raw - 0.16) /
+0.84`). Doing both at once reads as a rectangle being scaled. Staggering
+them reads as something being pulled apart, because that is the order in
+which real things fail.
+
+**The blend radius is the animation.** `smooth` runs
+`0.035 + 0.42·sin(π·u)^0.8` across the split: the union bulges into a
+thick neck as the two halves separate, then collapses back to a hairline.
+Without it the panes cross-dissolve; with it there is a *ligament*, and
+the eye reads a break. The mid-split value (0.45 world units) is an order
+of magnitude past anything lab 012 used for merging beads — a neck is not
+a fillet.
+
+**Snap detection falls out of the same geometry as the merge test in
+#40.** The gap between the two rects' facing edges is compared against
+the live blend radius each frame; the frame it stops being bridged, the
+ligament has snapped, and two ripples go out from where it was — one into
+each half. Nothing authored the moment; it is read off the field.
+
+## 42. One texture, many pieces of glass — `uInkRect` (2026-08-02, lab 013)
+
+**Decision.** The DOM's rectangle and the field's shape are now separate
+uniforms. `uInkRect` (centre + half extents, panel-local) says where the
+texture lands; the field says where glass exists; the composite weights
+the ink by the field's coverage — `mix(base, glass, cov)` with the ink
+already inside `glass`. Where the field is empty the ink simply never
+draws.
+
+**What this buys.** A rail's DOM is one 240×800 element spanning the
+whole column, with rows absolutely positioned inside it. The glass exists
+only where the rows are. The gaps between rows show the world, not the
+element's background, and no clipping, no masking and no second texture
+were involved — the coverage term was already being computed for the
+edge antialias. (Masking would have been the obvious move and is
+forbidden anyway: a `mask-image` anywhere in a drawn subtree blacks out
+the whole capture. See the hard rules.)
+
+**The corollary is a house rule.** Because one texture now spans many
+pieces of glass, the DOM boxes and the SDF rects have to agree to the
+pixel or the text slides off its own bubble. They are therefore authored
+once — `app/scenes/lab013Layout.ts`, in CSS px — and each consumer
+converts at its own edge: `w()` divides down to world units for the
+shader, `css()` flips +y and emits `left/top/width/height` for the DOM.
+Two conventions, one source, one place where the flip happens.
+
+## 43. Compositing order is view-space depth, not distance to the camera (2026-08-02, lab 013)
+
+**Decision.** The far→near sort key is the panel origin's **z in view
+space**, not `camera.position.distanceTo(worldPos)`.
+
+**The bug this was.** Distance and depth agree only for panels near the
+view axis, which is exactly where lab 012's two panels sat — so the wrong
+key shipped and passed. Lab 013 put a rail one sixth of the way across a
+1468-px-wide app. Off-axis by 3.5 world units at a viewing distance of
+7.4, the rail is *farther by Pythagoras* (8.09 vs 7.40) while being no
+deeper at all, so it composited first — and the shell, genuinely behind
+it, then refracted the rail's already-composited ink through eight
+dispersion taps. Every glyph in the thread list came out smeared and
+ghosted.
+
+**Why it cost so much to find.** There was no error, the paint counters
+were clean, `scale` was 1 on every panel, and the parking canvas dumped
+via `toDataURL()` was pixel-perfect — the rail's DOM had rasterized
+exactly right. Three hypotheses were burned on the ink path (LOD tier,
+UV mapping, implicit-derivative mip selection in divergent control flow)
+because the artifact *looked* like a sampling problem. It was a sorting
+problem two files away. The tell, in hindsight, was that the smear was
+directional and repeated: eight ghosts is the dispersion tap count, and
+nothing in the ink path has eight of anything.
+
+**The general shape of the lesson.** Painter's algorithm orders by depth.
+Distance-to-eye is a different quantity that happens to be monotonic in
+depth for a narrow cone around the view axis. Any sort that used the
+easy one and was validated on a centred scene is carrying this bug.

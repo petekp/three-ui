@@ -2,9 +2,10 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { SurfaceApp, useSurfaceTexture } from 'three-ui'
-import { BLIT_FRAGMENT, GLASS_FRAGMENT, QUAD_VERTEX } from './lab012Sdf'
+import { BLIT_FRAGMENT, GLASS_FRAGMENT, QUAD_VERTEX } from './glassSdfShader'
 
-// Lab 012 inc 2 — the SDF glass path.
+// The SDF glass path — born in lab 012 inc 2, now the shared kit every glass
+// lab builds on (012's beads, 013's morphing chat shell).
 //
 // `SdfGlassPanel` is a Surface that renders NOTHING of its own: the mesh
 // carries `material="none"` and an invisible material, so it exists only to
@@ -67,6 +68,25 @@ export interface GlassBlob {
 }
 
 /**
+ * A rounded rect sharing the panel's plane, unioned into its field.
+ *
+ * This is what makes a panel a LAYOUT rather than a card: two of these that
+ * start coincident and then move apart *melt* into two panes, because the
+ * union of two distances necks and snaps where the union of two meshes would
+ * only have stopped overlapping. Same mutable-in-place contract as GlassBlob.
+ */
+export interface GlassRect {
+  /** Centre in panel-local world units — (0,0) is the panel's centre. */
+  x: number
+  y: number
+  /** Half extents. */
+  hw: number
+  hh: number
+  /** Corner radius. */
+  r: number
+}
+
+/**
  * A wave packet expanding across the panel's surface from where a satellite
  * made or broke contact. `t0` is a clock timestamp; the compositor turns it
  * into an age, so the shader needs no time uniform of its own.
@@ -79,10 +99,16 @@ export interface GlassRipple {
   amp: number
 }
 
-/** How many satellites one panel may carry — must match the shader define. */
+/** How many circular satellites one panel may carry — matches the define. */
 export const MAX_BLOBS = 6
-/** Concurrent ripples per panel — must match the shader define. */
-export const MAX_RIPPLES = 4
+/** How many rounded-rect satellites — matches the define. */
+export const MAX_RECTS = 12
+/**
+ * Concurrent ripples per panel — must match the shader define. Six because a
+ * staggered emergence (lab 013: five thread rows welling out of the rail one
+ * after another) overlaps that many wave trains before the first has died.
+ */
+export const MAX_RIPPLES = 6
 
 /**
  * The panel's rounded-rect distance, in JS. The same function the shader
@@ -153,9 +179,15 @@ interface SdfPanel {
   label: string
   group: React.RefObject<THREE.Group | null>
   half: THREE.Vector2
+  /** Where the DOM lands, in panel-local units: [cx, cy, hw, hh]. */
+  inkRect: THREE.Vector4
+  hasBase: boolean
   params: GlassParams
   blobs: GlassBlob[]
+  rects: GlassRect[]
   ripples: GlassRipple[]
+  /** View-space z, refreshed each frame; the compositing order key. */
+  depth: number
 }
 
 const sdfPanels = new Map<string, SdfPanel>()
@@ -164,6 +196,10 @@ const sdfPanels = new Map<string, SdfPanel>()
 // record its own parent has not created yet. Keyed by label, joined at
 // composite time.
 const sdfInk = new Map<string, THREE.Texture>()
+// Dev handle: `__glassInk.get('lab013-rail').image` is the parking canvas the
+// compositor is sampling, which is the only way to tell a UV bug apart from a
+// rasterization bug from the outside.
+;(window as unknown as { __glassInk: typeof sdfInk }).__glassInk = sdfInk
 
 export function sdfPanelParams(label: string) {
   return sdfPanels.get(label)?.params ?? null
@@ -197,18 +233,33 @@ function InkRegistrar({ label }: { label: string }) {
 
 export interface SdfGlassPanelProps {
   label: string
-  /** CSS px; divided by `px` for world units. */
+  /**
+   * CSS px; divided by `px` for world units. This is the DOM's size and the
+   * raycast quad's size — and, unless `hasBase` is false, the field's base
+   * rounded rect too.
+   */
   width: number
   height: number
   px: number
   params?: Partial<GlassParams>
   /**
+   * false = the base rect is NOT in the distance field; the panel's shape is
+   * whatever its satellites are. The rect still frames the DOM and still
+   * catches rays, so a panel can be a column of separate glass bubbles that
+   * share one texture and one pointer target.
+   */
+  hasBase?: boolean
+  /**
    * Coplanar circles merged into this panel's glass. Pass a STABLE array and
    * mutate its members per frame — see `BlobDrift` in Lab012.
    */
   blobs?: GlassBlob[]
-  /** Contact ripples, same stable-array-mutated-in-place contract. */
+  /** Coplanar rounded rects, same stable-array-mutated-in-place contract. */
+  rects?: GlassRect[]
+  /** Contact ripples, same contract. */
   ripples?: GlassRipple[]
+  /** Passed through to the Surface — 'content' gates rays on painted pixels. */
+  hitTest?: 'plane' | 'content'
   content: React.ReactNode
   position: [number, number, number]
   rotation?: [number, number, number]
@@ -220,8 +271,11 @@ export function SdfGlassPanel({
   height,
   px,
   params,
+  hasBase = true,
   blobs,
+  rects,
   ripples,
+  hitTest,
   content,
   position,
   rotation,
@@ -241,18 +295,29 @@ export function SdfGlassPanel({
       label,
       group,
       half: new THREE.Vector2(width / px / 2, height / px / 2),
+      inkRect: new THREE.Vector4(0, 0, width / px / 2, height / px / 2),
+      hasBase,
       params: live,
       blobs: blobs ?? [],
+      rects: rects ?? [],
       ripples: ripples ?? [],
+      depth: 0,
     })
     return () => {
       sdfPanels.delete(label)
     }
-  }, [label, width, height, px, live, blobs, ripples])
+  }, [label, width, height, px, hasBase, live, blobs, rects, ripples])
 
   return (
     <group ref={group} position={position} rotation={rotation}>
-      <SurfaceApp label={label} width={width} height={height} material="none" content={content}>
+      <SurfaceApp
+        label={label}
+        width={width}
+        height={height}
+        material="none"
+        hitTest={hitTest}
+        content={content}
+      >
         <planeGeometry args={[width / px, height / px]} />
         <meshBasicMaterial visible={false} />
         <InkRegistrar label={label} />
@@ -324,7 +389,7 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
       new THREE.ShaderMaterial({
         vertexShader: QUAD_VERTEX,
         fragmentShader: GLASS_FRAGMENT,
-        defines: { SAMPLES: 8, MAX_BLOBS, MAX_RIPPLES },
+        defines: { SAMPLES: 8, MAX_BLOBS, MAX_RECTS, MAX_RIPPLES },
         depthTest: false,
         depthWrite: false,
         uniforms: {
@@ -333,6 +398,7 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
           tInk: { value: null },
           uHasInk: { value: false },
           uInkOpacity: { value: 1 },
+          uInkRect: { value: new THREE.Vector4(0, 0, 1, 1) },
           uCamPos: { value: new THREE.Vector3() },
           uInvProjView: { value: new THREE.Matrix4() },
           uProjView: { value: new THREE.Matrix4() },
@@ -343,11 +409,15 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
           uPanelRot: { value: new THREE.Matrix3() },
           uHalf: { value: new THREE.Vector2() },
           uRadius: { value: 0.09 },
+          uHasBase: { value: true },
           // Allocated full-length once: three uploads a vec3[] as one
           // uniform3fv, so the array must keep its size even when the panel
           // carries fewer blobs — uBlobCount is what bounds the loop.
           uBlobs: { value: Array.from({ length: MAX_BLOBS }, () => new THREE.Vector3()) },
           uBlobCount: { value: 0 },
+          uRects: { value: Array.from({ length: MAX_RECTS }, () => new THREE.Vector4()) },
+          uRectR: { value: new Array(MAX_RECTS).fill(0) as number[] },
+          uRectCount: { value: 0 },
           uSmooth: { value: 0.14 },
           uRipples: { value: Array.from({ length: MAX_RIPPLES }, () => new THREE.Vector4()) },
           uRippleCount: { value: 0 },
@@ -431,11 +501,21 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
     // 2 — far → near. Each pass reads what the previous one wrote, so a
     // panel's refraction contains the glass, the ink and the world behind it
     // by construction — the whole cumulative-hide dance of inc 1 is gone.
-    panels.sort(
-      (a, b) =>
-        camera.position.distanceToSquared(b.group.current!.getWorldPosition(tmpPos)) -
-        camera.position.distanceToSquared(a.group.current!.getWorldPosition(tmpPos)),
-    )
+    //
+    // The key is VIEW-SPACE Z, not distance to the camera. Distance was wrong
+    // and lab 012 never noticed, because its two panels sat on the view axis
+    // where the two orders agree. Put a panel out to the side — lab 013's
+    // rail, one sixth of the way across a wide app — and it is FARTHER by
+    // Pythagoras while being no deeper at all, so it composited first and the
+    // panel actually behind it then refracted its ink: every glyph in the
+    // rail came out smeared through eight dispersion taps, with no error and
+    // clean paint counters. Depth order is depth, and depth is -z in view
+    // space (negative ahead of the camera, so "more negative" is farther).
+    for (const p of panels) {
+      p.group.current!.getWorldPosition(tmpPos).applyMatrix4(camera.matrixWorldInverse)
+      p.depth = tmpPos.z
+    }
+    panels.sort((a, b) => a.depth - b.depth)
 
     const u = glass.uniforms
     tmpProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
@@ -458,6 +538,8 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
       u.uPanelInv.value.copy(tmpPanelInv)
       u.uPanelRot.value.copy(tmpRot)
       u.uHalf.value.copy(p.half)
+      u.uHasBase.value = p.hasBase
+      u.uInkRect.value.copy(p.inkRect)
       const ink = sdfInk.get(p.label) ?? null
       u.tSrc.value = src.texture
       u.tInk.value = ink
@@ -482,6 +564,20 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
         ;(u.uBlobs.value as THREE.Vector3[])[i].set(blobs[i].x, blobs[i].y, blobs[i].r)
       }
       u.uBlobCount.value = nb
+      const rects = p.rects
+      const nq = Math.min(rects.length, MAX_RECTS)
+      const rectSlots = u.uRects.value as THREE.Vector4[]
+      const radii = u.uRectR.value as number[]
+      for (let i = 0; i < nq; i++) {
+        const r = rects[i]
+        rectSlots[i].set(r.x, r.y, r.hw, r.hh)
+        // A corner radius may never exceed the smaller half extent, or
+        // sdRoundRect stops being a distance and the bezel inverts. Clamping
+        // here rather than in every caller means a rect can be animated from
+        // a wide pane down to a bead without the scene minding the geometry.
+        radii[i] = Math.min(r.r, Math.min(r.hw, r.hh))
+      }
+      u.uRectCount.value = nq
 
       // Ages, not timestamps: the shader gets `now - t0` so it needs no clock
       // of its own, and a ripple that has outlived `rippleLife` simply never

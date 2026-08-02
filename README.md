@@ -2788,3 +2788,89 @@ DOM, which is also why the ink stays crisp: the wave warps the glass and
 the world behind it, and the text sits on top unbent. There is a knob to
 warp the ink too (`rippleInk`), left at 0 — the thesis is legibility.
 
+
+## lab 013 — the card tears into an app
+
+An auth card, a Sign in, and then the card *becomes* the interface: it
+stretches, necks, snaps, and what is left is a 1/6 rail and a 5/6 pane
+with thread rows welling up out of one and message bubbles out of the
+other. It is a chat client, and every rectangle in it is a term in a
+distance field.
+
+The thing that made this possible was not new refraction. It was
+noticing that a screen-space glass pass is priced per *plane*, not per
+piece of glass, the moment the field can hold more than one shape. Teach
+`fieldAt` a rounded-rect satellite array and the rail — a header and five
+threads — becomes one pass. Teach it that the DOM's rectangle is a
+separate uniform from the field's shape (`uInkRect`) and the rail's five
+rows become one 240×800 texture, one element, with the gaps between rows
+showing the world because the ink is weighted by the field's own coverage
+and there is no glass there to carry it. No clipping. No masking — which
+is forbidden in this project anyway, since a `mask-image` anywhere in a
+drawn subtree blacks out the entire capture. The coverage term was
+already sitting there being computed for the edge antialias.
+
+Four planes for the whole app: shell, rail, transcript, composer. Send a
+message and the transcript's field gets one more term. That's the cost.
+
+**The split had to be a shape, not a layout.** Both panes start as the
+same rect, because a smooth-min union of two identical distances is that
+distance dilated by k/4 — a pixel and a half at rest, invisible. So frame
+zero is a card and the shader does not know it is about to become an app.
+Then the two rects walk to their ends on deliberately different curves:
+the height goes first, and the sideways tear starts 16% later and finishes
+last. Run them together and it reads as a rectangle being scaled. Stagger
+them and it reads as something being pulled apart, because that is the
+order in which real things fail.
+
+And the blend radius is animated across the tear —
+`0.035 + 0.42·sin(π·u)^0.8`, up by more than a factor of ten and back
+down. That's the whole trick. Without it the two panes cross-dissolve
+past each other; with it there is a visible ligament between them that
+thins as they separate. The frame the gap stops being bridged, the
+ligament has snapped, and two ripples go out from where it was. Nothing
+authored that moment — it's the same geometric test the beads in lab 012
+used to detect contact, read backwards.
+
+The ripples needed one honest retune. `rippleK` is a scale knob, and the
+capillary front sits at r ≈ (2πt²/K)^(1/3), so a shell two orders of
+magnitude wider than a card needs K ≈ 0.5 where the card wanted 3.0. That
+is a derivation, not a taste adjustment, and it landed first try.
+
+**And then a real bug, which is the best part of the lab.** The rail's
+text came out smeared — stretched horizontally, ghosted, badly aliased —
+while the transcript six inches to the right was crisp. Same shader, same
+frame, same texture path. Three hypotheses went into the ink path and all
+three died: `__threeUI.stats()` said `scale: 1` on every panel, so it was
+not an LOD tier; zeroing chroma, roughness and spread left the smear
+untouched, so it was not refraction; and dumping the rail's parking canvas
+through `toDataURL()` and decoding it locally showed a *pixel-perfect*
+240×800 rasterization with the glyph metrics exactly where they were
+authored. The DOM was innocent, the sampler was innocent, and the pixels
+on screen were still wrong.
+
+The fault was two files away, in the compositor's sort. Panels are
+composited far to near, and the key was `camera.position.distanceTo(...)`.
+Distance and depth agree only near the view axis — which is precisely
+where lab 012's two panels sat, so the wrong key shipped and passed. Put a
+rail 3.5 units off-axis at a viewing distance of 7.4 and it is farther by
+Pythagoras (8.09) than the shell it is in front of (7.40). It composited
+first. The shell then refracted the rail's already-composited ink through
+its eight dispersion taps, which is exactly what eight ghosts of every
+glyph look like. The tell was there the whole time and I read past it:
+nothing in the ink path has eight of anything.
+
+The fix is one line — sort by view-space z — and it is worth writing down
+as a general shape. The painter's algorithm orders by *depth*.
+Distance-to-eye is a different quantity that is merely monotonic in depth
+inside a narrow cone. Any sort that reached for the easy one and was
+validated on a centred scene is carrying this bug and does not know it.
+
+Measured with the app open, a thread selected and messages sent: 120 fps
+vsync-pinned, and across two seconds of live scene the paint counters on
+all five sources moved by exactly zero. Signing in, tearing the card,
+growing six rows, welling up four bubbles and ringing the shell is all
+uniform traffic — the DOM is never told any of it happens. Clicking into
+the composer at raw screen coordinates focuses a real `<input>` that lives
+in a parked canvas and has never been in the visible document, and typing
+into it repaints only that one 1152×92 texture.

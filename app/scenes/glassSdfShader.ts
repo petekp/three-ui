@@ -1,4 +1,5 @@
-// Lab 012 inc 2 — the glass is a distance field, not a mesh.
+// The glass is a distance field, not a mesh. (Lab 012 inc 2 proved it; every
+// glass lab since builds on this file.)
 //
 // The spike (inc 1) gave every panel an extruded rounded-rect wearing drei's
 // MeshTransmissionMaterial, and paid for it with one full scene render PER
@@ -51,11 +52,17 @@ void main() {
  * point). Weighting the taps by a spectral response and normalising means
  * chroma=0 degrades to a plain blur instead of a tinted one.
  *
- * `MAX_BLOBS` is the other define: the panel may carry up to that many
- * coplanar circles, smooth-min-unioned into its field. That union is the
- * reason the shape had to stop being a mesh — two meshes can only overlap,
- * but two distances can merge, and the neck between them is three lines of
- * arithmetic rather than a remesh.
+ * `MAX_BLOBS` and `MAX_RECTS` are the others: the panel may carry up to that
+ * many coplanar satellites — circles and rounded rects — smooth-min-unioned
+ * into its field. That union is the reason the shape had to stop being a mesh
+ * — two meshes can only overlap, but two distances can merge, and the neck
+ * between them is three lines of arithmetic rather than a remesh.
+ *
+ * A panel therefore need not be one card. It can be a LAYOUT: a rail and a
+ * pane that started life as the same rounded rect, a column of message
+ * bubbles that fuse where they crowd. One pass, one bezel, one refraction,
+ * and the boundaries between the parts are decided by a blend radius rather
+ * than by a scene graph.
  */
 export const GLASS_FRAGMENT = /* glsl */ `
 precision highp float;
@@ -67,6 +74,12 @@ uniform sampler2D tDepth;    // scene depth, for occlusion
 uniform sampler2D tInk;      // the panel's live DOM (premultiplied, sRGB tex)
 uniform bool  uHasInk;
 uniform float uInkOpacity;
+// The DOM's own frame in panel-local units: xy = centre, zw = half extents.
+// Decoupled from the field on purpose. The ink is a property of the PANEL,
+// not of whatever the field currently happens to be — so a shell can melt
+// from one rounded rect into two without dragging its texture along, and a
+// column of bubbles can share a single DOM that spans all of them.
+uniform vec4  uInkRect;
 
 // camera
 uniform vec3  uCamPos;
@@ -81,12 +94,21 @@ uniform mat4  uPanelInv;     // world -> panel local
 uniform mat3  uPanelRot;     // panel local -> world (rotation)
 uniform vec2  uHalf;         // half extents, world units
 uniform float uRadius;       // corner radius, world units
+// ...and whether that rect is in the field at all. A panel whose shape is
+// entirely satellites (a chat rail that is only its rows) turns it off; the
+// rect then survives solely as the ink's default frame and the raycast quad.
+uniform bool  uHasBase;
 
-// satellites: circles COPLANAR with the panel (same local z = 0), unioned
-// into its field with a smooth minimum. xy = centre in panel-local units,
-// z = radius. They carry no DOM of their own — they are shape, not surface.
+// satellites: shapes COPLANAR with the panel (same local z = 0), unioned
+// into its field with a smooth minimum. They carry no DOM of their own —
+// they are shape, not surface; the panel's one texture spans all of them.
+//   uBlobs: xy = centre, z = radius (a circle, three ops)
+//   uRects: xy = centre, zw = half extents; uRectR = corner radius
 uniform vec3  uBlobs[MAX_BLOBS];
 uniform int   uBlobCount;
+uniform vec4  uRects[MAX_RECTS];
+uniform float uRectR[MAX_RECTS];
+uniform int   uRectCount;
 uniform float uSmooth;       // blend radius: how far out a neck forms
 
 // ripples: expanding wave packets on the panel's surface, emitted where a
@@ -146,8 +168,19 @@ float smin(float a, float b, float k) {
 // The panel's whole field. A circle needs no new primitive — but it does
 // need its own cheap one, because sdRoundRect with b = vec2(r) would be an
 // exact circle and three times the arithmetic.
+//
+// EMPTY is the identity of smin, not a special case: h clamps to 0 against
+// anything finite, so smin(EMPTY, x, k) is exactly x. A panel with no base
+// rect and no satellites therefore reports a huge positive distance, which
+// the coverage test below rejects on its own. Nothing has to check for it.
+const float EMPTY = 1e5;
+
 float fieldAt(vec2 p) {
-  float d = sdRoundRect(p, uHalf, uRadius);
+  float d = uHasBase ? sdRoundRect(p, uHalf, uRadius) : EMPTY;
+  for (int i = 0; i < MAX_RECTS; i++) {
+    if (i >= uRectCount) break;
+    d = smin(d, sdRoundRect(p - uRects[i].xy, uRects[i].zw, uRectR[i]), uSmooth);
+  }
   for (int i = 0; i < MAX_BLOBS; i++) {
     if (i >= uBlobCount) break;
     d = smin(d, length(p - uBlobs[i].xy) - uBlobs[i].z, uSmooth);
@@ -224,7 +257,7 @@ void main() {
   // one body of glass rather than two overlapping ones. Four extra field
   // evaluations, and only on covered pixels (the early-outs are above).
   vec2 g;
-  if (uBlobCount == 0) {
+  if (uBlobCount == 0 && uRectCount == 0 && uHasBase) {
     g = sdRoundRectGrad(q, uHalf, uRadius);
   } else {
     float eps = max(aa, 0.0015);
@@ -350,12 +383,19 @@ void main() {
   glass += spec + rim + fres * 0.12;
 
   // --- the ink, on top, in the panel's own UV ---------------------------
-  // Clipped to the RECT, not to the coverage: the DOM is a property of the
-  // panel, and a satellite that has merged into it is glass with nothing
+  // Clipped to the INK RECT, not to the coverage: the DOM is a property of
+  // the panel, and a satellite the field has swallowed is glass with nothing
   // written on it. Without the clip the sampler's clamp-to-edge would smear
-  // the card's border row out across every blob.
+  // the texture's border row out across every blob.
+  //
+  // Note the other half of that: where the ink rect extends BEYOND the field
+  // — the gaps between a column of message bubbles — the final mix() is
+  // weighted by cov, which is zero there. So one DOM can span many separate
+  // pieces of glass and simply not be drawn in between them. The layout is
+  // the union; the texture is along for the ride.
   if (uHasInk) {
-    float outside = max(abs(q.x) - uHalf.x, abs(q.y) - uHalf.y);
+    vec2 iq = q - uInkRect.xy;
+    float outside = max(abs(iq.x) - uInkRect.z, abs(iq.y) - uInkRect.w);
     float m = 1.0 - smoothstep(-aa, aa, outside);
     if (m > 0.0) {
       // The ink rides the wave only if asked to. It is laid on unrefracted
@@ -363,7 +403,7 @@ void main() {
       // and stays crisp — so warping its UV trades the thesis for the
       // effect. Default 0; __lab012.set('rippleInk', 0.4) to see the other
       // reading. (No backticks in here — they end the template literal.)
-      vec2 iuv = (q + rippleTilt * uRippleInk) / (2.0 * uHalf) + 0.5;
+      vec2 iuv = (iq + rippleTilt * uRippleInk) / (2.0 * uInkRect.zw) + 0.5;
       vec4 ink = texture2D(tInk, iuv) * (uInkOpacity * m);   // premultiplied
       glass = glass * (1.0 - ink.a) + ink.rgb;
     }

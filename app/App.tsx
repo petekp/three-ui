@@ -12,13 +12,16 @@ import { Lab009 } from './scenes/Lab009'
 import { Lab010 } from './scenes/Lab010'
 import { Lab011 } from './scenes/Lab011'
 import { Lab012 } from './scenes/Lab012'
+import { Lab013 } from './scenes/Lab013'
 import { ProbeScaleApp } from './scenes/ProbeScale'
 import { ProbeFocusApp } from './scenes/ProbeFocus'
 import { ProbeLayoutApp } from './scenes/ProbeLayout'
 import { ProbeStyleApp } from './scenes/ProbeStyle'
 import { detectHtmlInCanvas, FocusScene } from 'three-ui'
 
-type LabId = '001' | '002' | '003' | '004' | '005' | '006' | '008' | '009' | '010' | '011' | '012'
+type LabId =
+  | '001' | '002' | '003' | '004' | '005' | '006'
+  | '008' | '009' | '010' | '011' | '012' | '013'
 
 // ?probe=N mounts the scale probe instead of the labs (see ProbeScale.tsx).
 function probeParams() {
@@ -108,6 +111,8 @@ export default function App() {
               <Lab011 />
             ) : lab === '012' ? (
               <Lab012 />
+            ) : lab === '013' ? (
+              <Lab013 />
             ) : (
               <Lab006 />
             )}
@@ -128,7 +133,9 @@ export default function App() {
         <h1>three-ui / lab {lab}</h1>
         <p className="sub">a component library made of real materials</p>
         <div className="tabs">
-          {(['001', '002', '003', '004', '005', '006', '008', '009', '010', '011', '012'] as const).map((id) => (
+          {(
+            ['001', '002', '003', '004', '005', '006', '008', '009', '010', '011', '012', '013'] as const
+          ).map((id) => (
             <button
               key={id}
               data-active={lab === id}
@@ -171,7 +178,9 @@ export default function App() {
                       ? 'verbatim shadcn/ui painted as matter · click into a field and type · press Deploy'
                       : lab === '010'
                         ? 'wheel over the log to scroll it · wheel over the floor to zoom · ask the agent something'
-                        : 'double-click a panel to approach · double-click the floor to step back · drag a title bar · click into text and type'}
+                        : lab === '013'
+                          ? 'press Sign in — the card tears into a layout · pick a thread · type into the composer and watch the shell ring'
+                          : 'double-click a panel to approach · double-click the floor to step back · drag a title bar · click into text and type'}
       </div>
       {lab === '006' && <Lab006Hud />}
     </div>
