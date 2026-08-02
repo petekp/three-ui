@@ -91,6 +91,19 @@ wants something that isn't exported, export it — don't reach around.
   alongside the pseudo-classes — and `:focus-visible` must exclude
   `[data-pointer-focus]` (the browser's ring verdict never hears synthetic
   events, so Surface mirrors it; decisions.md #24).
+- **Window is a party line — every synthetic event leaves through
+  `forge()`, and page-level pointer listeners guard `if (!e.isTrusted)
+  return`.** The retellings bubble to document BY DESIGN (Radix's grace
+  areas live there — never stop them), so provenance is the listener's job:
+  `isTrusted` is the default guard, exported `isForgedEvent()` the
+  complement for legitimately-untrusted input. Never dispatch a synthetic
+  event outside `forge()` — the brand (`Symbol.for`, HMR-proof) is what
+  makes the predicate complete. The forged vocabulary is pointer/mouse +
+  boundary + burst + wheel + change, NEVER keyboard (that's why keyboard
+  listeners stay unguarded). And a held-button move that began off-surface
+  is a foreign capture — the forwarder stays silent until release
+  (OrbitControls' rotate anchor was measured taking a departure burst as a
+  10px→teleport delta; decisions.md #50/#51).
 
 ## Verifying changes
 

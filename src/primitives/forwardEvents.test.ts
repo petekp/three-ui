@@ -16,11 +16,13 @@ import {
   forwardPointer,
   forwardWheel,
   guardPointerCapture,
+  nudgeSelect,
   silenceHoverMove,
   trackDrag,
   trackFocusModality,
   trackWheel,
 } from './forwardEvents'
+import { isForgedEvent } from '../lib/forged'
 
 const ROOT = { left: 0, top: 0, right: 360, bottom: 460 }
 
@@ -857,9 +859,13 @@ describe('the document-capture drag arbiter', () => {
   }
 
   it('carries the caller-supplied buttons state on forwarded moves', () => {
+    // Held-button moves only forward inside a surface drag (a held button
+    // with no drag of ours live is a foreign capture — see the silence
+    // describe below), so the drag is opened first.
     const seen: number[] = []
     trigger.addEventListener('pointermove', (e) => seen.push((e as PointerEvent).buttons))
     forwardPointer(root, at.u, at.v, 'move')
+    forwardPointer(root, at.u, at.v, 'down')
     forwardPointer(root, at.u, at.v, 'move', 1)
     expect(seen).toEqual([0, 1])
   })
@@ -912,6 +918,139 @@ describe('the document-capture drag arbiter', () => {
     expect(
       log.filter((l) => l.at === 'document' && l.type === 'pointermove' && l.x < 0).length,
     ).toBeGreaterThan(0)
+  })
+})
+
+describe('a foreign drag silences the forwarder', () => {
+  // The measured bug (2026-08-02, decisions #51): OrbitControls attaches a
+  // document-level pointermove listener for exactly the duration of its drag
+  // and does raw clientX/Y delta math on whatever arrives. An orbit drag that
+  // began on empty space kept hovering panels as they swept under the cursor,
+  // so a panel-edge crossing mid-drag fed that listener a departure burst at
+  // (−16, −16), poisoned its rotate anchor, and the next real 10px hand move
+  // threw the camera across the scene. Capture semantics are the fix: a held
+  // button that is not OUR drag is someone else's capture, and a captured
+  // pointer reports to nobody else.
+  const at = uvOf(...TRIGGER_BOX)
+
+  it('forwards nothing for a held-button move that began outside every surface', () => {
+    log.length = 0
+    expect(forwardPointer(root, at.u, at.v, 'move', 1)).toBeNull()
+    expect(log).toHaveLength(0)
+    expect(trigger.hasAttribute('data-hover')).toBe(false)
+  })
+
+  it('so a later exit has no hover to depart from — no leave, no burst', async () => {
+    forwardPointer(root, at.u, at.v, 'move', 1) // crossing ONTO the panel, mid-orbit
+    log.length = 0
+    clearPointerState(root) // crossing OFF it
+    await settle()
+    expect(log).toHaveLength(0)
+  })
+
+  it('our own drag still forwards its held-button moves (#32 unchanged)', () => {
+    forwardPointer(root, at.u, at.v, 'down')
+    log.length = 0
+    expect(forwardPointer(root, at.u, at.v, 'move', 1)).not.toBeNull()
+    expect(typesAt('trigger')).toContain('pointermove')
+    forwardPointer(root, at.u, at.v, 'up')
+  })
+
+  it('hover forwarding resumes once the foreign button comes up', () => {
+    forwardPointer(root, at.u, at.v, 'move', 1)
+    expect(trigger.hasAttribute('data-hover')).toBe(false)
+    forwardPointer(root, at.u, at.v, 'move', 0)
+    expect(trigger.hasAttribute('data-hover')).toBe(true)
+  })
+})
+
+describe('provenance: every retelling is branded, and keeps bubbling', () => {
+  // Two contracts, tested together because they are two halves of one
+  // design (decisions #50):
+  //
+  // BUBBLE: the forgeries MUST reach document-level listeners — Radix's
+  // grace areas and dismissal heuristics live there. Any future
+  // "simplification" that stops their propagation reverts inc 2a's tooltip
+  // bug in every consumer at once. If this test starts failing on the
+  // document assertions, that is what happened.
+  //
+  // BRAND: every synthetic event leaves the library through forge(), which
+  // stamps it. `isTrusted` is the consumer's default guard (the platform's
+  // own, unforgeable); `isForgedEvent` is the complement for consumers whose
+  // legitimate input is untrusted and who must reject specifically our
+  // voice. A dispatch site that bypasses forge() breaks the completeness of
+  // that answer — this test is the tripwire.
+  const at = uvOf(...TRIGGER_BOX)
+  const next = uvOf(...SIBLING_BOX)
+
+  function heardAtDocument() {
+    const heard: { type: string; forged: boolean; trusted: boolean }[] = []
+    const types = ['pointermove', 'pointerdown', 'pointerup', 'click', 'pointerout', 'pointerover', 'wheel', 'change']
+    // `e.isTrusted === true`, not `e.isTrusted`: happy-dom leaves the
+    // property undefined on constructed events where a browser says false.
+    // The consumer guard is falsy-based (`if (!e.isTrusted) return`), so the
+    // strict comparison records exactly what that guard would decide.
+    const on = (e: Event) =>
+      heard.push({ type: e.type, forged: isForgedEvent(e), trusted: e.isTrusted === true })
+    for (const t of types) document.addEventListener(t, on)
+    return {
+      heard,
+      done: () => {
+        for (const t of types) document.removeEventListener(t, on)
+      },
+    }
+  }
+
+  it('the whole forged vocabulary reaches document, branded and untrusted', async () => {
+    const doc = heardAtDocument()
+
+    forwardPointer(root, at.u, at.v, 'move') // hover retelling + boundary
+    forwardPointer(root, next.u, next.v, 'move') // crossing: out/over
+    forwardPointer(root, at.u, at.v, 'down')
+    forwardPointer(root, at.u, at.v, 'up') // up + click
+    forwardWheel(root, at.x, at.y, { deltaX: 0, deltaY: 10 })
+    clearPointerState(root) // departure burst
+    await settle()
+
+    doc.done()
+    const types = new Set(doc.heard.map((h) => h.type))
+    for (const expected of ['pointermove', 'pointerdown', 'pointerup', 'click', 'pointerout', 'pointerover', 'wheel'])
+      expect(types, `${expected} must keep bubbling to document`).toContain(expected)
+    for (const h of doc.heard) {
+      expect(h.forged, `${h.type} left the library unbranded`).toBe(true)
+      expect(h.trusted).toBe(false)
+    }
+  })
+
+  it('a select nudge brands its change event too', () => {
+    const select = document.createElement('select')
+    for (const v of ['a', 'b']) {
+      const o = document.createElement('option')
+      o.value = v
+      select.append(o)
+    }
+    root.append(select)
+    const doc = heardAtDocument()
+    nudgeSelect(select)
+    doc.done()
+    expect(doc.heard).toEqual([{ type: 'change', forged: true, trusted: false }])
+  })
+
+  it('the non-bubbling half stays non-bubbling', () => {
+    // leave/enter say "the pointer left ME" — a claim only the crossed
+    // elements may make. Branding must not have changed their reach.
+    forwardPointer(root, at.u, at.v, 'move')
+    log.length = 0
+    forwardPointer(root, next.u, next.v, 'move')
+    expect(typesAt('document')).not.toContain('pointerleave')
+    expect(typesAt('document')).not.toContain('pointerenter')
+  })
+
+  it('events from elsewhere are not forged', () => {
+    const plain = new PointerEvent('pointermove', { bubbles: true })
+    expect(isForgedEvent(plain)).toBe(false)
+    document.body.dispatchEvent(plain)
+    expect(isForgedEvent(plain)).toBe(false)
   })
 })
 

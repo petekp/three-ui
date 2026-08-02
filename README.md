@@ -3149,3 +3149,61 @@ provenance. A library whose whole premise is retelling events through glass
 had, of course, built a second voice into the page, and a listener I wrote
 assumed there was only ever one. The question every window listener here has
 to ask isn't "where is the pointer" — it's "*whose* pointer is this."
+
+## the hardening pass — provenance becomes architecture
+
+Pete asked whether #50 deserved library-level hardening. The tempting answer
+was to stop the forgeries from reaching window at all — and it is exactly
+wrong, twice. Radix's grace areas are *document* listeners; the bubble is
+load-bearing (inc 2a was the measured proof). And `isTrusted` can't be
+granted to our events by any dispatch path, so the library cannot make its
+voice honest — it can only make it *identifiable*. Hardening here means
+discipline, not rerouting: every synthetic event leaves through one door,
+every page-level listener states which voice it wants, and tests pin both.
+
+The audit found the listeners already correct but *implicitly* — each one
+now carries its stance in a comment. Three stances exist: trusted-only (the
+position feeds: `trackDrag`'s arbiter, `hoverGrace`'s corridor), forged-only
+(`FocusScene`'s document click — structurally safe, because a *trusted*
+click targets the canvas, which lives in no composite root), and
+trusted-by-vocabulary (keyboard and focus — the library forges no keys, and
+`el.focus()` fires trusted focus events even from inside a synthetic click
+handler, which is the kind of fact you want written down before you need it).
+
+Then the audit found a bug nobody had reported. OrbitControls attaches a
+document `pointermove` listener for exactly the duration of its own drag and
+does raw delta math on whatever arrives — no provenance check, and our
+forgeries share its pointer identity. Orbit from empty space, sweep the
+cursor across a panel edge, and the forwarder speaks: hover retelling at
+parked coordinates, departure burst at `(−16, −16)`, each one silently
+poisoning `_rotateStart`. Proven live before fixing: a 10 px hand move threw
+the camera from `[8.65, 1.75, 2.68]` to `[4.09, 7.25, 5.59]`. A user would
+have reported it eventually as "sometimes the camera teleports"; nobody
+would ever have reproduced it on demand.
+
+The fix is not a guard on OrbitControls — #50 already concedes we can't
+patrol other people's listeners. It's capture semantics, which the forwarder
+was enforcing from the inside while violating from the outside. #32 says:
+while a drag is *ours*, other surfaces' departures defer. The mirror rule
+says: while a drag is *not ours*, we are not a participant — a held-button
+move that began off-surface forwards nothing. One line in `forwardPointer`,
+and the entire class of listeners-that-only-exist-during-foreign-drags goes
+quiet. Decision #51, with one open edge noted there rather than fixed blind:
+during *our* drag, moves still route by ray hit rather than retargeting to
+the captured surface.
+
+The door itself is `src/lib/forged.ts`: `forge(target, ev)` brands and
+dispatches, `isForgedEvent(ev)` answers — exported, because the `isTrusted`
+guard has a hole exactly where accessibility middleware and test harnesses
+live, consumers whose input is legitimately untrusted and who need to reject
+specifically *our* voice. The brand is `Symbol.for`, not a module-local
+symbol, because this repo has already measured a dev server holding two
+instances of one module across an HMR reload (the toast that never appeared)
+— a local symbol would quietly split into two unequal brands.
+
+Eight new tripwires pin the contracts: the forged vocabulary
+(pointer/mouse, boundary, burst, wheel, change) reaches document *branded*;
+leave/enter stay non-bubbling; a foreign-drag move forwards nothing and
+hover resumes on release; and the one that will matter in a year — the
+departure burst must keep bubbling to document, so the next "simplification"
+that stops it fails in CI instead of in every consumer's tooltips. 304/304.

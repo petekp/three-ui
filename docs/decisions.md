@@ -2338,3 +2338,91 @@ that assumed there was only ever one voice. And when a trace contains a
 suspiciously specific constant, grep for the constant: the `(−16, −16)`
 entries were dismissed twice as "the pointer leaving the window" while
 `AWAY_MARGIN_PX = 16` sat one grep away the entire time.
+
+**Addendum (2026-08-02, hardening pass).** The rule above is the consumer's
+half. The library's half, added the same day:
+
+- *One door out.* Every synthetic event now leaves through
+  `forge(target, ev)` (`src/lib/forged.ts`), which stamps the event with
+  `Symbol.for('three-ui.forged')` and dispatches it. `Symbol.for`, not a
+  module-local `Symbol()`: the dev server has been measured holding two
+  instances of one module across an HMR reload (the `toast()` incident,
+  2026-08-01), and a registry symbol is the same key in both while a local
+  symbol silently is not. Grep check: `dispatchEvent` appears in `src/` only
+  inside `forge` itself and in tests.
+- *`isForgedEvent(ev)` is exported* — the complement of the `isTrusted`
+  guard, for the consumer whose own input is legitimately untrusted (AT
+  middleware, remote control, a test harness speaking as the hand) and who
+  therefore cannot use `isTrusted` but still needs to reject specifically
+  the library's voice. `isTrusted` remains the default guard; the predicate
+  is for the case the default excludes.
+- *The forged vocabulary, for auditors:* every pointer/mouse event in the
+  move/down/up/click families, the full boundary protocol
+  (over/enter/out/leave), the departure burst's move pairs, `wheel`, and the
+  `change` fired by `nudgeSelect`. **No keyboard, ever** — that is why
+  keyboard listeners stay unguarded (#24), and any future key forgery must
+  first revisit that sentence.
+- *Every page-level listener inside the library now states its stance* in a
+  comment: trusted-only (position feeds: `trackDrag`'s move arbiter,
+  `hoverGrace`'s position feed), forged-only (`FocusScene`'s document click
+  — a trusted click targets the canvas, which is in no composite root, so
+  the trusted voice is structurally silent there), or trusted-by-vocabulary
+  (keyboard and UA-fired focus events — note `el.focus()` fires *trusted*
+  focus events even when called from a synthetic click handler).
+
+The tripwire suite (`forwardEvents.test.ts`, "provenance" describe) pins
+both contracts: the retellings and the burst must keep reaching
+document-level listeners (stopping the bubble would revert inc 2a's tooltip
+bug in every consumer at once), and everything heard there must answer
+`isForgedEvent(e) === true`.
+
+## 51. A held button that is not ours is someone else's capture — and capture means silence (2026-08-02, hardening pass)
+
+**Decision.** `forwardPointer` refuses held-button moves that did not begin
+on a Surface: `if (kind === 'move' && buttons !== 0 && !surfaceDrag) return
+null`. While a foreign drag crosses a panel — OrbitControls orbiting from
+empty space, a text selection sweeping the canvas, a drag that started in
+another window — the forwarder emits *nothing*: no hover, no boundary
+events, no departure burst on exit. Hover resumes on the first buttonless
+move after release.
+
+**Why.** Found by the #50 audit, then proven live in lab 009 before any fix
+was written. OrbitControls (three 0.185.1) attaches `pointermove` /
+`pointerup` listeners to `ownerDocument` for exactly the duration of its own
+drag, and `onPointerMove` does raw `clientX/clientY` delta math on whatever
+arrives — no `isTrusted` check, and our forgeries share its pointer identity
+(`pointerId: 1, pointerType: 'mouse'`). So during an orbit, the one window
+in which OrbitControls is listening promiscuously, a panel edge sweeping
+under the cursor made the forwarder speak: a hover retelling carrying
+parked coordinates `(165, 228)`, then the departure burst at `(−16, −16)`.
+Each one poisoned `_rotateStart`; the next *real* hand move paid the full
+fake delta. Measured: a 10 px hand move threw the camera from
+`[8.65, 1.75, 2.68]` to `[4.09, 7.25, 5.59]` — the "camera teleport" a user
+would report as random, reproducible only while dragging across a panel
+edge, which is to say: reported eventually, diagnosed never.
+
+**Why silence rather than guarding OrbitControls.** The listener at fault is
+in three.js, not in this repo, and #50 already establishes the library
+cannot demand every page listener guard itself. But no guard is needed:
+capture semantics already answer this. A pointer captured by one consumer
+reports to nobody else — that is #32's rule (*our* drag defers other
+surfaces' departures), pointed the other way. The forwarder was violating
+capture from the outside while enforcing it from the inside.
+
+**Cost, accepted.** A real browser does deliver hover to elements swept
+during an *uncaptured* held-button gesture (text selection). We silence
+those too — a text selection sweeping across a panel no longer lights its
+buttons. Invisible in practice, and the alternative (distinguishing
+selection sweeps from captures) requires knowing whether some other script
+called `setPointerCapture`, which is unknowable from here.
+
+**The `up` needs no gate.** A foreign release over a Surface does reach
+`forwardPointer('up')` via r3f, but `Surface.handleUp` is gated on
+`pressedRef` — it refuses a release it never saw the press for. The gate
+covers the one path with no such memory: moves.
+
+**Known open edge, deliberately not fixed blind.** During *our* drag the
+inverse question exists: moves are routed to whatever surface the ray
+currently hits, so dragging A's slider across B's face may forward A's
+moves into B. Real capture would retarget them to A. Plausible, unproven,
+no lab has hit it — noted here so the next drag bug checks it first.

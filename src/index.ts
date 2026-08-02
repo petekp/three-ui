@@ -24,6 +24,14 @@ export { SurfaceLayer, type SurfaceLayerProps } from './primitives/SurfaceLayer'
 // texture it should sample.
 export { useSurfaceTexture } from './primitives/SurfaceContext'
 
+// The surface protocol's retellings bubble to window BY DESIGN (Radix's
+// grace areas live on document), so page-level pointer listeners hear two
+// voices. Default guard: `if (!e.isTrusted) return` — the hand is the only
+// trusted pointer. This predicate is the complement, for consumers whose own
+// input is legitimately untrusted (AT middleware, remote control, harnesses)
+// and who must reject specifically the library's voice (decisions #50).
+export { isForgedEvent } from './lib/forged'
+
 // ── The floating family ──────────────────────────────────────────────────
 // One lever — a portaled component's `container` — and three places to aim
 // it: a panel's own layer for anything anchored to a control, the viewer's
