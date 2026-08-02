@@ -692,8 +692,16 @@ function Driver({
     // The frame's verts are already in PlaneGeometry vertex order (TL, TR,
     // BL, BR) — `shadowQuadFrame` did the reorder from `corners` order so
     // the bow-tie mistake has exactly one place to not happen.
+    //
+    // z = −0.5: strictly BEHIND the card at every altitude, including h = 0.
+    // The card renders first and writes depth, so the depth test deletes the
+    // shadow wherever the card touched a pixel — which is exactly CSS's rule
+    // that box-shadow paints only outside the border box. At +0.5 the plane
+    // sat in FRONT of a resting card, the order put the card's blend on top,
+    // and the shadow's interior (hairline α .04 + fringe) showed through the
+    // border's AA column as a dark seam line.
     for (let i = 0; i < 4; i++) {
-      pos.setXYZ(i, _frame.verts[i].x, _frame.verts[i].y, 0.5)
+      pos.setXYZ(i, _frame.verts[i].x, _frame.verts[i].y, -0.5)
     }
     pos.needsUpdate = true
     sh.geometry.computeBoundingSphere()
@@ -838,8 +846,18 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
           still-visible page copy for exactly one frame (measured: rgba
           4/4/3/76 at the card centre, paints 0). Pete saw it as a black
           flicker at every grab. Gate on the same first-upload signal that
-          hides the page copy: card first, then its shadow. */}
-      <mesh ref={shadowRef} renderOrder={0} frustumCulled={false} visible={painted}>
+          hides the page copy: card first, then its shadow.
+
+          renderOrder 2 — AFTER the card, on purpose. The card writes depth
+          (matter occludes its own shadow), so drawing the shadow second lets
+          the depth test carve the card's silhouette out of it per fragment:
+          CSS's outside-the-border-box clip, enforced by geometry. Drawn
+          first, the shadow's interior survived under the card and leaked
+          through the border's AA column as a 1px dark seam — the "extra
+          border" on the right edge. The corners still show fringe: the
+          radius mask DISCARDS there, no depth is written, and the shadow
+          paints the notch exactly where CSS would. */}
+      <mesh ref={shadowRef} renderOrder={2} frustumCulled={false} visible={painted}>
         <planeGeometry args={[1, 1]} />
         <shaderMaterial
           uniforms={shadowUniforms}

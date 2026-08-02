@@ -3437,3 +3437,24 @@ transitions *from the text color* the first time it appears — a faint
 outline fading out under every freshly lifted card. The colorless dash
 now exists on every slot from birth; lighting it is a pure color
 change. decisions.md #57.
+
+## the shadow was in front of the card
+
+One more seam, and this one had been lying about its address the whole
+time: the shadow quad lived at z = +0.5 — half a pixel in FRONT of a
+resting card. Order made it look right: shadow first, card blended
+over. But the card texture's outer column is the border at α ≈ 0.85
+(the browser AA's honest edge), and a blend lets whatever is behind
+show through the translucent part. Behind was the shadow's interior —
+CSS clips box-shadow out of the border box, we were painting it under
+the whole card — and the leak read as a thin dark line hugging the
+border. Pete saw it as an extra border that vanished at the swap.
+
+The fix is the physical sentence: matter occludes its own shadow. Card
+first, writing depth; shadow after, depth-tested, on a plane strictly
+behind (z = −0.5). Every pixel the card touches now deletes its shadow
+— CSS's outside-the-box clip, enforced by geometry — while the corner
+notches keep their fringe because the radius mask discards there and
+writes no depth. The strip probe agrees with the DOM to within 4
+counts at every column, and the at-rest profile is monotonic again:
+border, then paper. decisions.md #58.

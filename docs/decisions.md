@@ -2803,3 +2803,36 @@ all `rgba(0,0,0,0)`. 328/328, tsc clean. (Instrument note: a computed
 `oklab(L a b)` with no alpha channel is OPAQUE — a regex that grabs
 "the last number before the paren" reads the b-channel and reports a
 phantom near-zero alpha. Parse the slash.)
+
+## 58. Matter occludes its own shadow — by depth, not by blend order (2026-08-02, lab 014)
+
+**Decision.** The flight card renders BEFORE its shadow and writes depth;
+the shadow renders after (`renderOrder 2`), depth-tested, on a plane at
+z = −0.5 — strictly behind the card at every altitude including h = 0.
+The depth test therefore deletes the shadow from every pixel the card
+touches, which is exactly CSS's rule that an outer box-shadow paints
+only OUTSIDE the border box. The corners still show fringe: the radius
+mask DISCARDS those fragments, no depth is written, and the shadow
+paints the notch precisely where CSS would.
+
+**The artifact this kills** (Pete: "an additional border on the right
+edge… visible at rest, instantly disappears at the swap"). The shadow
+drew first at z = +0.5 — in FRONT of a resting card — and the card
+blended over it. The card texture's outermost column is the border at
+α ≈ 0.85 (the browser's own edge AA, rasterized against nothing), so
+wherever the card was translucent the shadow's INTERIOR leaked through:
+hairline layer α .04 + near-edge fringe ≈ .066 of near-black under the
+border's AA column. Composite: border (226) → dip (~210) → paper+fringe
+(240) where the DOM paints border → 240 directly. CSS never has
+darkness under a border's AA because the shadow is clipped out of the
+whole box — blend order cannot express that clip; depth can.
+
+**Measured (2026-08-02, dpr 1).** gl.render-wrapped strip across the
+right edge at rest, columns −4…+8 from the edge: border column
+unpremultiplies to the border color exactly (194/218·255 ≈ 227, no
+shadow term); fringe outside α 6/5/4/3/3/2/1 — the DOM's clipped
+values; bottom strip keeps #56's α 15/9/5. GL-over-paper composite vs
+the post-swap DOM screenshot: ≤ 4 counts at the border column, ≤ 1
+count everywhere else, dip gone. At altitude the carve is true
+occlusion — the card hides the part of its displaced shadow that lies
+behind it along the view ray, which blending never got right either.
