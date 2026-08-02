@@ -3329,3 +3329,49 @@ v3 samples inside a `gl.render` wrapper — the only moment a
 gesture: zero shift frames across the whole cycle, nothing drawn over
 the visible copy, card pixels one frame before the copy hides.
 decisions.md #54.
+
+## the corners were never transparent — the mesh learns to wear the element's chrome
+
+Pete's list was two items long and read like polish: the card's quad
+shows square corners outside the DOM's 14px radius, and the shadow
+changes character when you pick a card up. Both turned out to be the
+same missing idea — the mesh was *authoring* chrome the element already
+owned.
+
+The corner fix everyone reaches for first is alpha: surely the texture
+is transparent outside the arc, just let it through. Measured: the
+parked source's corner texel is `255,255,255,255`. Opaque white. The
+`.ui-root` contract paints the consumer's app background across the
+content root, so outside the card's curve there is real paint, by
+design — the pixels a resting card sits on. "Where does the element
+end" simply isn't in the texture, and no capture-path cleverness can
+recover what was never encoded. Only the computed style knows. So
+`Surface` asks it: `radius="auto"` measures the border-radius and
+enforces it as an analytic SDF mask spliced into the material —
+uniform-driven, no recompile, MSAA-dithered edge, crisp at every LOD
+tier precisely because it is math and not texels. The raycast filters
+through the same SDF, so a click past the arc hits what's actually
+behind it. Custom materials get the one-liner: `SURFACE_RADIUS_GLSL`
+plus a multiply.
+
+The shadow was the same disease in a heavier coat. The DOM card wears a
+two-layer whisper — a 1px hairline at 4% and a `0 6px 18px -12px` at
+30% — and the lab's airborne shadow was a hand-tuned SDF that had never
+met either of them: radius hardcoded to 14, its own blur curve, its own
+color. Two systems disagreeing about what a shadow is, swapping at the
+exact moment the eye is looking. Now the library parses the computed
+`box-shadow` into layers (outer only — inset ones are already in the
+texture; color-first serialization, σ = blur/2, spread clamps like CSS
+clamps) and hands them to the scene through `onChrome`. The lab's
+shader renders those layers with an erf ramp — the analytic form of a
+Gaussian-blurred edge, so σ→0 draws the hairline as a hairline — and
+evolves them with height: blur grows, weight fades, the authored
+negative spread relaxes. Every factor is 1 at h = 0. The liftoff frame
+draws the DOM's own shadow, verified down to the uniform values, and
+the swap has nothing left to pop.
+
+The through-line joins #52–#54 as the fourth face of the same rule: the
+element is visual truth. Pixels at matching density, presentation on
+the pixel grid, readiness from the upload, and now chrome by
+measurement. The mesh doesn't imitate the DOM — it inherits it.
+decisions.md #55.

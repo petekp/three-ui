@@ -49,7 +49,13 @@ import {
 } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import { SurfaceApp, useSurfaceTexture } from 'three-ui'
+import {
+  SURFACE_RADIUS_GLSL,
+  SurfaceApp,
+  useSurfaceChrome,
+  useSurfaceTexture,
+  type SurfaceChrome,
+} from 'three-ui'
 import '../lab014.css'
 import { cameraDistance, carryToPlane, planeScale, screenToPlane } from './lab014Camera'
 import { attachLab014Gestures } from './lab014Gestures'
@@ -263,6 +269,7 @@ const CARD_VERT = /* glsl */ `
 `
 
 const CARD_FRAG = /* glsl */ `
+  ${SURFACE_RADIUS_GLSL}
   uniform sampler2D tMap;
   uniform float uGloss;
   varying vec2 vUv;
@@ -281,6 +288,12 @@ const CARD_FRAG = /* glsl */ `
     float s = max(dot(vN, L), 0.0);
     float band = pow(s, 6.0) - pow(L.z, 6.0);
     c.rgb += uGloss * band;
+    // The element's corners, not the quad's. The texture can't say where the
+    // card ends — the .ui-root background paints its corners opaque white —
+    // so the measured border-radius is enforced analytically (crisp at any
+    // LOD tier), and the gloss band dies with the alpha it rides on.
+    c.a *= threeUiRadiusMask(vUv);
+    if (c.a < 0.004) discard;
     gl_FragColor = c;
     // The texture is SRGBColorSpace, so the sampler above hands this shader
     // LINEAR values — and the renderer presents an sRGB canvas. Built-in
@@ -297,11 +310,20 @@ const CARD_FRAG = /* glsl */ `
 
 function CardMaterial({ gloss = 0.5 }: { gloss?: number }) {
   const texture = useSurfaceTexture()
+  const { chrome, width, height } = useSurfaceChrome()
   const uniforms = useMemo(
-    () => ({ tMap: { value: null as THREE.Texture | null }, uGloss: { value: gloss } }),
+    () => ({
+      tMap: { value: null as THREE.Texture | null },
+      uGloss: { value: gloss },
+      uThreeUiRadii: { value: new THREE.Vector4(0, 0, 0, 0) },
+      uThreeUiSize: { value: new THREE.Vector2(1, 1) },
+    }),
     [gloss],
   )
   uniforms.tMap.value = texture ?? null
+  const radii = chrome?.radii ?? [0, 0, 0, 0]
+  uniforms.uThreeUiRadii.value.set(radii[0], radii[1], radii[2], radii[3])
+  uniforms.uThreeUiSize.value.set(width, height)
   return (
     <shaderMaterial
       key={texture?.uuid ?? 'none'}
@@ -325,21 +347,72 @@ function CardMaterial({ gloss = 0.5 }: { gloss?: number }) {
 // It darkens the PAGE, not the scene — the canvas composites over the
 // document with alpha, so a translucent black quad drawn over the prose is
 // a shadow falling on real text.
+//
+// WHAT it renders is not authored here, though: the layers are the card's own
+// measured `box-shadow`, parsed by the library (`onChrome`). At height zero
+// the shader draws exactly what the browser draws — same offsets, same
+// Gaussian (σ = blur/2, via erf, which IS the analytic form of a Gaussian
+// blurred edge), same colors compositing first-layer-on-top — so the liftoff
+// swap is invisible: the page hides a DOM shadow and this draws its twin.
+// Height then EVOLVES those layers (Driver); it no longer invents a look.
+//
+// No <colorspace_fragment> here, deliberately: this shader samples no
+// texture. Its colors are CSS values, already sRGB — written raw into the
+// sRGB canvas and alpha-blended there, which is the same space the page
+// composites box-shadows in. The encode would double-apply. (The hard rule
+// scopes to materials sampling `useSurfaceTexture`, which hand back linear.)
+
+const SHADOW_MAX_LAYERS = 4
 
 const SHADOW_FRAG = /* glsl */ `
   uniform vec2 uQuadHalf;
   uniform vec2 uCardHalf;
-  uniform float uRadius;
-  uniform float uBlur;
-  uniform float uAlpha;
+  uniform vec4 uRadii;
+  uniform int uCount;
+  uniform vec2 uOff[${SHADOW_MAX_LAYERS}];
+  uniform float uSigma[${SHADOW_MAX_LAYERS}];
+  uniform float uSpread[${SHADOW_MAX_LAYERS}];
+  uniform vec4 uColor[${SHADOW_MAX_LAYERS}];
   varying vec2 vUv;
+
+  // Abramowitz–Stegun 7.1.26 — plenty for an alpha ramp.
+  float erfA(float x) {
+    float s = sign(x);
+    float a = abs(x);
+    float t = 1.0 / (1.0 + 0.3275911 * a);
+    float y = 1.0 -
+      (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t +
+        0.254829592) * t * exp(-a * a);
+    return s * y;
+  }
+
+  float layerCoverage(vec2 p, int i) {
+    vec2 half_ = uCardHalf + uSpread[i];
+    if (half_.x <= 0.0 || half_.y <= 0.0) return 0.0;
+    vec2 q = p - uOff[i];
+    float r = q.x < 0.0 ? (q.y > 0.0 ? uRadii.x : uRadii.w)
+                        : (q.y > 0.0 ? uRadii.y : uRadii.z);
+    r = clamp(r + uSpread[i], 0.0, min(half_.x, half_.y));
+    vec2 d = abs(q) - half_ + vec2(r);
+    float sd = min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - r;
+    // Gaussian-blurred edge: coverage is the CDF of the blur at the signed
+    // distance. σ near zero degenerates to a step — the '0px 1px 0px' hairline
+    // layer renders as the same hairline the DOM paints.
+    return 0.5 - 0.5 * erfA(sd / (uSigma[i] * 1.4142135 + 1e-4));
+  }
+
   void main() {
     vec2 p = (vUv * 2.0 - 1.0) * uQuadHalf;
-    vec2 d = abs(p) - uCardHalf + uRadius;
-    float sd = min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - uRadius;
-    float a = 1.0 - smoothstep(-uBlur, uBlur, sd);
-    if (a <= 0.001) discard;
-    gl_FragColor = vec4(0.055, 0.05, 0.035, a * uAlpha);
+    vec4 acc = vec4(0.0);
+    // CSS paints the FIRST layer on top: composite back-to-front.
+    for (int i = ${SHADOW_MAX_LAYERS - 1}; i >= 0; i--) {
+      if (i >= uCount) continue;
+      float a = layerCoverage(p, i) * uColor[i].a;
+      acc.rgb = uColor[i].rgb * a + acc.rgb * (1.0 - a);
+      acc.a = a + acc.a * (1.0 - a);
+    }
+    if (acc.a <= 0.002) discard;
+    gl_FragColor = vec4(acc.rgb / acc.a, acc.a);
   }
 `
 
@@ -374,6 +447,8 @@ interface DriverProps {
   density: number
   /** Flip the schedule: true as the plate climbs through the approach, false for home. */
   onAltitude: (hi: boolean) => void
+  /** The card's measured chrome — the shadow's h = 0 truth (see the shader). */
+  chromeRef: React.RefObject<SurfaceChrome | null>
 }
 
 const FLAT = new THREE.Quaternion()
@@ -422,6 +497,7 @@ function Driver({
   shadowRef,
   density,
   onAltitude,
+  chromeRef,
 }: DriverProps) {
   const size = useThree((s) => s.size)
   const camera = useThree((s) => s.camera)
@@ -548,9 +624,45 @@ function Driver({
     _centroid.multiplyScalar(0.25)
 
     const height = Math.max(_centroid.z, 0)
-    const blur = 5 + 0.34 * height
-    const alpha = 0.3 / (1 + height / 210)
-    const margin = blur * 2.2
+
+    // The measured layers are the h = 0 truth; height only EVOLVES them.
+    // Every factor below is exactly 1 at h = 0, so the liftoff frame draws
+    // the DOM's own shadow — same offsets, blurs, colors — and the swap has
+    // nothing to pop. Rising: blur grows (the page is farther from the
+    // caster), weight fades (more sky reaches around the card), and any
+    // authored spread — usually negative, the tight contact hug — relaxes
+    // toward zero. A card whose DOM casts nothing casts nothing here either.
+    const chrome = chromeRef.current
+    const layers = chrome?.shadow ?? []
+    const n = Math.min(layers.length, SHADOW_MAX_LAYERS)
+    const mat = sh.material as THREE.ShaderMaterial
+    const uOff = mat.uniforms.uOff.value as THREE.Vector2[]
+    const uSigma = mat.uniforms.uSigma.value as number[]
+    const uSpread = mat.uniforms.uSpread.value as number[]
+    const uColor = mat.uniforms.uColor.value as THREE.Vector4[]
+    const grow = 0.17 * height
+    const fade = 1 / (1 + height / 210)
+    const relax = 1 / (1 + height / 140)
+    let reach = 8
+    for (let i = 0; i < n; i++) {
+      const l = layers[i]
+      const sigma = l.blur / 2 + grow
+      const spread = l.spread * relax
+      uOff[i].set(l.x, -l.y) // CSS y is down, world y is up
+      uSigma[i] = sigma
+      uSpread[i] = spread
+      uColor[i].set(l.color[0], l.color[1], l.color[2], l.color[3] * fade)
+      reach = Math.max(reach, Math.hypot(l.x, l.y) + 3 * sigma + Math.max(spread, 0))
+    }
+    mat.uniforms.uCount.value = n
+    const radii = chrome?.radii
+    ;(mat.uniforms.uRadii.value as THREE.Vector4).set(
+      radii?.[0] ?? 0,
+      radii?.[1] ?? 0,
+      radii?.[2] ?? 0,
+      radii?.[3] ?? 0,
+    )
+    const margin = reach
 
     // Where the centroid's own shadow lands — the point the footprint is
     // expanded away from.
@@ -578,12 +690,8 @@ function Driver({
     pos.needsUpdate = true
     sh.geometry.computeBoundingSphere()
 
-    const mat = sh.material as THREE.ShaderMaterial
     ;(mat.uniforms.uQuadHalf.value as THREE.Vector2).set(f.w / 2 + margin, f.h / 2 + margin)
     ;(mat.uniforms.uCardHalf.value as THREE.Vector2).set(f.w / 2, f.h / 2)
-    mat.uniforms.uRadius.value = 14
-    mat.uniforms.uBlur.value = blur
-    mat.uniforms.uAlpha.value = alpha
   })
 
   return null
@@ -679,12 +787,20 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
     () => ({
       uQuadHalf: { value: new THREE.Vector2(1, 1) },
       uCardHalf: { value: new THREE.Vector2(1, 1) },
-      uRadius: { value: 14 },
-      uBlur: { value: 8 },
-      uAlpha: { value: 0.28 },
+      uRadii: { value: new THREE.Vector4(0, 0, 0, 0) },
+      uCount: { value: 0 },
+      uOff: { value: Array.from({ length: SHADOW_MAX_LAYERS }, () => new THREE.Vector2()) },
+      uSigma: { value: new Array(SHADOW_MAX_LAYERS).fill(0) },
+      uSpread: { value: new Array(SHADOW_MAX_LAYERS).fill(0) },
+      uColor: { value: Array.from({ length: SHADOW_MAX_LAYERS }, () => new THREE.Vector4()) },
     }),
     [],
   )
+
+  // The card's measured chrome — radii and box-shadow layers — captured on
+  // its first paint and re-measured only when a paint changes it. A ref, not
+  // state: the only consumer is the Driver's per-frame uniform write.
+  const chromeRef = useRef<SurfaceChrome | null>(null)
 
   return (
     <>
@@ -697,6 +813,7 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
         shadowRef={shadowRef}
         density={density}
         onAltitude={setAtAltitude}
+        chromeRef={chromeRef}
       />
 
       {/* The shadow may not exist before the card does. On the first r3f
@@ -736,6 +853,9 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
           // flashes through where the card should be. Only the upload path
           // knows the true moment, so only it gets to say.
           onFirstUpload={onPainted}
+          onChrome={(c) => {
+            chromeRef.current = c
+          }}
           content={<CardBody card={card} onChange={onChange} />}
         >
           <planeGeometry args={[f.w, f.h]} />

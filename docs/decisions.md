@@ -2634,3 +2634,88 @@ n = 2, rgba 4/4/3/76, paints 0, page copy visible. After: `shiftFrames
 (hi flips with a normal card pixel under the probe), and landing;
 frame 2 rgba 0/0/0/0 with the copy visible — nothing drawn, nothing to
 see. 310/310, tsc clean.
+
+## 55. The element is visual truth — a Surface measures its chrome, it does not author it (2026-08-02, lab 014)
+
+**Decision.** A Surface inherits the drawn element's *chrome* — corner
+radii and outer box-shadow — by measurement, and the library treats the
+computed style as the single authority:
+
+1. **`radius="auto"` is the default.** The element's computed
+   `border-radius` is measured (per-corner, CSS overlap clamp applied)
+   and enforced as an analytic rounded-rect SDF mask in the fragment
+   shader. Surface's own standard material gets it injected via
+   `onBeforeCompile`; a custom material sampling `useSurfaceTexture`
+   splices `SURFACE_RADIUS_GLSL` and multiplies by
+   `threeUiRadiusMask(vUv)`. Authored `radius={n | [tl,tr,br,bl]}`
+   overrides; `0` disables.
+2. **The raycast agrees with the mask.** In `hitTest="plane"` the same
+   SDF (JS twin, `surfaceRadiusSd`) filters out hits through the
+   rounded-off corners, so a click just outside the arc goes to
+   whatever is behind. `hitTest="content"` needs nothing — the browser
+   hit test it defers to has honored border-radius all along.
+3. **Outer box-shadow is measured into data, not pixels.**
+   `parseBoxShadow` turns the computed string into layers
+   `{x, y, blur, spread, color}` delivered through `onChrome` /
+   `useSurfaceChrome`; the consumer renders them (Lab 014's projected
+   shadow shader) and may evolve them physically. Inset layers are
+   dropped — they painted inside the border box and are already in the
+   texture; rendering them again would double them.
+4. **Re-measurement rides the paint signal.** The measure runs when
+   `paintCount` advances — the compositor already told us the content
+   changed; no observers, no polling, and an idle Surface never
+   measures. Style-equal measurements are dropped before they reach
+   React.
+
+**Why the texture can never say it.** The obvious fix — "the corners
+are transparent, use the alpha" — fails on a measured fact: the parked
+source's corner texel is `255,255,255,255`. Opaque white. The `.ui-root`
+contract puts the consumer's app background on the content root
+(decisions #16), so the region outside the card's rounded corner is
+*painted*, by design, with exactly the color the resting page shows
+behind the card. The information "where does the element end" is not in
+the texture at all — no premultiply fix, no alpha test, no capture-path
+change can recover what was never encoded. Only the computed style
+knows. A side dividend: the mask is analytic, so the corner stays crisp
+at every LOD tier while a texture-borne corner would mush with the same
+minification that softens content.
+
+**Shader mechanics, for the next material.** Uniform-driven
+(`uThreeUiRadii`, `uThreeUiSize`) so radius changes never recompile;
+`defines={{USE_UV:''}}` because the standard material only declares
+`vUv` once a map exists, and the mask must survive the pre-texture
+frame; `alphaToCoverage` on the opaque path so MSAA dithers the edge
+(a bare `discard` aliases); `fwidth`-scaled smoothstep for the AA
+band. Three keys its program cache on the `onBeforeCompile` string, so
+N Surfaces share one program.
+
+**parseBoxShadow's sharp edges (all real Chrome behaviors).** Computed
+serialization is COLOR-FIRST (`rgba(22, 21, 15, 0.3) 0px 6px 18px
+-12px`) with commas inside the color function — layers split at paren
+depth 0 only. Blur's Gaussian σ is `blur / 2` (the spec defines the
+blur radius as 2σ), which is also what makes a `0px 1px 0px` hairline
+layer render as a hairline: σ → 0 degenerates the erf ramp to a step.
+Spread expands the rect *and* the corner radius, clamped at the
+half-size. A color the parser can't read (future syntax) drops that
+layer with a warning rather than guessing.
+
+**The identity-at-rest contract (the lab's half).** Lab 014's shadow
+uniforms are the measured layers evolved by height — blur grows, weight
+fades, authored spread relaxes toward zero — and every factor is
+exactly 1 at h = 0. The liftoff frame therefore draws the DOM's own
+shadow (same offsets, same σ, same colors, first-layer-on-top), and the
+grab/land swaps have nothing to pop. Verified live: at altitude 96 the
+dominant layer read σ 25.32 = 18/2 + 0.17·96, spread −7.12 = −12 ·
+relax, α 0.206 = 0.30 · fade — and the h = 0 limit of each is the
+parsed CSS. The old shader was the opposite architecture: a hand-tuned
+single SDF (`uRadius = 14` hardcoded, blur 5 + 0.34h, alpha 0.3) that
+*invented* a look, and the invention popping against the DOM's
+two-layer whisper at every grab was Pete's bug report verbatim.
+
+**Measured (2026-08-02).** Corner at altitude: page text visible
+through the rounded arc where the baseline showed an opaque white
+square. Grab instant vs rest: same shadow family, a breath softer —
+no character change. Idle: zero live sources at rest (the airborne
+Surface unmounts on landing). 325/325 incl. 15 new chrome tests
+(parser fixtures are verbatim Chrome computed strings), tsc clean,
+boundary tests green on the new barrel exports.

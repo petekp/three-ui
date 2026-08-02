@@ -12,6 +12,15 @@ import {
   tiersInRange,
 } from '../lib/lodTier'
 import {
+  EMPTY_CHROME,
+  SURFACE_RADIUS_GLSL,
+  chromeEquals,
+  measureSurfaceChrome,
+  resolveRadii,
+  surfaceRadiusSd,
+  type SurfaceChrome,
+} from '../lib/surfaceChrome'
+import {
   clearPointerState,
   deepestElementAt,
   forwardPointer,
@@ -145,6 +154,38 @@ export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children' | '
    */
   hitTest?: 'plane' | 'content'
   /**
+   * The surface's corner radius, in CSS px of the source.
+   *
+   * - `'auto'` (default) — inherited from the element itself: the computed
+   *   `border-radius` of the drawn subtree (walking a single-child chain,
+   *   since a SurfaceApp roots its component two containers deep), re-read on
+   *   the compositor's own paint signal, so a style change lands the same
+   *   frame its pixels do. The element is the truth; the mesh wears it.
+   * - `number` / `[tl, tr, br, bl]` — authored radii, same clamp rules CSS
+   *   paints with. `0` opts out.
+   *
+   * The radius is enforced ANALYTICALLY — an SDF mask in the material, and
+   * the same SDF in the raycaster, so a ray and a fragment agree about where
+   * a corner ends. It cannot come from texture alpha: the `.ui-root` contract
+   * puts the app background on the content root, so the region outside a
+   *   rounded corner is opaquely PAINTED (measured: 255,255,255,255 under a
+   * 14px-radius card — the "square corners" bug). Analytic also means crisp
+   * at every LOD tier, because the arc is evaluated per-fragment, not stored
+   * in texels. Custom materials (`material="none"`) opt in via
+   * `SURFACE_RADIUS_GLSL` + `useSurfaceChrome` — only they know their
+   * varyings and blend state.
+   */
+  radius?: 'auto' | number | [number, number, number, number]
+  /**
+   * The element's measured chrome — corner radii and outer box-shadow layers
+   * — whenever a paint changes it. An outer shadow paints OUTSIDE the layout
+   * box, so the rasterizer never captures it; this is how a scene renders
+   * the shadow the DOM meant, at rest-truth, and evolves it physically from
+   * there (a companion shadow must also gate on `onFirstUpload` — chrome
+   * may not precede its card, decisions #54).
+   */
+  onChrome?: (chrome: SurfaceChrome) => void
+  /**
    * Who owns the mesh's material.
    *
    * - `'standard'` (default) — Surface renders its own `MeshStandardMaterial`
@@ -222,6 +263,8 @@ export function Surface({
   metalness = 0.05,
   transparent = false,
   hitTest = 'plane',
+  radius = 'auto',
+  onChrome,
   material = 'standard',
   ...meshProps
 }: SurfaceProps) {
@@ -255,6 +298,40 @@ export function Surface({
   const onSourceRef = useLatest(onSource)
   const onFocusWithinRef = useLatest(onFocusWithin)
   const onFirstUploadRef = useLatest(onFirstUpload)
+  const onChromeRef = useLatest(onChrome)
+  const radiusRef = useLatest(radius)
+  // The last measurement, and the radii the mask/raycast actually enforce
+  // (measured under radius='auto', authored otherwise). Uniform objects are
+  // per-instance and permanent — the standard material's onBeforeCompile
+  // wires them in once, and every later change is a value write, never a
+  // recompile.
+  const chromeRef = useRef<SurfaceChrome>(EMPTY_CHROME)
+  const activeRadiiRef = useRef<[number, number, number, number]>([0, 0, 0, 0])
+  const [chrome, setChrome] = useState<SurfaceChrome | null>(null)
+  const radiusUniformsRef = useRef({
+    uThreeUiRadii: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uThreeUiSize: { value: new THREE.Vector2(width, height) },
+  })
+
+  // Push radii into the mask + raycast. alphaToCoverage rides along for the
+  // opaque path: MSAA dithers the analytic edge smooth where plain discard
+  // would alias it (transparent surfaces get the same mask through ordinary
+  // alpha blending instead). Toggling it swaps the program once per state,
+  // not per frame.
+  const applyRadii = (next: [number, number, number, number]) => {
+    const cur = activeRadiiRef.current
+    if (cur[0] === next[0] && cur[1] === next[1] && cur[2] === next[2] && cur[3] === next[3]) return
+    activeRadiiRef.current = next
+    radiusUniformsRef.current.uThreeUiRadii.value.set(next[0], next[1], next[2], next[3])
+    const mat = materialRef.current
+    if (mat) {
+      const wantA2C = !mat.transparent && (next[0] > 0 || next[1] > 0 || next[2] > 0 || next[3] > 0)
+      if (mat.alphaToCoverage !== wantA2C) {
+        mat.alphaToCoverage = wantA2C
+        mat.needsUpdate = true
+      }
+    }
+  }
 
   /**
    * The hit region. With `hitTest="content"` the quad is only intersected
@@ -275,6 +352,31 @@ export function Surface({
     () =>
       function (this: THREE.Mesh, raycaster, intersects) {
         if (hitTestRef.current !== 'content') {
+          // A rounded surface's corners are not surface. Same SDF as the
+          // material mask, on the RAW uv (the mask's space), so a ray and a
+          // fragment agree about where the corner ends. `'content'` needs no
+          // such test — the browser's own hit-testing already honors
+          // border-radius, so `deepestElementAt` declines corner points.
+          const radii = activeRadiiRef.current
+          if (radii[0] > 0 || radii[1] > 0 || radii[2] > 0 || radii[3] > 0) {
+            const hits: THREE.Intersection[] = []
+            THREE.Mesh.prototype.raycast.call(this, raycaster, hits)
+            for (const hit of hits) {
+              if (
+                !hit.uv ||
+                surfaceRadiusSd(
+                  hit.uv.x,
+                  hit.uv.y,
+                  widthRef.current,
+                  heightRef.current,
+                  radii,
+                ) <= 0
+              ) {
+                intersects.push(hit)
+              }
+            }
+            return
+          }
           THREE.Mesh.prototype.raycast.call(this, raycaster, intersects)
           return
         }
@@ -292,7 +394,7 @@ export function Surface({
         }
       },
     // Stable ref identities — this memo never actually re-runs.
-    [hitTestRef, mirrorURef],
+    [hitTestRef, mirrorURef, widthRef, heightRef],
   )
   // Destructure the tuple into primitives so an inline `resolution={[1, 2]}`
   // (fresh array identity every render) can't defeat the memo.
@@ -331,9 +433,26 @@ export function Surface({
   const lodRef = useRef({ tier: 1, proposed: 1, agree: 0, frame: 0 })
   const lodPhase = useMemo(() => lodSeq++ % LOD_EVERY, [])
 
+  // Authored radii apply immediately; 'auto' waits for a measurement (the
+  // effect also keeps the mask's size uniform current across resizes, which
+  // preserves the corner ARC — radii are px, so a resize must not stretch
+  // them the way a uv-relative mask would).
+  useEffect(() => {
+    radiusUniformsRef.current.uThreeUiSize.value.set(width, height)
+    if (radius === 'auto') {
+      applyRadii(chromeRef.current.radii)
+    } else {
+      const values = (
+        typeof radius === 'number' ? [radius, radius, radius, radius] : radius
+      ).map((r) => `${r}px`) as [string, string, string, string]
+      applyRadii(resolveRadii(values, width, height))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [radius, width, height])
+
   const context = useMemo<SurfaceContextValue>(
-    () => ({ mesh: meshRef, source: sourceEl, width, height, mirrorU, texture }),
-    [sourceEl, width, height, mirrorU, texture],
+    () => ({ mesh: meshRef, source: sourceEl, width, height, mirrorU, texture, chrome }),
+    [sourceEl, width, height, mirrorU, texture, chrome],
   )
 
   // Inside a FocusGroup, this Surface is a composite focus member: its
@@ -418,6 +537,10 @@ export function Surface({
     extraUploadsRef.current = 0
     reallocAfterRef.current = -1
     firstUploadFiredRef.current = false
+    // New markup is different content: its chrome is unknown until it paints.
+    chromeRef.current = EMPTY_CHROME
+    if (radiusRef.current === 'auto') applyRadii([0, 0, 0, 0])
+    setChrome(null)
 
     // A content-hit-tested surface is clear glass by default: the root is a
     // bare container the scene put content into, not a thing to touch. What is
@@ -499,6 +622,20 @@ export function Surface({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [width, height, texture])
 
+  // Re-measure chrome on the compositor's own change signal — the paint that
+  // just uploaded is the paint whose style we read, so a border-radius or
+  // box-shadow change reaches the mask on the frame its pixels change. An
+  // idle Surface never measures; a style-equal measurement never re-renders.
+  const measureChrome = (source: DomTextureSource) => {
+    if (!source.painted()) return
+    const next = measureSurfaceChrome(source.element)
+    if (chromeEquals(chromeRef.current, next)) return
+    chromeRef.current = next
+    if (radiusRef.current === 'auto') applyRadii(next.radii)
+    onChromeRef.current?.(next)
+    setChrome(next)
+  }
+
   useFrame(() => {
     const source = sourceRef.current
     if (!source || !texture) return
@@ -571,6 +708,7 @@ export function Surface({
     if (paint === 'always') {
       source.repaint()
       upload()
+      if (count !== lastUploadRef.current) measureChrome(source)
       lastUploadRef.current = count
       return
     }
@@ -584,11 +722,44 @@ export function Surface({
       lastUploadRef.current = count
       extraUploadsRef.current = 1
       upload()
+      measureChrome(source)
     } else if (extraUploadsRef.current > 0) {
       extraUploadsRef.current -= 1
       upload()
     }
   })
+
+  // The mask, injected into the standard material. Always injected, uniform-
+  // driven: radii of zero make it a no-op, so there is one program family and
+  // a radius change is a value write, never a recompile. The chunk is spliced
+  // after `map_fragment` (diffuseColor is established there) and reads the
+  // RAW `vUv` — the map's own uv transform carries mirroring, the mask stays
+  // in geometry space. `USE_UV` is defined on the material so `vUv` exists
+  // even before the texture does; the pre-content fallback slab wears the
+  // same corners as the content that replaces it.
+  //
+  // Identical source text across instances on purpose: three keys its
+  // program cache on this function's toString, so every Surface shares one
+  // compiled program despite each wiring its own uniform objects.
+  const onBeforeCompile = useMemo(
+    () =>
+      (shader: { uniforms: Record<string, { value: unknown }>; fragmentShader: string }) => {
+        shader.uniforms.uThreeUiRadii = radiusUniformsRef.current.uThreeUiRadii
+        shader.uniforms.uThreeUiSize = radiusUniformsRef.current.uThreeUiSize
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            '#include <clipping_planes_pars_fragment>',
+            '#include <clipping_planes_pars_fragment>\n' + SURFACE_RADIUS_GLSL,
+          )
+          .replace(
+            '#include <map_fragment>',
+            '#include <map_fragment>\n' +
+              '  diffuseColor.a *= threeUiRadiusMask(vUv);\n' +
+              '  if (diffuseColor.a < 0.004) discard;\n',
+          )
+      },
+    [],
+  )
 
   const uvOf = (e: ThreeEvent<PointerEvent>) => {
     if (!e.uv) return null
@@ -681,6 +852,8 @@ export function Surface({
           metalness={metalness}
           side={side}
           transparent={transparent}
+          defines={{ USE_UV: '' }}
+          onBeforeCompile={onBeforeCompile}
         />
       )}
     </mesh>

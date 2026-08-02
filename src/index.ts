@@ -22,7 +22,23 @@ export { SurfaceLayer, type SurfaceLayerProps } from './primitives/SurfaceLayer'
 // The shader seam: with `material="none"` a Surface yields its material slot
 // to its children, and this is how the custom material reaches the live DOM
 // texture it should sample.
-export { useSurfaceTexture } from './primitives/SurfaceContext'
+export { useSurfaceTexture, useSurfaceChrome } from './primitives/SurfaceContext'
+
+// ── Chrome: the element's visual truth, inherited by the mesh ────────────
+// A Surface's radius comes from the element's computed border-radius
+// (`radius="auto"`), and its outer box-shadow — which the rasterizer can
+// never capture, because it paints outside the layout box — is measured
+// into layers a scene can render at rest-truth and evolve physically.
+// `SURFACE_RADIUS_GLSL` is the mask for custom materials; Surface's own
+// standard material already wears it.
+export {
+  parseBoxShadow,
+  measureSurfaceChrome,
+  surfaceRadiusSd,
+  SURFACE_RADIUS_GLSL,
+  type SurfaceChrome,
+  type SurfaceShadowLayer,
+} from './lib/surfaceChrome'
 
 // The surface protocol's retellings bubble to window BY DESIGN (Radix's
 // grace areas live on document), so page-level pointer listeners hear two
