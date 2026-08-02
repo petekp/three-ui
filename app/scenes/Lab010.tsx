@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { useFrame } from '@react-three/fiber'
 import type { Group } from 'three'
-import { FocusGroup, SurfaceApp } from 'three-ui'
+import { FocusGroup, SurfaceApp, useStyleChannel } from 'three-ui'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
@@ -20,6 +21,8 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller'
+import { Separator } from '@/components/ui/separator'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 
@@ -255,6 +258,118 @@ function AgentChat() {
   )
 }
 
+// ── The session sidebar ────────────────────────────────────────────────────
+//
+// A second panel consuming the style bridge (decisions #28) in a real scene:
+// hovering anywhere over the sidebar sets [data-hover] on its root (the
+// forwarder mirrors hover to target + ancestors), which flips `--lift` — an
+// interpolable registered custom property — and the MESH glides forward on
+// CSS's own curve while the texture never repaints. The one-element contract:
+// value, transition and variant all live on `.session-root`.
+
+const SIDEBAR_W = 250
+const SIDEBAR_H = 500
+
+const SIDEBAR_CSS = `
+  .session-root {
+    --lift: 0;
+    transition: --lift 400ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .session-root[data-hover] { --lift: 1; }
+`
+
+const SESSIONS = [
+  { title: 'the wheel finds its seat', meta: 'decisions #29', badge: 'merged' },
+  { title: 'sixteen components, verbatim', meta: 'd483e40', badge: 'merged' },
+  { title: 'the mask that voided the capture', meta: 'decisions #30', badge: 'merged' },
+  { title: 'chat panel as matter', meta: 'lab 010 inc 3', badge: 'active' },
+]
+
+function SessionList({ onRoot }: { onRoot: (el: HTMLElement | null) => void }) {
+  return (
+    <>
+      <style>{SIDEBAR_CSS}</style>
+      <div
+        ref={onRoot}
+        className="session-root flex flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm"
+        style={{ width: SIDEBAR_W, height: SIDEBAR_H }}
+      >
+        <header className="flex items-center justify-between px-4 py-3">
+          <span className="text-sm font-semibold">Sessions</span>
+          <Badge variant="outline" className="font-mono text-[10px]">
+            {SESSIONS.length}
+          </Badge>
+        </header>
+        <Separator />
+        <div className="flex flex-col gap-1 p-2">
+          {SESSIONS.map((s) => (
+            <button
+              key={s.title}
+              className="flex flex-col items-start gap-1 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-accent data-[state=active]:bg-accent"
+              data-state={s.badge === 'active' ? 'active' : undefined}
+            >
+              <span className="text-sm leading-tight font-medium">{s.title}</span>
+              <span className="flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
+                {s.badge === 'active' ? (
+                  <span className="size-1.5 rounded-full bg-emerald-500" />
+                ) : null}
+                {s.meta} · {s.badge}
+              </span>
+            </button>
+          ))}
+          {/* Skeleton wears animate-pulse — an infinite opacity keyframe on a
+              descendant costs 1 paint + 1 upload per frame FOREVER, and the
+              idle contract says 0. animate-none keeps the shape, kills the loop. */}
+          <div className="flex flex-col gap-1.5 px-3 py-2.5">
+            <Skeleton className="h-3.5 w-3/4 animate-none" />
+            <Skeleton className="h-2.5 w-1/2 animate-none" />
+          </div>
+        </div>
+        <footer className="mt-auto border-t px-4 py-3 text-[10px] text-muted-foreground">
+          hover me — the lift is CSS easing a registered custom property; the
+          mesh polls it, nothing repaints
+        </footer>
+      </div>
+    </>
+  )
+}
+
+function SessionSidebar({ position, rotation }: {
+  position: [number, number, number]
+  rotation: [number, number, number]
+}) {
+  const [root, setRoot] = useState<HTMLElement | null>(null)
+  const lift = useStyleChannel('--lift', { element: root })
+  const inner = useRef<Group>(null)
+  const outer = useRef<Group>(null)
+
+  useFrame(() => {
+    const g = inner.current
+    if (!g) return
+    const d = lift()
+    g.position.z = d * 0.22
+    g.rotation.y = d * 0.06
+  })
+
+  return (
+    <group position={position} rotation={rotation} ref={outer}>
+      <group ref={inner}>
+        <FocusGroup id="sessions" order={1} objectRef={outer}>
+          <SurfaceApp
+            content={<SessionList onRoot={setRoot} />}
+            label="lab010-sessions"
+            width={SIDEBAR_W}
+            height={SIDEBAR_H}
+            castShadow
+          >
+            <planeGeometry args={[SIDEBAR_W / PX, SIDEBAR_H / PX]} />
+          </SurfaceApp>
+        </FocusGroup>
+      </group>
+    </group>
+  )
+}
+
 interface Lab010Window extends Window {
   __lab010?: {
     send: (text?: string) => void
@@ -280,7 +395,7 @@ export function Lab010() {
         <meshStandardMaterial color="#15161c" roughness={0.95} />
       </mesh>
 
-      <group position={[0, 1.62, 0]} ref={chatGroup}>
+      <group position={[0, 1.62, 0]} rotation={[0, -0.08, 0]} ref={chatGroup}>
         <FocusGroup id="agent-chat" order={0} objectRef={chatGroup}>
           <SurfaceApp
             content={<AgentChat />}
@@ -293,6 +408,8 @@ export function Lab010() {
           </SurfaceApp>
         </FocusGroup>
       </group>
+
+      <SessionSidebar position={[-1.72, 1.55, 0.28]} rotation={[0, 0.38, 0]} />
     </>
   )
 }

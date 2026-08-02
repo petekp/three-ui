@@ -2166,3 +2166,25 @@ bubble, the reply streamed word-by-word — 147 paints for the flight,
 the honest cost of streaming text — autoscroll rode the growth, and the
 panel settled back to zero paints per second. The chat log is matter,
 and the scroll seam has its consumer.
+
+## the sidebar lifts — the bridge earns its keep in a scene
+
+Second panel: a session list, angled toward the chat like a real
+workspace. It exists to put the style bridge (#28) on stage. The
+sidebar's root carries `--lift: 0`, a 400ms ease-out transition, and
+one variant — `[data-hover] { --lift: 1 }`. The mesh polls the channel
+in useFrame and glides forward and slightly open when the pointer
+crosses it. Measured: 39 distinct eased values over the flight (0 to
+0.415 in the first 34ms — the authored curve's fast attack), the held
+state costs zero paints per second, and the texture never repaints for
+the lift itself. The 19 paints that do occur during a flight are the
+hovered row's `transition-colors` background fade — 150ms at 120Hz,
+bounded, honest, over.
+
+One repaint loop caught at the door: shadcn's `Skeleton` wears
+`animate-pulse`, an infinite opacity keyframe on a descendant — which
+rasterizes correctly and therefore costs one paint and one upload per
+frame *forever*. 417 paints before the first screenshot finished.
+`animate-none` keeps the shape and kills the loop; the idle contract
+(0 paints/s) is the budget every decorative animation has to clear,
+and an unbounded one never can.
