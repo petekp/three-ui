@@ -3492,3 +3492,37 @@ throughout: rendered amplitude is smoothed × gate, hard zero below
 30 px/s, because the smoother alone left 0.45 px of bend aboard at
 touchdown. Trace: peak 17 px mid-sweep, settle tail exactly 0, descent
 regime clean. decisions.md #59.
+
+## the card dies as matter
+
+The second half of the ask: "a really cool delete animation like the
+paper crumpling up or something that is obviously not possible with even
+the most clever CSS." So the ✕ does not remove the card — it ends its
+life as matter. The page copy hands off exactly like a grab (the rise IS
+the handoff window; crush is held at exactly zero through it, by
+constructed theorem rather than decayed tuning), and then the sheet
+crushes: every vertex staggers toward a noise target, gravity arrives
+only once the thing falling is genuinely a wad, and the board forgets
+the slot only after the wad has faded — a FLIP snapshot first, so the
+neighbours close the gap as a motion you can watch.
+
+Two lessons paid for in captures. First: per-vertex random targets are
+not a crumple, they are confetti — every triangle torn from its
+neighbours mid-crush. Paper folds in CHUNKS; the target field now
+samples its noise on a coarse uv grid with a per-vertex remainder, and
+the shards became folds. Second: the bend's analytic normals are
+hopeless on a crumple field, and the answer was free the whole time —
+screen-space derivatives of world position are the facet normal of
+whatever triangle is under the fragment, automatically faceted because
+interpolation is piecewise planar. Crumpled paper shading for the cost
+of two `dFdx` calls.
+
+A crumpling card is beyond rescue — esc and pointerup are guarded,
+because "put it back" needs a back and the slot is already condemned.
+Deletes work from both worlds through one entry: a page card becomes
+matter first; a floating card crumples where it hangs, momentum and all
+(the ✕ arrives through the canvas, forwarded like every other pointer).
+Traced: crush 0.000 across the whole rise, wad off the bottom of the
+viewport at fade exactly 0, five cards then four then three, and
+`stats()` returns [] when it is over — nothing left painting, nothing
+left at all. decisions.md #60.

@@ -187,6 +187,50 @@
   user-select: auto;
 }
 
+/* The ✕. Every :hover has a [data-hover] twin because the airborne copy
+ * never hears real hover — the surface protocol retells the pointer into
+ * the parked subtree and mirrors the browser's hover verdict as a data
+ * attribute (decisions #24). The reveal transitions OPACITY, which is fine
+ * here and would not be on the card itself: the card is a drawn content
+ * root (its own opacity never invalidates its paint record — the hard
+ * rule); a descendant rasterizes correctly and merely costs its few frames
+ * of paint. */
+.l14-del {
+  appearance: none;
+  border: 0;
+  margin: -2px -4px -2px 0;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  align-self: center;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.l14-card:hover .l14-del,
+.l14-card[data-hover] .l14-del,
+.l14-del:focus-visible {
+  opacity: 0.55;
+}
+
+.l14-del:hover,
+.l14-del[data-hover] {
+  opacity: 1;
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
+}
+
+.l14-del:active,
+.l14-del[data-active] {
+  background: color-mix(in oklab, var(--ink) 14%, transparent);
+}
+
 .l14-note {
   box-sizing: border-box;
   width: 100%;

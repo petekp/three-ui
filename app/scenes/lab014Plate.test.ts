@@ -5,12 +5,18 @@ import {
   aeroGate,
   aeroReach,
   atRest,
+  CRUMPLE_CRUSH_T,
+  CRUMPLE_END_T,
+  CRUMPLE_FADE_T,
+  CRUMPLE_RISE_T,
+  crumplePhase,
   HAND,
   makePlate,
   makeShadowFrame,
   shadowQuadFrame,
   stepFree,
   stepHeld,
+  wadShrink,
 } from './lab014Plate'
 
 const DT = 1 / 120
@@ -389,5 +395,70 @@ describe('aero gate — the rendered bend is zero at the swap by construction', 
       const raw = s * s === 0 ? 0 : 22 * ((s * s) / (s * s + 900 * 900))
       expect(aeroAmplitude(s)).toBeCloseTo(raw * aeroGate(s), 10)
     }
+  })
+})
+
+describe('crumple — the phases may not overlap the handoff', () => {
+  it('the rise window is an untouched sheet: crush exactly 0, fade exactly 1', () => {
+    // The page copy hides on first upload somewhere inside this window, and
+    // the swap's pixel-copy guarantee holds only while the sheet is still a
+    // flat card. Not "small" — zero.
+    for (const t of [0, CRUMPLE_RISE_T * 0.5, CRUMPLE_RISE_T * 0.999, CRUMPLE_RISE_T]) {
+      const ph = crumplePhase(t)
+      expect(ph.crush).toBe(0)
+      expect(ph.fade).toBe(1)
+      expect(ph.falling).toBe(false)
+      expect(ph.done).toBe(false)
+    }
+  })
+
+  it('crush rises monotonically to exactly 1 and stays there', () => {
+    let prev = 0
+    for (let i = 0; i <= 60; i++) {
+      const t = CRUMPLE_RISE_T + (i / 60) * (CRUMPLE_CRUSH_T - CRUMPLE_RISE_T)
+      const c = crumplePhase(t).crush
+      expect(c).toBeGreaterThanOrEqual(prev)
+      prev = c
+    }
+    expect(crumplePhase(CRUMPLE_CRUSH_T).crush).toBe(1)
+    expect(crumplePhase(CRUMPLE_END_T).crush).toBe(1)
+  })
+
+  it('gravity waits for the wad; the fade waits for the fall', () => {
+    // A flat sheet dropping like a stone reads as a glitch — the thing that
+    // falls must already be a wad. And the wad must be SEEN falling before
+    // it starts to go: fade stays exactly 1 until its own window.
+    expect(crumplePhase(CRUMPLE_CRUSH_T - 0.001).falling).toBe(false)
+    expect(crumplePhase(CRUMPLE_CRUSH_T).falling).toBe(true)
+    for (const t of [CRUMPLE_CRUSH_T, CRUMPLE_FADE_T - 0.001, CRUMPLE_FADE_T]) {
+      expect(crumplePhase(t).fade).toBe(1)
+    }
+    let prev = 1
+    for (let i = 0; i <= 40; i++) {
+      const t = CRUMPLE_FADE_T + (i / 40) * (CRUMPLE_END_T - CRUMPLE_FADE_T)
+      const f = crumplePhase(t).fade
+      expect(f).toBeLessThanOrEqual(prev)
+      prev = f
+    }
+    expect(crumplePhase(CRUMPLE_END_T).fade).toBe(0)
+  })
+
+  it('done exactly at the end, gone at exactly zero opacity', () => {
+    expect(crumplePhase(CRUMPLE_END_T - 0.001).done).toBe(false)
+    const end = crumplePhase(CRUMPLE_END_T)
+    expect(end.done).toBe(true)
+    expect(end.fade).toBe(0)
+  })
+
+  it('the phase clocks are ordered', () => {
+    expect(CRUMPLE_RISE_T).toBeLessThan(CRUMPLE_CRUSH_T)
+    expect(CRUMPLE_CRUSH_T).toBeLessThan(CRUMPLE_FADE_T)
+    expect(CRUMPLE_FADE_T).toBeLessThan(CRUMPLE_END_T)
+  })
+
+  it('wadShrink is identity at crush 0 and a sixth at full crush', () => {
+    expect(wadShrink(0)).toBe(1)
+    expect(wadShrink(1)).toBeCloseTo(0.16, 10)
+    expect(wadShrink(0.5)).toBeGreaterThan(wadShrink(1))
   })
 })

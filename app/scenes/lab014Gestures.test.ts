@@ -164,3 +164,28 @@ describe('the hand is the only pointer that moves a held card', () => {
     expect(after.y).toBeCloseTo(before.y, 10)
   })
 })
+
+describe('a crumpling card is beyond rescue', () => {
+  // The delete is the one gesture that ends a card's life as matter, and it
+  // must be irreversible from the moment the crush begins: escape is "put it
+  // back", but there is no back — the board is about to forget the slot.
+  it('escape does not resurrect it', () => {
+    const flight = { current: makeFlight({ mode: 'crumple' }) }
+    attach(flight)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(flight.current.mode).toBe('crumple')
+  })
+
+  it('a trusted pointerup neither throws nor floats it', () => {
+    // Deleting a HELD card happens with the button still down; the release
+    // that follows must find nothing to do — not hand the wad a throw
+    // velocity, not park it as a float.
+    const flight = { current: makeFlight({ mode: 'crumple' }) }
+    attach(flight)
+    window.dispatchEvent(pointer('pointermove', 700, 400, true))
+    window.dispatchEvent(pointer('pointerup', 700, 400, true))
+    expect(flight.current.mode).toBe('crumple')
+    expect(flight.current.plate.v.length()).toBe(0)
+    expect(flight.current.floated).toBe(false)
+  })
+})

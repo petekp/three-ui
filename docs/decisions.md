@@ -2902,3 +2902,64 @@ amt = 0. The captures come from INSIDE a wrapped `gl.render` —
 burst. Paint contract untouched: the bend is uniforms + vertex work on
 the already-uploaded texture — zero additional paints at any phase, 32×12
 segments only so the bow has vertices to spend.
+
+## 60. The crumple delete: a card dies as matter, and no phase may overlap the handoff (2026-08-02, lab 014)
+
+**Decision.** Deleting a card is the one gesture that gets to break the
+"indistinguishable from DOM" contract — on purpose, because a sheet
+crushing into a paper wad is the one thing a document element could never
+do. A fourth flight mode, `crumple`, with one clock: the driver advances
+`crumpleT` and everything else — when the sheet crushes, when gravity
+arrives, when the wad fades, when the flight is over — is
+`crumplePhase(t)` of it, a pure function with the phase boundaries as
+exported constants and the invariants as tests.
+
+**The phases are theorems, not tuning.** Crush is EXACTLY 0 through the
+whole rise window (`CRUMPLE_RISE_T`): the rise is the ordinary handoff
+wearing a gesture's clothes — page copy hides on first upload while the
+plate springs off the page — and the swap's pixel-copy guarantee needs an
+untouched sheet, so `crumplePhase` holds zero by construction, not by
+decay. Gravity is withheld until the sheet IS a wad (a flat card dropping
+like a stone reads as a glitch); the fade waits for the fall (the wad
+must be SEEN falling before it starts to go); `done` lands at exactly
+fade 0.
+
+**One entry for both worlds.** A page card becomes matter first — the
+same flight machinery as a grab, mode `crumple` from birth, and the rise
+doubles as the handoff window. An airborne card (held or float) crumples
+from its current pose, momentum and all. Irreversible from the first
+frame: esc and pointerup are guarded in the gestures (a crumpling card is
+beyond rescue — "put it back" needs a back, and the board is about to
+forget the slot). The board forgets LAST: the FLIP snapshot goes first,
+so the neighbours close over the vacated slot as a layout animation.
+
+**Fold coherence is the look.** Per-vertex random wad targets were
+measured as confetti — every triangle torn from its neighbours, a shard
+burst, not paper. The target field samples the hash on a COARSE uv grid
+(6×3 cells) with a 35% per-vertex remainder: neighbours travel together
+as folding chunks, creases stay chaotic, and the phase jitter stays
+per-vertex so a chunk's vertices crumple INTO their shared destination
+rather than arriving in lockstep. Analytic normals are hopeless on this
+field; the fragment shader switches to screen-space derivative facets
+(`cross(dFdx(vWp), dFdy(vWp))` — free, and automatically faceted because
+interpolated position is piecewise planar), broad pow-2 band,
+multiplicative, floored at 0.35 so the deepest folds go dark grey.
+
+**What freezes during a crumple.** The density pin (a re-raster and a
+texture swap spent on a sheet that is about to stop being a card — and a
+delete from altitude would otherwise flip low immediately, mid-crush);
+the REST-SNAP settle (a wad slowing mid-air would be quantized flat —
+slerped toward FLAT mid-tumble); and `CRUMPLE_Z` sits at 55, below the
+schedule's approach (0.65 · 96 ≈ 62), so the pin cannot flip on the way
+up either. The shadow does not freeze: it contracts with the caster
+(`wadShrink` scales the corner dims, identity at crush 0) and rides
+`wadFade` out with the falling wad.
+
+**Measured (2026-08-02, dpr 1, in-loop captures).** Page delete: crush
+0.000 across the full rise (h 1 → 38, 12+ frames), ignition 0.002 only
+past the window, crush 1 by schedule, wad falls y −96 → −459 (below the
+viewport) with fade monotone to exactly 0, flight torn down, page cards
+5 → 4, slot gone, FLIP closes the gap. Airborne delete: tap → float at
+h 96, the forwarded ✕ through the canvas flips float → crumple, commits
+at 3 cards. `__threeUI.stats()` = [] afterwards — no sources, no paints:
+the idle contract in its strongest form.

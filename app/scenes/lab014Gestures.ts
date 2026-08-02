@@ -14,7 +14,7 @@ import * as THREE from 'three'
 /** The slice of `Flight` the window gesture actually touches. */
 export interface GestureFlight {
   id: string
-  mode: 'held' | 'float' | 'home'
+  mode: 'held' | 'float' | 'home' | 'crumple'
   px: number
   py: number
   downAt: number
@@ -123,11 +123,14 @@ export function attachLab014Gestures<Col>({
   // Escape always puts it back. A floating card is a modeless state and
   // modeless states need an exit that does not require aim. (Keyboard is not
   // guarded: the library forges no keyboard — typing through a surface is
-  // real focus and real keys, decisions #24.)
+  // real focus and real keys, decisions #24.) The one exception is a card
+  // mid-crumple: "put it back" needs a back, and the board is about to
+  // forget the slot — a delete is irreversible from the moment the crush
+  // begins, by every input.
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== 'Escape') return
     const f = flight.current
-    if (!f || f.mode === 'home') return
+    if (!f || f.mode === 'home' || f.mode === 'crumple') return
     f.mode = 'home'
   }
 

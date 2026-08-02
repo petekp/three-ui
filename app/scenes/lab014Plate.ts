@@ -484,3 +484,64 @@ export function aeroReach(
     Math.abs(dirX * grabX + dirY * grabY)
   )
 }
+
+// ── the crumple ──────────────────────────────────────────────────────────
+//
+// Deleting a card is the one gesture that gets to break the "indistinguishable
+// from DOM" contract on purpose — the card stops being a document element and
+// dies as matter. The timeline is pure so the tests can hold it still: the
+// driver advances one clock (crumpleT, seconds) and everything else — when
+// the sheet crushes, when gravity takes over, when the wad fades — is a
+// function of that clock. The phases exist because each one covers a
+// different mechanism: the rise is the HANDOFF window (page copy hides on
+// first upload while the plate springs gently off the page, exactly like a
+// grab); the crush is the vertex morph; the fall is ballistics; the fade is
+// the exit. Nothing may overlap the rise, because the swap's pixel-copy
+// guarantee holds only while the sheet is still a flat, untouched card.
+
+/** Seconds: crush begins only after the handoff window has fully passed. */
+export const CRUMPLE_RISE_T = 0.18
+/** Seconds: the sheet is a wad. Gravity switches on here. */
+export const CRUMPLE_CRUSH_T = 0.62
+/** Seconds: the falling wad starts to fade… */
+export const CRUMPLE_FADE_T = 0.82
+/** …and is gone. The driver reports the flight done. */
+export const CRUMPLE_END_T = 1.12
+
+const sstep = (x: number) => {
+  const t = Math.min(1, Math.max(0, x))
+  return t * t * (3 - 2 * t)
+}
+
+export interface CrumplePhase {
+  /** 0 → 1 vertex-morph progress. EXACTLY 0 through the whole rise. */
+  crush: number
+  /** 1 → 0 late-fall opacity. EXACTLY 1 until the fade begins. */
+  fade: number
+  /** Gravity on? (The wad falls only once it IS a wad.) */
+  falling: boolean
+  /** The flight is over; commit the delete. */
+  done: boolean
+}
+
+/** The whole delete, as a function of one clock. */
+export function crumplePhase(t: number): CrumplePhase {
+  return {
+    crush: sstep((t - CRUMPLE_RISE_T) / (CRUMPLE_CRUSH_T - CRUMPLE_RISE_T)),
+    fade: 1 - sstep((t - CRUMPLE_FADE_T) / (CRUMPLE_END_T - CRUMPLE_FADE_T)),
+    falling: t >= CRUMPLE_CRUSH_T,
+    done: t >= CRUMPLE_END_T,
+  }
+}
+
+/**
+ * The shadow's footprint scale while the sheet crushes. The shadow quad is
+ * driven from the plate's corners, but a wad no longer spans the plate —
+ * shrink the dimensions the corners are computed from, and the shadow
+ * contracts with the thing that casts it. 1 at crush 0 (identity — the
+ * rise still casts the card's own shadow), 0.16 at full crush (a wad is
+ * about a sixth of the sheet).
+ */
+export function wadShrink(crush: number): number {
+  return 1 - 0.84 * crush
+}
