@@ -98,11 +98,19 @@
 
 /* …and what an empty slot looks like once the freeze-frame is gone. The
  * `--l14-near` channel is written from the physics: how close the held card
- * is to landing here, 0–1. */
+ * is to landing here, 0–1.
+ *
+ * PAINT PROPERTIES ONLY. The whole point of the slot is that its box never
+ * changes — and a border is a box property: 1.5px of dash grew the slot and
+ * marched everything below it 2px down the page at every liftoff, then 2px
+ * back up at every landing (measured on the slot under the grabbed card).
+ * The outline draws the same dashes without owning a single pixel of
+ * layout. An empty slot may repaint; it may never remeasure. */
 .l14-slot[data-empty="true"] {
-  border: 1.5px dashed color-mix(in oklab, var(--rule), var(--accent) calc(var(--l14-near, 0) * 70%));
+  outline: 1.5px dashed color-mix(in oklab, var(--rule), var(--accent) calc(var(--l14-near, 0) * 70%));
+  outline-offset: -1.5px;
   background: color-mix(in oklab, transparent, var(--accent) calc(var(--l14-near, 0) * 9%));
-  transition: background 140ms linear, border-color 140ms linear;
+  transition: background 140ms linear, outline-color 140ms linear;
 }
 
 .l14-card {

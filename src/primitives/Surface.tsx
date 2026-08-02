@@ -50,6 +50,17 @@ export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children' | '
   /** Fires when focus enters/leaves the live subtree. Always the latest one. */
   onFocusWithin?: (focused: boolean) => void
   /**
+   * Fires once, on the frame the texture first uploads real pixels — the
+   * moment this mesh actually carries its content. A handoff that swaps live
+   * DOM for a Surface must not hide the DOM — or draw companion chrome like
+   * a shadow — one frame early, and "how many frames until the upload" is a
+   * race that loses under load (measured: a shadow drawn on the first r3f
+   * frame stamped a card-shaped veil over the still-visible page copy,
+   * because the source hadn't painted yet). Only the upload path knows the
+   * true moment, so it says so here. Resets if the source is recreated.
+   */
+  onFirstUpload?: () => void
+  /**
    * Access the live DOM root — attach listeners, mount a React root into it,
    * mutate it. May return a cleanup function.
    *
@@ -201,6 +212,7 @@ export function Surface({
   height = 480,
   children,
   onFocusWithin,
+  onFirstUpload,
   onSource,
   paint = 'auto',
   mirrorU = false,
@@ -226,6 +238,8 @@ export function Surface({
   const pressedRef = useRef(false)
   const lastUploadRef = useRef(-1)
   const extraUploadsRef = useRef(0)
+  // One-shot latch for onFirstUpload; re-arms when the source is recreated.
+  const firstUploadFiredRef = useRef(false)
   // paintCount at the moment setScale resized the canvas; -1 = none pending.
   // The GL realloc below waits for the counter to move strictly PAST this
   // (onpaint can't interleave mid-rAF, so count > mark ⟺ the post-resize
@@ -240,6 +254,7 @@ export function Surface({
   const heightRef = useLatest(height)
   const onSourceRef = useLatest(onSource)
   const onFocusWithinRef = useLatest(onFocusWithin)
+  const onFirstUploadRef = useLatest(onFirstUpload)
 
   /**
    * The hit region. With `hitTest="content"` the quad is only intersected
@@ -402,6 +417,7 @@ export function Surface({
     lastUploadRef.current = -1
     extraUploadsRef.current = 0
     reallocAfterRef.current = -1
+    firstUploadFiredRef.current = false
 
     // A content-hit-tested surface is clear glass by default: the root is a
     // bare container the scene put content into, not a thing to touch. What is
@@ -542,9 +558,19 @@ export function Surface({
       applyFilterPolicy(texture, source.scale(), pinnedScaleRef.current !== null)
       reallocAfterRef.current = -1
     }
+    // Every upload funnels through here so the first-upload latch cannot
+    // care which path wins — and "first upload" is the only honest readiness
+    // signal a handoff can gate on (see the onFirstUpload prop).
+    const upload = () => {
+      if (!source.painted()) return
+      texture.needsUpdate = true
+      if (firstUploadFiredRef.current) return
+      firstUploadFiredRef.current = true
+      onFirstUploadRef.current?.()
+    }
     if (paint === 'always') {
       source.repaint()
-      if (source.painted()) texture.needsUpdate = true
+      upload()
       lastUploadRef.current = count
       return
     }
@@ -557,10 +583,10 @@ export function Surface({
     if (count !== lastUploadRef.current) {
       lastUploadRef.current = count
       extraUploadsRef.current = 1
-      if (source.painted()) texture.needsUpdate = true
+      upload()
     } else if (extraUploadsRef.current > 0) {
       extraUploadsRef.current -= 1
-      if (source.painted()) texture.needsUpdate = true
+      upload()
     }
   })
 

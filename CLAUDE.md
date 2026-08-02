@@ -104,6 +104,16 @@ wants something that isn't exported, export it — don't reach around.
   is a foreign capture — the forwarder stays silent until release
   (OrbitControls' rotate anchor was measured taking a departure burst as a
   10px→teleport delta; decisions.md #50/#51).
+- **A DOM→mesh handoff keys on `Surface`'s `onFirstUpload`, never on a
+  frame count — and companion chrome (shadows, glows) gates on the same
+  signal.** "Three frames until the upload" is a race that loses under
+  load: the page copy hides early and the slot flashes through. Worse, on
+  the first rendered frame the source hasn't painted, the quad draws
+  nothing, and an ungated shadow stamps a card-shaped veil over the
+  still-visible DOM — a black flicker at every grab. Content first, then
+  its chrome. And a vacated slot's `[data-empty]` styling may touch PAINT
+  properties only (outline/background, never border/padding/size): a
+  1.5px border marched the page 2px at every liftoff (decisions.md #54).
 - **A custom `ShaderMaterial` sampling `useSurfaceTexture` must end its
   fragment shader with `#include <colorspace_fragment>`.** The texture is
   `SRGBColorSpace`, so the sampler hands the shader LINEAR values; built-in

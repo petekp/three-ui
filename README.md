@@ -3292,3 +3292,40 @@ probe, the texel probe indistinguishable from resting DOM, and on retina
 the rest state is literally an identity map — projected footprint
 1145.0000 × 351.0000 device px, corner residue 0.0000. The card at rest
 is its own pixels again, in position, in size, and in color.
+
+## the seam had two leaks — one in the box model, one in the clock
+
+Pete, after the crispness fix landed: the elements under a newly-3D card
+move by a few pixels, and there's a black flicker as the card leaves the
+page. Both live on the handoff frame, and neither was the mechanism I
+went in expecting.
+
+The shift was CSS wearing an engineering costume. The vacated slot's
+empty state drew a `1.5px dashed border` — and a border is a *box*
+property, so the slot grew and everything below it marched 2px down the
+page at liftoff and 2px back at landing. The slot's one job is to hold
+the card's box; its empty styling was quietly contradicting it. The same
+dashes are an `outline` now (a paint property, zero layout), and the
+rule went into the stylesheet as prose: an empty slot may repaint, it
+may never remeasure.
+
+The flicker was the shadow beating its own card into existence. On the
+first rendered frame the source hasn't painted yet — the card quad draws
+nothing — but the shadow drew anyway: a card-shaped 30% veil stamped
+over the still-visible page copy for exactly one frame, at every grab.
+The lab was hiding the page copy on a frame count (`frames === 3`),
+which is a race dressed as a constant; the only honest readiness signal
+is "the texture uploaded real pixels," and only the library's upload
+path knows that moment. `Surface` now says it out loud — `onFirstUpload`
+fires once, and both the page-copy hide and the shadow key on it. Card
+first, then its shadow, structurally.
+
+The probe that found all this lied to me once first: v1 sampled the
+WebGL buffer from its own rAF, whose ordering against r3f's render is
+pure registration luck, and a mid-session flip manufactured a 12-frame
+dark window that perfectly indicted the (innocent) density schedule.
+v3 samples inside a `gl.render` wrapper — the only moment a
+`preserveDrawingBuffer: false` canvas is defined. Post-fix trace, same
+gesture: zero shift frames across the whole cycle, nothing drawn over
+the visible copy, card pixels one frame before the copy hides.
+decisions.md #54.

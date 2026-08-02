@@ -197,8 +197,6 @@ interface Flight {
    * it into a `resolution` change — see the density schedule there.
    */
   hiDensity: boolean
-  /** r3f frames since mount — the page copy hides once the quad has painted. */
-  frames: number
   /** Set by the driver, read by React: the card has landed. */
   done: boolean
 }
@@ -372,7 +370,6 @@ interface DriverProps {
    */
   cardRef: React.RefObject<THREE.Group | null>
   shadowRef: React.RefObject<THREE.Mesh | null>
-  onPainted: () => void
   /** The texture's CURRENT pin, texels per CSS px — the density schedule's live value. */
   density: number
   /** Flip the schedule: true as the plate climbs through the approach, false for home. */
@@ -423,7 +420,6 @@ function Driver({
   onLanded,
   cardRef,
   shadowRef,
-  onPainted,
   density,
   onAltitude,
 }: DriverProps) {
@@ -438,9 +434,6 @@ function Driver({
     // A tab that was backgrounded hands back a dt measured in seconds; a
     // stiff spring integrated over one of those explodes. Clamp, don't trust.
     const dt = Math.min(rawDt, 1 / 30)
-
-    f.frames++
-    if (f.frames === 3) onPainted()
 
     const vw = size.width
     const vh = size.height
@@ -606,10 +599,13 @@ interface FlyingProps {
   slotRect: (id: string) => DOMRect | null
   scrollTop: () => number
   onLanded: () => void
+  /** The Surface's first real upload landed — fired by the library, not a frame count. */
   onPainted: () => void
+  /** Board's `painted` state, reflected back down: gates the page-copy hide AND the shadow. */
+  painted: boolean
 }
 
-function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLanded, onPainted }: FlyingProps) {
+function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLanded, onPainted, painted }: FlyingProps) {
   const f = flight.current!
   const cardRef = useRef<THREE.Group>(null)
   const shadowRef = useRef<THREE.Mesh>(null)
@@ -699,12 +695,18 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
         onLanded={onLanded}
         cardRef={cardRef}
         shadowRef={shadowRef}
-        onPainted={onPainted}
         density={density}
         onAltitude={setAtAltitude}
       />
 
-      <mesh ref={shadowRef} renderOrder={0} frustumCulled={false}>
+      {/* The shadow may not exist before the card does. On the first r3f
+          frame the source hasn't painted, the quad draws nothing — and a
+          shadow drawn anyway is a card-shaped 30% veil stamped over the
+          still-visible page copy for exactly one frame (measured: rgba
+          4/4/3/76 at the card centre, paints 0). Pete saw it as a black
+          flicker at every grab. Gate on the same first-upload signal that
+          hides the page copy: card first, then its shadow. */}
+      <mesh ref={shadowRef} renderOrder={0} frustumCulled={false} visible={painted}>
         <planeGeometry args={[1, 1]} />
         <shaderMaterial
           uniforms={shadowUniforms}
@@ -727,6 +729,13 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
           frustumCulled={false}
           userData={{ matter: true }}
           onHost={onHost}
+          // The handoff's readiness signal. Counting r3f frames here was a
+          // race dressed as a constant: three frames USUALLY covers "second
+          // root committed, compositor painted, texture uploaded" — until
+          // load makes it four, the page copy hides early, and the slot
+          // flashes through where the card should be. Only the upload path
+          // knows the true moment, so only it gets to say.
+          onFirstUpload={onPainted}
           content={<CardBody card={card} onChange={onChange} />}
         >
           <planeGeometry args={[f.w, f.h]} />
@@ -947,7 +956,6 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
         prevTarget: new THREE.Vector3(),
         handSeeded: false,
         lift: 0,
-        frames: 0,
         done: false,
       }
       setPainted(false)
@@ -1161,6 +1169,7 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
             scrollTop={scrollTop}
             onLanded={onLanded}
             onPainted={() => setPainted(true)}
+            painted={painted}
           />
         )}
       </Canvas>

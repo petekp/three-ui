@@ -2576,3 +2576,61 @@ transfer (what the shader does to the values) — and "it looks blurry"
 does not say which one is overdrawn. The bisect that separates them is
 cheap: put the texture's own texels on the page next to the mesh that
 displays them. Everything upstream of the seam that differs is innocent.
+
+## 54. The handoff's two leaks: a vacated slot may repaint but never remeasure, and readiness is the first upload, not a frame count (2026-08-02, lab 014)
+
+**Decision.** Two rules for any DOM→mesh handoff, each bought with a
+measured leak:
+
+1. **The empty state of a vacated slot may only touch paint properties.**
+   The slot's entire job is to hold the card's box in normal flow; any
+   box property in its `[data-empty]` styling is a self-contradiction.
+   Lab 014's dashed border was one: `border: 1.5px dashed` grew the slot
+   and marched everything below it 2 px down the page at every liftoff
+   and 2 px back up at every landing. The same dashes as an `outline`
+   (with a negative offset) own zero pixels of layout. If the empty
+   style needs a gap, a tint, a pulse — background, outline, box-shadow,
+   filter. Never border, padding, or size.
+
+2. **`Surface` now owns the readiness signal: `onFirstUpload` fires
+   once, on the frame the texture first uploads real pixels.** The lab
+   had been counting r3f frames (`frames === 3`) as a proxy for "second
+   root committed, compositor painted, texture uploaded" — a race
+   dressed as a constant. And the shadow was not gated at all: on the
+   first rendered frame the source hasn't painted (`paints 0`), the card
+   quad draws nothing, and the shadow stamped a card-shaped ~30% veil
+   (rgba 4/4/3/76 at the card centre) over the still-visible page copy
+   for exactly one frame — Pete's "black flicker when it changes from
+   2D to 3D," at every single grab. Only the upload path knows the true
+   moment, so only it gets to say: the page-copy hide and the shadow now
+   both key on the library's signal. Post-fix trace: frame 2 draws
+   nothing over the visible copy, frame 3 is card pixels (one-frame
+   pixel-identical overlap, as designed), frame 4 hides the copy —
+   the shadow structurally cannot precede the card.
+
+**Why a library seam and not a lab fix.** This is the second consumer
+of the same missing fact (the hide was the first, the shadow the
+second), and the shadcn-3d track is a parade of handoffs — every one of
+them needs "the mesh now carries the content" and none of them can see
+it. The one-shot latch lives in the upload funnel (all three upload
+sites route through it) and re-arms if the source is recreated.
+
+**The instrument lesson (paid for twice).** A `readPixels` probe must
+sample *inside a `gl.render` wrapper*, immediately after the draw. With
+`preserveDrawingBuffer: false` the buffer is only defined between the
+draw and the composite, and a probe on its own rAF sits before or after
+r3f's render depending on nothing but callback registration order: v1
+of this probe silently flipped mid-session and manufactured a 12-frame
+"dark window" at z ≈ 63 that perfectly indicted the (innocent) density
+flip — a false mechanism with a plausible narrative, caught only
+because v3 re-measured before the fix was written. When a probe
+contradicts the model, instrument the probe (see #11); when a probe
+*confirms* a suspicion this neatly, instrument it twice.
+
+**Measured (2026-08-02).** Before: `belowDelta +2 px` from the
+`data-empty` commit, held 262 frames, released at landing; dark frame at
+n = 2, rgba 4/4/3/76, paints 0, page copy visible. After: `shiftFrames
+0, maxShift 0` over 263 rows including liftoff, the z ≈ 62 density flip
+(hi flips with a normal card pixel under the probe), and landing;
+frame 2 rgba 0/0/0/0 with the copy visible — nothing drawn, nothing to
+see. 310/310, tsc clean.
