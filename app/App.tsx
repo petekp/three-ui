@@ -10,13 +10,14 @@ import { Lab006, Lab006Hud } from './scenes/Lab006'
 import { Lab008 } from './scenes/Lab008'
 import { Lab009 } from './scenes/Lab009'
 import { Lab010 } from './scenes/Lab010'
+import { Lab011 } from './scenes/Lab011'
 import { ProbeScaleApp } from './scenes/ProbeScale'
 import { ProbeFocusApp } from './scenes/ProbeFocus'
 import { ProbeLayoutApp } from './scenes/ProbeLayout'
 import { ProbeStyleApp } from './scenes/ProbeStyle'
 import { detectHtmlInCanvas, FocusScene } from 'three-ui'
 
-type LabId = '001' | '002' | '003' | '004' | '005' | '006' | '008' | '009' | '010'
+type LabId = '001' | '002' | '003' | '004' | '005' | '006' | '008' | '009' | '010' | '011'
 
 // ?probe=N mounts the scale probe instead of the labs (see ProbeScale.tsx).
 function probeParams() {
@@ -102,6 +103,8 @@ export default function App() {
               <Lab009 />
             ) : lab === '010' ? (
               <Lab010 />
+            ) : lab === '011' ? (
+              <Lab011 />
             ) : (
               <Lab006 />
             )}
@@ -122,7 +125,7 @@ export default function App() {
         <h1>three-ui / lab {lab}</h1>
         <p className="sub">a component library made of real materials</p>
         <div className="tabs">
-          {(['001', '002', '003', '004', '005', '006', '008', '009', '010'] as const).map((id) => (
+          {(['001', '002', '003', '004', '005', '006', '008', '009', '010', '011'] as const).map((id) => (
             <button
               key={id}
               data-active={lab === id}

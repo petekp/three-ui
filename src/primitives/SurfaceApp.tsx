@@ -19,6 +19,12 @@ export interface SurfaceAppProps
   extends Omit<ComponentProps<typeof Surface>, 'html' | 'onSource'> {
   /** The React tree to render into the Surface's source DOM. */
   content: ReactNode
+  /**
+   * Receives the live container element when it exists, `null` when it goes
+   * away — the handle a scene needs to listen to the tree from outside
+   * (e.g. `useAnimationConductor` hears its animations here).
+   */
+  onHost?: (el: HTMLElement | null) => void
 }
 
 export function SurfaceApp({
@@ -26,9 +32,10 @@ export function SurfaceApp({
   width = 640,
   height = 480,
   children,
+  onHost,
   ...surfaceProps
 }: SurfaceAppProps) {
-  const { mount } = useSourceHost({ width, height, className: 'ui-root', content })
+  const { mount } = useSourceHost({ width, height, className: 'ui-root', content, onHost })
 
   return (
     <Surface

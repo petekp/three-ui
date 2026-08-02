@@ -2379,3 +2379,41 @@ does not phantom-drag — the panel library's occlusion filter sees the
 canvas painting above the parked group and stands down, which is the
 second time a consumer's own defenses have turned out to compose with
 the medium unpatched. Idle stays at 0. 266 tests. Decisions #32.
+
+## lab 011 — the toast burns: a shader performs the CSS
+
+The question this lab was built to answer: can a Surface do something
+to an element's entrance and exit that no page could? A DOM element can
+fade, slide, scale — every exit CSS can express is an affine transform
+plus an opacity ramp. It cannot *burn away along a noise field*,
+because CSS has no per-pixel program. A Surface's material does.
+
+The seam is two small things. `material="none"` makes the Surface
+yield its material slot to its children — everything else it does
+(paint-driven uploads, LOD re-rasters, input forwarding) acts on the
+texture and the mesh, so it all keeps working under a material the
+library has never seen. And `useSurfaceTexture()` hands that child the
+live DOM `CanvasTexture` through context — held as state, not a ref,
+so the child re-renders when the texture arrives; a `ShaderMaterial`
+whose sampler was declared up front needs no recompile, just the
+value.
+
+The choreography is the part worth keeping. The toast authors its
+motion the way any page would — `animate-in fade-in-0` on a
+descendant, verbatim Tailwind. The conductor seizes the animation
+before a frame of it paints and hands back the style engine's own
+eased samples; the scene maps `value.opacity` onto a `uProgress`
+uniform; the fragment shader sweeps a threshold through a value-noise
+fbm, discarding beyond the front and rimming it with ember. The
+declared curve IS the dissolve curve — an author who swaps
+`ease-out` for a bounce has re-choreographed the burn without knowing
+the shader exists. Declared as `fade-in-0`, performed as a noise burn.
+
+The economics hold up: the entire lifecycle — enter, hold, exit — is
+**8 paints total**, versus ~110 had the two 900ms flights rasterized
+at the compositor's rate. The card is drawn once per pole; every frame
+in between is the GPU re-reading the same texture through a different
+threshold. Measured trace: enter 0.132 → 0.817 → 0.995 → 1 (eased —
+0.817 at 53% of the flight is the style engine's ease-out, not ours),
+hold at 1, exit back to 0, idle 0 paints after settle, 0 errors.
+Decisions #33.

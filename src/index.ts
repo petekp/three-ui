@@ -19,6 +19,10 @@
 export { Surface, type SurfaceProps } from './primitives/Surface'
 export { SurfaceApp, type SurfaceAppProps } from './primitives/SurfaceApp'
 export { SurfaceLayer, type SurfaceLayerProps } from './primitives/SurfaceLayer'
+// The shader seam: with `material="none"` a Surface yields its material slot
+// to its children, and this is how the custom material reaches the live DOM
+// texture it should sample.
+export { useSurfaceTexture } from './primitives/SurfaceContext'
 
 // ── The floating family ──────────────────────────────────────────────────
 // One lever — a portaled component's `container` — and three places to aim

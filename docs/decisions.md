@@ -1447,3 +1447,57 @@ path (see lie two). (c) *Patching or wrapping the panel library* — the
 seam is the forwarder's narration, not the consumer; every drag
 library reads `buttons`, `defaultPrevented`, and capture the same way,
 and fixing the narration fixes them all unpatched.
+
+## 33. The material slot is a prop — `material="none"` and the texture through context (2026-08-01, lab 011)
+
+**Decision.** `Surface` owns its mesh's material slot and exposes it as
+a mode: `material="standard"` (default) renders the built-in
+`meshStandardMaterial` exactly as before; `material="none"` renders no
+material and lets the Surface's children supply one. The live DOM
+`CanvasTexture` reaches that child through `useSurfaceTexture()` —
+context, held as **state**, so consumers re-render when the texture
+arrives instead of sampling null forever.
+
+**Context.** Lab 011's dissolve: a transient card whose enter/exit is
+authored as verbatim Tailwind (`animate-in fade-in-0` on a
+descendant), seized by `useAnimationConductor`, and PERFORMED by a
+`ShaderMaterial` — the conductor's eased `value.opacity` becomes a
+`uProgress` uniform sweeping a noise-field burn threshold over the
+texture. The reason this is cheap to support: everything else Surface
+does — paint-driven uploads, LOD re-rasters, `setScale` tier swaps,
+input forwarding — operates on the *texture* and the *mesh*, neither
+of which the custom material displaces. The upload path writes into
+the same `CanvasTexture` the shader samples; a foreign material
+changes only who reads it.
+
+**Constraints a custom material inherits.**
+- A raw `ShaderMaterial` bypasses three's color pipeline: the fragment
+  shader must end with `#include <tonemapping_fragment>` and
+  `#include <colorspace_fragment>` or the texture renders washed out.
+- Declare the sampler uniform up front (`uMap: { value: null }`) and
+  assign the texture when it lands — no recompile. The
+  `material.needsUpdate` bump Surface performs for its own map-keyed
+  material is a built-in-material problem (three re-keys the program on
+  map presence); a shader with a pre-declared sampler doesn't have it.
+- The economics of decisions #17 carry over unchanged: drive uniforms
+  from conducted curves or per-frame refs, never from DOM animation
+  that would rasterize. The whole point is that the poles paint and
+  the flight is free.
+
+**Verified** (lab 011, Chrome 150): full enter+hold+exit toast
+lifecycle in 8 paints total (~110 unconducted); trace confirms the
+style engine's easing arrives through the conductor (0.817 at 53% of
+a 900ms ease-out flight); burn front with ember rim visible in both
+directions under trusted screenshots; idle 0 paints; forwarding intact
+(`hitTest="content"` composes — the ray still reads DOM occupancy, not
+the shader's discards).
+
+**Rejected.** (a) *An `onTexture` callback prop* — children already
+receive the mesh through `SurfaceContext`; the texture belongs beside
+it, and a hook keeps the wiring inside the tree that owns the
+material. (b) *`onBeforeCompile` on the built-in material* — keeps the
+standard lighting model wrapped around the effect and welds the
+shader to three's material internals; a clean slot is simpler and
+strictly more capable. (c) *Compositing DOM into a second canvas the
+shader reads* — an extra copy per paint for nothing; the
+`CanvasTexture` is already the shared substrate.

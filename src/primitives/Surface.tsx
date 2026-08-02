@@ -29,7 +29,9 @@ import { useLatest } from './useLatest'
 // subtree — so forwardEvents mirrors them as data-hover/data-active
 // attributes; author CSS with both selectors.
 
-export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children'> {
+// `material` is omitted from the mesh props because Surface owns the material
+// slot — the prop below redefines it as a mode, not an instance.
+export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children' | 'material'> {
   html: string
   /** Name for this surface in paint-stats diagnostics (window.__threeUI). */
   label?: string
@@ -117,6 +119,21 @@ export interface SurfaceProps extends Omit<ThreeElements['mesh'], 'children'> {
    * full-size container is scaffolding, not a thing to touch.
    */
   hitTest?: 'plane' | 'content'
+  /**
+   * Who owns the mesh's material.
+   *
+   * - `'standard'` (default) — Surface renders its own `MeshStandardMaterial`
+   *   with the DOM texture as its map, and handles the late-texture
+   *   needsUpdate bump itself.
+   * - `'none'` — Surface renders no material; the children supply one, and
+   *   read the texture through `useSurfaceTexture()`. This is the shader
+   *   seam: a custom `ShaderMaterial` sampling the live DOM can do to the
+   *   pixels what no CSS can — dissolve, refract, aberrate — while every
+   *   other Surface contract (paint-driven uploads, LOD re-rasters, input
+   *   forwarding) keeps working underneath it, because they act on the
+   *   texture and the mesh, not on the material.
+   */
+  material?: 'standard' | 'none'
 }
 
 // LOD evaluations run every Nth frame, phase-offset per Surface so a scene
@@ -180,6 +197,7 @@ export function Surface({
   metalness = 0.05,
   transparent = false,
   hitTest = 'plane',
+  material = 'standard',
   ...meshProps
 }: SurfaceProps) {
   const controls = useThree(
@@ -266,8 +284,8 @@ export function Surface({
   const lodPhase = useMemo(() => lodSeq++ % LOD_EVERY, [])
 
   const context = useMemo<SurfaceContextValue>(
-    () => ({ mesh: meshRef, source: sourceEl, width, height, mirrorU }),
-    [sourceEl, width, height, mirrorU],
+    () => ({ mesh: meshRef, source: sourceEl, width, height, mirrorU, texture }),
+    [sourceEl, width, height, mirrorU, texture],
   )
 
   // Inside a FocusGroup, this Surface is a composite focus member: its
@@ -582,15 +600,17 @@ export function Surface({
       }}
     >
       <SurfaceContext value={context}>{children}</SurfaceContext>
-      <meshStandardMaterial
-        ref={materialRef}
-        map={texture ?? undefined}
-        color={texture ? '#ffffff' : '#1e293b'}
-        roughness={roughness}
-        metalness={metalness}
-        side={side}
-        transparent={transparent}
-      />
+      {material === 'standard' && (
+        <meshStandardMaterial
+          ref={materialRef}
+          map={texture ?? undefined}
+          color={texture ? '#ffffff' : '#1e293b'}
+          roughness={roughness}
+          metalness={metalness}
+          side={side}
+          transparent={transparent}
+        />
+      )}
     </mesh>
   )
 }
