@@ -60,6 +60,9 @@ import '../lab014.css'
 import { cameraDistance, carryToPlane, planeScale, screenToPlane } from './lab014Camera'
 import { attachLab014Gestures } from './lab014Gestures'
 import {
+  aeroAmplitude,
+  aeroGate,
+  aeroReach,
   atRest,
   corners,
   makePlate,
@@ -261,12 +264,46 @@ function CardBody({ card, onChange, onGrab, hidden }: CardBodyProps) {
 // thing is tilted, since an unlit quad has no other way to say so.
 
 const CARD_VERT = /* glsl */ `
+  // The aero bend: the one thing on this card CSS could never draw. The
+  // plate is rigid in the physics; what bends is the SHEET, around the
+  // point the fingers pin, by an amount the driver derives from the plate's
+  // own velocity (aeroAmplitude — hard zero at rest, so both handoff swaps
+  // are geometrically flat by theorem). uAero packs (dir.x, dir.y,
+  // amplitude px, reach px); uAeroGrab is the held point in card-local px.
+  // The leading half catches more air than the trailing half — a swished
+  // card is not a symmetric parabola — and the normal is the ANALYTIC
+  // derivative of the same field, so the gloss band sweeps the flex
+  // instead of staying painted on.
+  uniform vec4 uAero;
+  uniform vec2 uAeroGrab;
   varying vec2 vUv;
   varying vec3 vN;
+  varying vec3 vNl;
   void main() {
     vUv = uv;
-    vN = normalize(mat3(modelMatrix) * normal);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec3 p = position;
+    vec2 dir = uAero.xy;
+    float amt = uAero.z;
+    float L = max(uAero.w, 1.0);
+    float s = dot(p.xy - uAeroGrab, dir);
+    float t = clamp(s / L, -1.0, 1.0);
+    float lead = max(t, 0.0);
+    float bow = t * t + 0.45 * lead * lead;
+    // TOWARD the camera (+z). The sign is load-bearing, not aesthetic:
+    // bowing away pushed the bent edges BEHIND the shadow plane at
+    // z = −0.5 during a fast throw home, and where two surfaces cross, the
+    // depth test flips per-pixel — a grainy seam marching along whichever
+    // edge led the throw. Bowing toward the viewer keeps every bent
+    // fragment strictly in front of the shadow at every altitude (a +z bow
+    // in the plate's frame can only RAISE a vertex's world z for any bank
+    // < 90°), so the carve (#58) can never fight its own card.
+    p.z += amt * bow;
+    // n = normalize(−∂z/∂x, −∂z/∂y, 1); ∂z/∂s = amt·(2t + 0.9·lead)/L.
+    float dzds = amt * (2.0 * t + 0.9 * lead) / L;
+    vec3 nl = normalize(vec3(-dzds * dir, 1.0));
+    vNl = nl;
+    vN = normalize(mat3(modelMatrix) * nl);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }
 `
 
@@ -274,8 +311,10 @@ const CARD_FRAG = /* glsl */ `
   ${SURFACE_RADIUS_GLSL}
   uniform sampler2D tMap;
   uniform float uGloss;
+  uniform float uFlex;
   varying vec2 vUv;
   varying vec3 vN;
+  varying vec3 vNl;
   void main() {
     vec4 c = texture2D(tMap, vUv);
     // A broad highlight from up and to the left, riding the surface normal.
@@ -290,6 +329,19 @@ const CARD_FRAG = /* glsl */ `
     float s = max(dot(vN, L), 0.0);
     float band = pow(s, 6.0) - pow(L.z, 6.0);
     c.rgb += uGloss * band;
+    // The band above rides the WORLD normal — it is the tilt cue, and it is
+    // ADDITIVE, which on a white card clips at white: the bend never read
+    // through it. This one rides the LOCAL bend normal (vNl — exactly
+    // (0,0,1) whenever the sheet is flat, at any plate tilt, so it is a
+    // curvature-only signal), and it can only DARKEN: the curled region
+    // turning away from the page light shades itself, and darkening is the
+    // only direction a white card can show. Multiplicative with a factor
+    // ≤ 1, so premultiplied alpha stays valid where the additive term
+    // hasn't already spent it.
+    vec3 nl = normalize(vNl);
+    float sl = max(dot(nl, L), 0.0);
+    float flexBand = pow(sl, 6.0) - pow(L.z, 6.0);
+    c.rgb *= min(1.0 + uFlex * flexBand, 1.0);
     // The element's corners, not the quad's. The texture can't say where the
     // card ends — the .ui-root background paints its corners opaque white —
     // so the measured border-radius is enforced analytically (crisp at any
@@ -310,17 +362,35 @@ const CARD_FRAG = /* glsl */ `
   }
 `
 
-function CardMaterial({ gloss = 0.5 }: { gloss?: number }) {
+/**
+ * The bend's shared state: the driver writes these objects every frame and
+ * the material's uniforms hold the SAME objects, so there is no per-frame
+ * plumbing and no React in the loop. pack = (dir.x, dir.y, amplitude px,
+ * reach px); grab = the held point, card-local px.
+ */
+export interface AeroState {
+  pack: THREE.Vector4
+  grab: THREE.Vector2
+}
+
+function CardMaterial({ gloss = 0.5, aero }: { gloss?: number; aero: AeroState }) {
   const texture = useSurfaceTexture()
   const { chrome, width, height } = useSurfaceChrome()
   const uniforms = useMemo(
     () => ({
       tMap: { value: null as THREE.Texture | null },
       uGloss: { value: gloss },
+      // Gain on the curvature shade. The bend's normals only swing ~10-15°,
+      // so the pow-6 band needs amplification to move a white pixel a
+      // readable ~20 counts; the term is identically zero when flat, so
+      // this number never touches a resting card.
+      uFlex: { value: 2.5 },
       uThreeUiRadii: { value: new THREE.Vector4(0, 0, 0, 0) },
       uThreeUiSize: { value: new THREE.Vector2(1, 1) },
+      uAero: { value: aero.pack },
+      uAeroGrab: { value: aero.grab },
     }),
-    [gloss],
+    [gloss, aero],
   )
   uniforms.tMap.value = texture ?? null
   const radii = chrome?.radii ?? [0, 0, 0, 0]
@@ -451,6 +521,8 @@ interface DriverProps {
   onAltitude: (hi: boolean) => void
   /** The card's measured chrome — the shadow's h = 0 truth (see the shader). */
   chromeRef: React.RefObject<SurfaceChrome | null>
+  /** The bend field's shared uniforms — driver writes, CardMaterial holds. */
+  aero: AeroState
 }
 
 const FLAT = new THREE.Quaternion()
@@ -507,10 +579,14 @@ function Driver({
   density,
   onAltitude,
   chromeRef,
+  aero,
 }: DriverProps) {
   const size = useThree((s) => s.size)
   const camera = useThree((s) => s.camera)
   const dpr = useThree((s) => s.viewport.dpr)
+  // The bend's smoothed state. A ref, not module scratch: it must start at
+  // zero for EVERY flight, and Driver mounts once per flight.
+  const aeroSm = useRef({ amt: 0, dir: new THREE.Vector2(1, 0) })
 
   useFrame((_, rawDt) => {
     const f = flight.current
@@ -622,6 +698,39 @@ function Driver({
         group.quaternion.slerp(FLAT, settle)
         group.scale.set(1 + settle * (sx - 1), 1 + settle * (sy - 1), 1)
       }
+    }
+
+    // ── the aero bend: the sheet reads the plate's own velocity ──
+    //
+    // Direction smooths with a fast time constant and only updates while
+    // there is real motion (a near-zero velocity has no direction worth
+    // following); amplitude chases aeroAmplitude's saturating curve, rising
+    // faster than it falls — paper snaps against the air and relaxes out of
+    // it. The curve's hard zero below 30 px/s makes "flat at rest" a
+    // property of the field, not of how far some decay happened to get:
+    // by the time the settle blend can engage (speed < ~30), the target is
+    // exactly 0 and the residue is milli-pixels on its way down.
+    {
+      const sm = aeroSm.current
+      const vx = f.plate.v.x
+      const vy = f.plate.v.y
+      const speed = Math.hypot(vx, vy)
+      if (speed > 40) {
+        const k = 1 - Math.exp(-dt / 0.05)
+        sm.dir.x += (vx / speed - sm.dir.x) * k
+        sm.dir.y += (vy / speed - sm.dir.y) * k
+        sm.dir.normalize()
+      }
+      const target = aeroAmplitude(speed)
+      const tau = target > sm.amt ? 0.06 : 0.12
+      sm.amt += (target - sm.amt) * (1 - Math.exp(-dt / tau))
+      const reach = aeroReach(sm.dir.x, sm.dir.y, f.w, f.h, f.hold.x, f.hold.y)
+      // Rendered amplitude = smoothed · gate. The smoother gives continuity;
+      // the gate gives the theorem — exactly 0 through the settle band, so
+      // the swap frame is flat even when the descent outruns the decay
+      // (measured: 0.45 px still aboard at touchdown without this).
+      aero.pack.set(sm.dir.x, sm.dir.y, sm.amt * aeroGate(speed), reach)
+      aero.grab.set(f.hold.x, f.hold.y)
     }
 
     // ── the shadow, from the plate's own corners ──
@@ -826,6 +935,14 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
   // state: the only consumer is the Driver's per-frame uniform write.
   const chromeRef = useRef<SurfaceChrome | null>(null)
 
+  // The bend field's shared objects: Driver mutates them in place, the
+  // material's uniforms hold the very same references. Amplitude starts at
+  // 0 — a card is born flat.
+  const aero = useMemo<AeroState>(
+    () => ({ pack: new THREE.Vector4(1, 0, 0, 1), grab: new THREE.Vector2() }),
+    [],
+  )
+
   return (
     <>
       <Driver
@@ -838,6 +955,7 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
         density={density}
         onAltitude={onAltitude}
         chromeRef={chromeRef}
+        aero={aero}
       />
 
       {/* The shadow may not exist before the card does. On the first r3f
@@ -892,8 +1010,12 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
           }}
           content={<CardBody card={card} onChange={onChange} />}
         >
-          <planeGeometry args={[f.w, f.h]} />
-          <CardMaterial />
+          {/* Segments are the bend's resolution: 32×12 puts a vertex every
+              ~16 px on a 514-wide card, enough for the parabolic bow to
+              read as a curve rather than a crease. A flat card renders
+              identically at any tessellation. */}
+          <planeGeometry args={[f.w, f.h, 32, 12]} />
+          <CardMaterial aero={aero} />
         </SurfaceApp>
       </group>
     </>

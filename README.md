@@ -3458,3 +3458,37 @@ notches keep their fringe because the radius mask discards there and
 writes no depth. The strip probe agrees with the DOM to within 4
 counts at every column, and the at-rest profile is monotonic again:
 border, then paper. decisions.md #58.
+
+## the card learns it is paper
+
+Pete's verdict on the flight card was the right kind of harsh: "it
+looks like something you could fake with CSS with enough time." Fair —
+a rigid rectangle tilting under a shadow is a transform and a
+box-shadow. So the card stops being rigid. A bow field around the
+pinned grab point, amplitude from the plate's own velocity, the leading
+half catching more air than the trailing, normals the analytic
+derivative of the bow — and the physics never learns, because the sheet
+is presentation the same way the rest-snap is: dynamics annotated,
+never altered.
+
+The first build failed twice, instructively, and both reports had one
+root. "i'm not seeing the card geometry actually change at all" — and
+"grainy artifacts on the card edges corresponding with the direction
+that i threw it." The bow aimed straight down the camera axis, away
+from the viewer: a pure away-bow is nearly invisible head-on (~2% of
+perspective at the edges), and it pushed the bent leading edge behind
+the shadow plane during a fast descent, where the depth test flips
+per-pixel. The only thing the bend visibly did was grain. Flip the sign
+and both die together — edges lifting toward the camera bulge the
+silhouette, and a +z bow can never reach behind the shadow, so the #58
+carve cannot fight its own card.
+
+The other half of invisibility: the gloss band is additive, and a white
+card clips at white. Darkening is the only direction paper can show. So
+the bend carries its own multiplicative shade on the local bend normal
+— zero whenever the sheet is flat, at any tilt — and the curl now
+throws a sweeping shadow across its own face. The swap stays a theorem
+throughout: rendered amplitude is smoothed × gate, hard zero below
+30 px/s, because the smoother alone left 0.45 px of bend aboard at
+touchdown. Trace: peak 17 px mid-sweep, settle tail exactly 0, descent
+regime clean. decisions.md #59.

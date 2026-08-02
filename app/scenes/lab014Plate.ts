@@ -422,3 +422,65 @@ export function shadowQuadFrame(
   }
   return out
 }
+
+// ── aero bend — the sheet against the air ────────────────────────────────
+//
+// Presentation only, like the gloss band: the plate stays rigid in the
+// physics and the BEND is a vertex-shader field driven by the plate's own
+// velocity. The two functions below are the JS side of that field's
+// contract, kept pure so the tests can hold them still.
+
+/**
+ * Bend amplitude (px of out-of-plane sag at the far edge) for a plate
+ * moving at `speed` px/s.
+ *
+ * Shape: a saturating square law with a HARD zero below 30 px/s. The
+ * saturation is paper — a hand can always move faster, the sheet cannot
+ * bend more. The hard gate is the handoff contract: the swap instants
+ * happen at rest, and "flat at rest" must be a property of the curve, not
+ * of how quickly some smoothing happened to decay. Between 30 and 90 px/s
+ * the gate ramps in so the first pixel of bend cannot pop.
+ */
+export function aeroAmplitude(speed: number): number {
+  const AMP = 22 // px, the cap — tuned by eye against real card stock
+  const V0 = 900 // px/s, half-saturation speed
+  const gate = aeroGate(speed)
+  if (gate === 0) return 0
+  const s2 = speed * speed
+  return AMP * (s2 / (s2 + V0 * V0)) * gate
+}
+
+/**
+ * The hard-zero gate, exported on its own because the driver needs it
+ * twice: once inside `aeroAmplitude` (the target), and once on the
+ * RENDERED amplitude — smoothed · gate — so the settle can never carry a
+ * decay tail into the swap frame (measured: 0.45 px still aboard at
+ * touchdown when only the target was gated; the descent outruns a 120 ms
+ * time constant). One formula, one place.
+ */
+export function aeroGate(speed: number): number {
+  return Math.min(1, Math.max(0, (speed - 30) / 60))
+}
+
+/**
+ * Farthest |signed distance| of the card rect's corners from the grab
+ * point, measured along the (unit) motion direction. This is the `L` that
+ * normalizes the shader's bend parameter to t ∈ [−1, 1]: the support
+ * function of the rect (|dx|·w/2 + |dy|·h/2) plus the grab point's own
+ * offset along the direction — exact, not an estimate, so the far edge of
+ * the sheet always lands at |t| = 1 no matter where it is held.
+ */
+export function aeroReach(
+  dirX: number,
+  dirY: number,
+  w: number,
+  h: number,
+  grabX: number,
+  grabY: number,
+): number {
+  return (
+    (Math.abs(dirX) * w) / 2 +
+    (Math.abs(dirY) * h) / 2 +
+    Math.abs(dirX * grabX + dirY * grabY)
+  )
+}

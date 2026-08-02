@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { atRest, HAND, makePlate, makeShadowFrame, shadowQuadFrame, stepFree, stepHeld } from './lab014Plate'
+import {
+  aeroAmplitude,
+  aeroGate,
+  aeroReach,
+  atRest,
+  HAND,
+  makePlate,
+  makeShadowFrame,
+  shadowQuadFrame,
+  stepFree,
+  stepHeld,
+} from './lab014Plate'
 
 const DT = 1 / 120
 const FLAT = new THREE.Quaternion()
@@ -308,6 +319,75 @@ describe('shadow quad frame — the mapping never lies', () => {
     for (const v of out.verts) {
       expect(Number.isFinite(v.x)).toBe(true)
       expect(Number.isFinite(v.y)).toBe(true)
+    }
+  })
+})
+
+describe('aero bend — flat at rest is a theorem, not a tuning', () => {
+  it('a still card is EXACTLY flat, and stays flat through the gate band', () => {
+    // The swap instants happen at rest. If the amplitude curve leaked even a
+    // fraction of a pixel at speed 0, the landing card would be bent while
+    // the DOM card is flat, and the handoff would pop. Zero must be exact.
+    expect(aeroAmplitude(0)).toBe(0)
+    expect(aeroAmplitude(15)).toBe(0)
+    expect(aeroAmplitude(30)).toBe(0)
+  })
+
+  it('rises monotonically with speed and saturates below its cap', () => {
+    let prev = 0
+    for (const s of [60, 120, 300, 600, 1200, 2400, 5000]) {
+      const a = aeroAmplitude(s)
+      expect(a).toBeGreaterThanOrEqual(prev)
+      prev = a
+    }
+    // A hand can always move faster; the sheet cannot bend more than paper.
+    expect(aeroAmplitude(1e6)).toBeLessThanOrEqual(24)
+  })
+
+  it('reach is the exact corner support along the motion direction', () => {
+    // Brute force over the four corners is the definition; the closed form
+    // must agree, including from an off-centre grab point.
+    const w = 514
+    const h = 157.5
+    const cases = [
+      { d: [1, 0], g: [0, 0] },
+      { d: [0, 1], g: [0, 0] },
+      { d: [0.6, 0.8], g: [120, -40] },
+      { d: [-0.28, 0.96], g: [-200, 60] },
+    ] as const
+    for (const { d, g } of cases) {
+      let brute = 0
+      for (const cx of [-w / 2, w / 2])
+        for (const cy of [-h / 2, h / 2])
+          brute = Math.max(brute, Math.abs((cx - g[0]) * d[0] + (cy - g[1]) * d[1]))
+      expect(aeroReach(d[0], d[1], w, h, g[0], g[1])).toBeCloseTo(brute, 10)
+    }
+  })
+})
+
+describe('aero gate — the rendered bend is zero at the swap by construction', () => {
+  it('gates to exactly 0 below 30 px/s no matter what the smoother holds', () => {
+    // The smoothed amplitude decays with a time constant; the descent can
+    // outrun it (measured: 0.45 px still aboard at the swap). The RENDERED
+    // amplitude is smoothed · gate(speed), and the gate is exactly 0 through
+    // the whole settle band — so the swap frame is flat even if the
+    // smoother is mid-decay.
+    expect(aeroGate(0)).toBe(0)
+    expect(aeroGate(29.9)).toBe(0)
+    expect(aeroGate(30)).toBe(0)
+    expect(aeroGate(90)).toBe(1)
+    expect(aeroGate(60)).toBeCloseTo(0.5, 10)
+    for (const s of [40, 55, 70, 85]) {
+      const g = aeroGate(s)
+      expect(g).toBeGreaterThan(0)
+      expect(g).toBeLessThan(1)
+    }
+  })
+
+  it('aeroAmplitude is the gated curve — the two cannot disagree', () => {
+    for (const s of [0, 20, 45, 100, 800, 3000]) {
+      const raw = s * s === 0 ? 0 : 22 * ((s * s) / (s * s + 900 * 900))
+      expect(aeroAmplitude(s)).toBeCloseTo(raw * aeroGate(s), 10)
     }
   })
 })

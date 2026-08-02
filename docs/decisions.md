@@ -2836,3 +2836,69 @@ the post-swap DOM screenshot: ≤ 4 counts at the border column, ≤ 1
 count everywhere else, dip gone. At altitude the carve is true
 occlusion — the card hides the part of its displaced shadow that lies
 behind it along the view ray, which blending never got right either.
+
+## 59. The aero bend: rendered flatness is a theorem, the bow faces the camera, curvature shade can only darken (2026-08-02, lab 014)
+
+**Decision.** The airborne card stops being a rigid slab. A vertex-field
+bow around the pinned grab point: amplitude derived from the plate's own
+velocity (`aeroAmplitude` — saturating square law, cap 22 px,
+half-saturation 900 px/s), direction smoothed above 40 px/s, the leading
+half catching more air than the trailing (bow = t² + 0.45·lead², t
+normalized by `aeroReach`, the exact corner support so the far edge
+always lands at |t| = 1), normals the ANALYTIC derivative of the same
+field. The physics never learns: the plate stays rigid, the SHEET is
+presentation — the same split as REST-SNAP (#49), dynamics annotated,
+never altered. Driver and material share mutable uniform objects
+(`AeroState`); no React in the loop, no per-frame plumbing.
+
+Three rules, each paid for in a measurement:
+
+**1. Flatness at the swap is enforced on the RENDERED value, not the
+smoother's target.** The amplitude smoother (rise 0.06 s, fall 0.12 s)
+gives continuity; the hard gate (`aeroGate`, zero below 30 px/s, ramp to
+90) gives the theorem — and it must multiply the OUTPUT. Gating only the
+target is not enough: a thrown card's descent outruns a 120 ms fall
+constant, and the trace showed 0.45 px of bow still aboard at touchdown —
+a bent card swapping for a flat DOM element. Rendered amplitude =
+smoothed × gate rides the physical deceleration (speed crosses the ramp
+smoothly, so nothing pops), and the re-trace reads amt = 0 exactly on
+every settle frame (speed 21 → 4, h 2 → 0).
+
+**2. The bow faces the CAMERA (+z), and the sign is load-bearing, not
+aesthetic.** The first build bowed away, and the only thing the bend
+visibly did was an artifact: during a fast throw home the descending
+card's bent leading edge crossed the shadow plane at z = −0.5, and where
+two surfaces nearly touch, the depth test flips per-pixel — Pete:
+"grainy artifacts on the card edges corresponding with the direction
+that I threw it." Bowing toward the viewer makes the conflict
+geometrically impossible — a +z bow in the plate's frame can only RAISE
+a vertex's world z for any bank < 90° — so the #58 carve can never fight
+its own card. It also buys the look: edges lifting toward a perspective
+camera bulge the silhouette outward, and the card finally LOOKS bent
+instead of merely being bent down the view axis (a pure away-bow moves
+the silhouette ~2% — Pete: "i'm not seeing the card geometry actually
+change at all").
+
+**3. On a white card, curvature shading can only darken.** The gloss
+band is ADDITIVE on the world normal — it is the tilt cue, and white
+clips at white: rgb ≈ 240 plus anything is invisible. The bend gets its
+own term riding the LOCAL bend normal (`vNl` — identically (0,0,1)
+whenever the sheet is flat, at ANY plate tilt: a curvature-only signal
+the tilt can't contaminate), applied MULTIPLICATIVELY with factor ≤ 1:
+the curled region turning away from the page light shades itself, and a
+240-white pixel falls ~20 counts along a sweeping gradient.
+Premultiplied alpha survives any factor ≤ 1 by construction. Same band
+shape as the tilt cue (pow-6 minus its rest bias, so zero-at-flat is
+exact), gain ×2.5 because bend normals only swing ~10–15°.
+
+**Measured (2026-08-02, dpr 1, in-loop captures).** Peak amt 17.09 px
+through a daemon sweep, direction tracking every turn; 16k px/s
+command-jump spikes smoothed into gradual growth (the square law +
+smoother never snap); descent capture in the exact artifact regime (mode
+home, h 39, amt 2.8) shows clean edges, no speckle; full settle tail
+amt = 0. The captures come from INSIDE a wrapped `gl.render` —
+`drawImage` from the WebGL canvas into a crop, same #54 rule as
+`readPixels`: daemon screenshots land seconds late and always miss the
+burst. Paint contract untouched: the bend is uniforms + vertex work on
+the already-uploaded texture — zero additional paints at any phase, 32×12
+segments only so the bow has vertices to spend.
