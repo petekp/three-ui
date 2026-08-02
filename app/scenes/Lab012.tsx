@@ -6,15 +6,29 @@ import { SurfaceApp, useSurfaceTexture } from 'three-ui'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  GlassSdfCompositor,
+  SdfGlassPanel,
+  sdfPanelLabels,
+  sdfPanelParams,
+} from './lab012Glass'
 
-// Lab 012 — the glass spike.
+// Lab 012 — the glass spike, and then the compositor that replaced it.
 //
 // Question under test: can a Surface wear a physically-based glass material
 // (the "liquid glass" direction) while its DOM stays legible and live, and
 // does refraction survive MULTIPLE levels of depth — glass in front of glass
 // in front of a bright wall?
 //
-// Architecture per glass panel, all through the lab-011 material-slot seam:
+// TWO ANSWERS, both live. `?glass=mtm` (or `__lab012.setMode('mtm')`) runs
+// inc 1: real extruded geometry wearing drei's MeshTransmissionMaterial, one
+// scene render per panel. `?glass=sdf` (the default) runs inc 2: no glass
+// geometry at all — one scene render, then one screen-space pass per panel
+// that intersects the eye ray with the panel's plane and evaluates a rounded
+// rect as a distance field there. See lab012Glass.tsx / lab012Sdf.ts. The
+// switch exists so the comparison is a console call, not a git checkout.
+//
+// Architecture per MTM glass panel, all through the lab-011 material-slot seam:
 //   - `material="none"` Surface wearing drei's MeshTransmissionMaterial on
 //     an extruded rounded-rect (flat faces, rounded corner EDGES — a card,
 //     not a soap bar). The glass body never samples the DOM.
@@ -183,7 +197,7 @@ function GlassInk({ w, h, depth }: { w: number; h: number; depth: number }) {
   )
 }
 
-interface GlassPanelProps {
+interface MtmGlassPanelProps {
   label: string
   width: number
   height: number
@@ -196,7 +210,7 @@ interface GlassPanelProps {
   rotation?: [number, number, number]
 }
 
-function GlassPanel({
+function MtmGlassPanel({
   label,
   width,
   height,
@@ -206,7 +220,7 @@ function GlassPanel({
   content,
   position,
   rotation,
-}: GlassPanelProps) {
+}: MtmGlassPanelProps) {
   const geo = useMemo(
     () => roundedRectGeometry(width / PX, height / PX, radius, depth),
     [width, height, radius, depth],
@@ -381,20 +395,50 @@ function WallArt() {
 
 // ---- the scene ----------------------------------------------------------
 
+type GlassMode = 'mtm' | 'sdf'
+
 export function Lab012() {
   // Per-panel square-buffer overrides (0/absent = viewport-matched). State,
   // not a ref: a change must re-render the panel so useFBO can resize.
   const [resOverride, setResOverride] = useState<Record<string, number>>({})
+  const [mode, setMode] = useState<GlassMode>(() =>
+    new URLSearchParams(window.location.search).get('glass') === 'mtm' ? 'mtm' : 'sdf',
+  )
 
   useEffect(() => {
     ;(window as unknown as { __lab012?: object }).__lab012 = {
+      mode: () => mode,
+      setMode: (next: GlassMode) => {
+        setMode(next === 'mtm' ? 'mtm' : 'sdf')
+        return `glass mode: ${next}`
+      },
+      // One verb, two backends: in `sdf` mode the knobs are plain numbers on
+      // a per-panel params object the compositor reads each frame; in `mtm`
+      // mode they are properties on a MeshTransmissionMaterial. Same call.
       set: (key: string, value: GlassKnobs[string]) => {
+        if (mode === 'sdf') {
+          let n = 0
+          for (const label of sdfPanelLabels()) {
+            const p = sdfPanelParams(label)
+            if (p) {
+              ;(p as unknown as GlassKnobs)[key] = value
+              n++
+            }
+          }
+          return `set ${key}=${value} on ${n} sdf panels`
+        }
         for (const m of glassMaterials.values()) {
           ;(m as unknown as GlassKnobs)[key] = value
         }
         return `set ${key}=${value} on ${glassMaterials.size} materials`
       },
       setFor: (label: string, key: string, value: GlassKnobs[string]) => {
+        if (mode === 'sdf') {
+          const p = sdfPanelParams(label)
+          if (!p) return `no sdf panel: ${label}`
+          ;(p as unknown as GlassKnobs)[key] = value
+          return `set ${key}=${value} on ${label}`
+        }
         const m = glassMaterials.get(label)
         if (!m) return `no material: ${label}`
         ;(m as unknown as GlassKnobs)[key] = value
@@ -406,9 +450,11 @@ export function Lab012() {
           ? `square ${px}px buffer for ${label}`
           : `viewport-matched buffer for ${label}`
       },
-      labels: () => [...glassMaterials.keys()],
+      labels: () => (mode === 'sdf' ? sdfPanelLabels() : [...glassMaterials.keys()]),
       params: (label?: string) => {
-        const m = glassMaterials.get(label ?? 'lab012-card')
+        const l = label ?? 'lab012-card'
+        if (mode === 'sdf') return sdfPanelParams(l)
+        const m = glassMaterials.get(l)
         if (!m) return null
         const u = m as unknown as Record<string, unknown>
         return {
@@ -422,10 +468,14 @@ export function Lab012() {
         }
       },
     }
-  }, [])
+  }, [mode])
 
   return (
     <>
+      {/* The compositor's passes end in an opaque blit, so the canvas can no
+          longer show the page through it. Painting the same colour the CSS
+          behind it uses (#0a0b0e) keeps both modes pixel-comparable. */}
+      <color attach="background" args={['#0a0b0e']} />
       <fog attach="fog" args={['#101014', 12, 30]} />
       <ambientLight intensity={0.45} />
       <directionalLight position={[4, 7, 5]} intensity={1.4} castShadow />
@@ -457,29 +507,57 @@ export function Lab012() {
         <meshStandardMaterial color="#38bdf8" roughness={0.2} metalness={0.1} />
       </mesh>
 
-      {/* Layer 2 — the glass card */}
-      <GlassPanel
-        label="lab012-card"
-        width={CARD_W}
-        height={CARD_H}
-        resolution={resOverride['lab012-card'] || undefined}
-        position={[0, 1.7, 0.9]}
-        content={<SignInForm />}
-      />
-
-      {/* Layer 3 — the glass pill, overlapping the card in screen space */}
-      <GlassPanel
-        label="lab012-pill"
-        width={PILL_W}
-        height={PILL_H}
-        radius={0.18}
-        depth={0.1}
-        resolution={resOverride['lab012-pill'] || undefined}
-        position={[0.42, 1.62, 1.5]}
-        content={<PillChip />}
-      />
-
-      <GlassBufferCoordinator />
+      {/* Layers 2 and 3 — the glass card, and a pill overlapping it in
+          screen space. The pill's refraction must show the card's glass AND
+          its ink AND the wall behind both: that is the multi-level verdict,
+          and it is the one thing both backends have to agree on. */}
+      {mode === 'sdf' ? (
+        <>
+          <SdfGlassPanel
+            label="lab012-card"
+            width={CARD_W}
+            height={CARD_H}
+            px={PX}
+            position={[0, 1.7, 0.9]}
+            content={<SignInForm />}
+          />
+          <SdfGlassPanel
+            label="lab012-pill"
+            width={PILL_W}
+            height={PILL_H}
+            px={PX}
+            // A pill is all corner: radius = half its height, and a bezel
+            // narrow enough that the caps still have a flat middle to look
+            // through.
+            params={{ radius: PILL_H / PX / 2, bezel: 0.11, thickness: 0.11 }}
+            position={[0.42, 1.62, 1.5]}
+            content={<PillChip />}
+          />
+          <GlassSdfCompositor lightDir={[4, 7, 5]} />
+        </>
+      ) : (
+        <>
+          <MtmGlassPanel
+            label="lab012-card"
+            width={CARD_W}
+            height={CARD_H}
+            resolution={resOverride['lab012-card'] || undefined}
+            position={[0, 1.7, 0.9]}
+            content={<SignInForm />}
+          />
+          <MtmGlassPanel
+            label="lab012-pill"
+            width={PILL_W}
+            height={PILL_H}
+            radius={0.18}
+            depth={0.1}
+            resolution={resOverride['lab012-pill'] || undefined}
+            position={[0.42, 1.62, 1.5]}
+            content={<PillChip />}
+          />
+          <GlassBufferCoordinator />
+        </>
+      )}
     </>
   )
 }

@@ -2584,3 +2584,90 @@ pin had, `generateMipmaps` false, `minFilter` back to Linear. The
 demo's Surfaces ride auto again; the pin remains in the API for what
 it actually buys — memory determinism and no mid-shot re-rasters — at
 a price that is now measured and written down. Decisions #37.
+
+## lab 012 inc 2 — the glass stops being a mesh
+
+The spike left one thing open, and #34 said so out loud: N panels cost
+N scene renders per frame. MTM refracts by sampling a screen-space
+buffer, so every panel needs its own, with itself and everything in
+front of it hidden — plus the ordering rule that keeps a panel from
+refracting things it stands in front of. Increment 2 pays that debt by
+deleting the geometry.
+
+**What a panel is now.** Nothing. The mesh survives only as something
+to raycast: `material="none"`, a plain quad, `material.visible =
+false` — three skips the draw call in `renderObjects`, the raycaster
+never looks at the flag, and pointer forwarding keeps the proper plane
+UVs it has always needed. The pixels come from somewhere else
+entirely. Once per frame the scene renders into one HalfFloat target
+with a depth texture attached; then each panel is a full-screen pass
+that, per pixel, rebuilds the eye ray, intersects it with **that
+panel's own plane**, and evaluates a rounded-rect SDF in panel-local
+2D. The panel keeps an arbitrary 3D pose — the distance field lives in
+the panel's frame, not in screen space, which is the difference
+between a UI trick and something you can orbit.
+
+Everything falls out of the distance. Coverage is
+`smoothstep` across `fwidth(d)` — exact analytic antialiasing, no MSAA
+on the panel at all. The bezel is a height field *over* the distance
+(a quarter-circle profile rising from the outline over `bezel` world
+units), so the lens normal is the SDF's gradient tilted by that
+profile's slope: a rim with no vertices in it, no `curveSegments`, and
+a corner radius that is a uniform rather than a rebuild. Refraction
+walks the bent ray a short distance and re-projects it to screen — one
+loop buys dispersion and frost together, each tap stepping an ior
+across `ior ± chroma` while jittering on a golden-angle spiral.
+
+**The ordering rule from #34 is gone, not reimplemented.** The passes
+ping-pong far→near, so a panel samples the composite of everything
+already laid down behind it — glass, ink and world. Multi-level
+refraction stopped being a feature and became the shape of the loop.
+
+Two things the shader got wrong, and looking fixed both. The frost
+*widened* toward the rim, which turned every bezel into a soft white
+halo — exactly backwards: frost belongs to the flat glass, and the rim
+is where the lens does its work, so the profile now eases off as the
+bezel takes over. And the hairline was 55% of the bezel wide, which is
+not a hairline but a chunky white border; at 14% it reads as an edge.
+
+**The cost, honestly.** At the lab's own size both paths sit on vsync
+and are indistinguishable — 8.3 ms, 120 fps, either one. The
+`EXT_disjoint_timer_query_webgl2` numbers are worse than useless here:
+GPU-ms *fell* as triangle count rose 100×, so the query is pacing with
+the frame, not with the work. What does hold is the submission ledger,
+identical in shape at every scene size: **MTM submits 1.95× the draw
+calls and 1.95× the triangles.** Empty scene, 41 calls / 105 k tris
+against 20 / 42.8 k. With 200 ballast knots, 1 523 / 9.21 M against
+782 / 4.72 M. (The ratio is under 3 because drei's `ContactShadows`
+renders the scene too, and both paths pay it.)
+
+Push past the vsync ceiling and the ledger turns into frames. At 1 600
+ballast knots — 72.5 M triangles a frame for MTM against 37.3 M for the
+compositor — MTM falls to **102 fps** while the compositor is still
+pinned at **119.9**. The win was never the intercept; it's the slope.
+MTM's cost is panels × scene, the compositor's is panels × pixels, and
+a UI scene is small and a viewport is fixed.
+
+What had to be earned back: occlusion. The mesh path got it free from
+the depth buffer; the compositor rejects per pixel against the
+resolved depth texture instead. Verified by parking the torus knot in
+front of both panels — glass and ink cut exactly at its silhouette,
+both visible again through its holes. And the thesis survived the
+rewrite intact: a click at the projected screen position of the email
+field landed native focus on `#l12-email` through an invisible proxy,
+typing came out crisp on the glass, and after blur the card's paint
+counter froze at 107 across four seconds. Idle Surfaces still cost
+nothing; the caret's ~2 paints/s while focused is the only traffic.
+
+Both paths stay live and switchable — `?glass=mtm`, or
+`__lab012.setMode('mtm')` — because the comparison is the evidence.
+Footnote paid on the way past: three already forces `NoToneMapping`
+for any render into a target (`WebGLPrograms.js:176`), so the spike's
+manual save/restore was belt-and-braces. The compositor leans on it
+deliberately — every pass runs in linear HalfFloat and tone mapping
+happens exactly once, in the blit. Decisions #38.
+
+Still open, and now cheap: the *liquid* part. Two panels that merge
+instead of overlap is a smooth-min union of two distance fields — a
+handful of lines in a shader that already speaks distance, and
+impossible in the mesh path at any price.

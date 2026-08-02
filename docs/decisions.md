@@ -1709,3 +1709,87 @@ tier tracker inside the filter policy to save a feature whose remaining
 value — determinism — doesn't want it. If a shot needs no re-rasters,
 it accepts the trilinear tax; that trade is now a documented property
 of pinning, not a bug.
+
+## 38. The glass is a distance field, not a mesh — one scene render, N screen-space passes (2026-08-01, lab 012 inc 2)
+
+**Decision.** A glass panel renders no geometry. The mesh stays only
+to be raycast (`material="none"` + a plain quad + `material.visible =
+false`: `WebGLRenderer.renderObjects` skips the draw, the raycaster
+ignores the flag, pointer forwarding keeps proper plane UVs). Pixels
+come from a compositor that takes the render loop over (`useFrame`
+priority 1 stops r3f auto-rendering) and runs: scene → one HalfFloat
+target with a depth texture, panels hidden; then far→near, one
+full-screen pass per panel ping-ponging between two targets; then one
+blit to screen. Per pixel a pass rebuilds the eye ray, intersects the
+panel's OWN plane, and evaluates a rounded-rect SDF in panel-local 2D
+— so the panel keeps an arbitrary 3D pose while the field stays in its
+frame.
+
+**What the distance replaces.** Coverage = `smoothstep` over
+`fwidth(d)`: exact analytic AA, no MSAA on the panel. The bezel is a
+height field over `d` (quarter-circle profile over `bezel` world
+units); the lens normal is the SDF gradient tilted by that profile's
+slope — no vertices, no `curveSegments`, corner radius is a uniform.
+One sample loop buys dispersion and frost together (each tap steps an
+ior across `ior ± chroma` and jitters on a golden-angle spiral,
+weighted by a spectral response and normalised, so `chroma = 0`
+degrades to a plain blur rather than a tinted one).
+
+**This deletes #34's ordering rule rather than reimplementing it.**
+Passes ping-pong far→near, so a panel samples the composite of
+everything already behind it — glass, ink and world. Multi-level
+refraction is the shape of the loop. Ink composites inside the same
+pass at panel-local UV (premultiplied, per #36 — `glass*(1-a) + rgb`
+is the shader spelling of One/OneMinusSrcAlpha), which also clips it
+to the same coverage that drew the glass.
+
+**Colour pipeline.** Everything composites in linear HalfFloat; tone
+mapping and the sRGB transfer happen once, in the blit, via
+`<tonemapping_fragment>` + `<colorspace_fragment>` (available because
+the passes are `ShaderMaterial`, not `RawShaderMaterial`). Related
+correction: three already forces `NoToneMapping` for any render into a
+target (`WebGLPrograms.js:176`) — the spike's manual save/restore in
+`GlassBufferCoordinator` was belt-and-braces, not load-bearing.
+
+**Two look bugs, both from the same wrong instinct.** (a) Frost scaled
+*up* toward the rim → every bezel became a soft white halo. Frost
+belongs to the flat glass; the rim is where the lens works. Profile
+inverted. (b) The edge hairline ran over 55% of the bezel → a chunky
+white border. At 14% it reads as an edge. Both were invisible in
+reasoning and obvious in a screenshot.
+
+**Measured** (lab 012, Chrome, 1280×720, 2 panels, `?glass=` A/B live).
+Submission ledger, identical in shape at every scene size: MTM submits
+**1.95× the draw calls and 1.95× the triangles** (empty: 41 / 105 k vs
+20 / 42.8 k; +200 ballast knots: 1 523 / 9.21 M vs 782 / 4.72 M — under
+3× because `ContactShadows` renders the scene too and both paths pay
+it). At the lab's own size both sit on vsync (8.3 ms). Past the
+ceiling the ledger becomes frames: at 1 600 ballast knots (72.5 M vs
+37.3 M tris/frame) MTM falls to **102 fps**, the compositor holds
+**119.9**. Occlusion, earned back by hand against the resolved depth
+texture, cuts glass and ink exactly at a torus knot parked in front and
+shows both through its holes. Click at the field's projected screen
+position landed native focus on `#l12-email` through the invisible
+proxy; typing came out crisp; after blur the card's paint counter froze
+at 107 over 4 s (idle 0 paints/s; ~2/s while a caret blinks).
+
+**Note on the timer query.** `EXT_disjoint_timer_query_webgl2` was
+useless here — reported GPU-ms *fell* as triangle count rose 100×, so
+it paces with the frame, not the work. Ratios from it (~1.7× MTM) are
+not evidence; the call/triangle ledger and the past-vsync frame times
+are.
+
+**Rejected.** (a) *Keeping MTM and sharing one buffer across panels* —
+restores the #34 ghosting the coordinator fixed, and still costs a
+scene render. (b) *Screen-space rounded rects (camera-facing panels)* —
+cheaper, but surrenders the orbit, which is the whole thesis. (c) *Ink
+as a real mesh drawn after the composite* — it would have to leave the
+main scene to sit above glass that is composited later; sampling it in
+the pass at panel-local UV is one texture read and clips to coverage
+for free. (d) *Scissoring each pass to the panel's screen bounds* —
+correct optimisation, wrong increment: full-screen ping-pong is pure
+fill and the ledger above says fill is not what's expensive yet.
+
+**Open.** The *liquid* part: two panels that merge rather than overlap
+is a smooth-min union of two distance fields — cheap in a shader that
+already speaks distance, impossible in the mesh path at any price.
