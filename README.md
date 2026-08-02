@@ -2226,3 +2226,46 @@ this very bug into the log; "Scroll log to top" moves another
 surface's viewport to 0 and confirms with a toast on the same slab it
 was invoked from. Three surfaces, three poses, one keystroke touching
 all of them. Idle after: 0 paints/2s across every source.
+
+## the corridor — hover grace for a card standing in the room
+
+The last debt on #36: hover-driven detached layers. Hover the chat
+panel's avatar and an identity card opens on a FloatingSurface in
+front of the panel's upper edge — detached, its own slab, occluding
+the panel from the side. Radix hover-card turns out to have no grace
+polygon at all, just timers: leave the trigger and a 300ms close is
+armed; enter the content and it's cancelled. Pixels apart on a page,
+that's invisible. With the content standing in the room, the
+trigger-to-card gap is a mouse flight across the screen, and the
+geometric grace question #22 said detachment destroys came back as a
+race against a timer.
+
+The answer is a corridor in *screen* space — the only space where
+"travelling toward that slab" means anything, because it's the space
+the viewer's adjacency lives in. A tracker (armed by the forwarder's
+synthetic leaves, fed by trusted moves at document capture) holds the
+card while the pointer is inside the hull of the padded exit points
+and the mesh's projected quad, re-projected every move so orbiting
+can't stale it. It never touches Radix — it dispatches the same
+enter/leave protocol the forwarder speaks, and the stock timers do
+the rest. Exit the corridor and the card closes exactly `closeDelay`
+later, the same lag a page gets.
+
+The browser sold two corrections before it passed. A hull anchored at
+the pointer's *current* position follows the pointer — its own pad is
+inside its own hull by construction — measured as a card that never
+closed once the departure burst re-armed the tracker at a parked
+position. The anchor must be the previous sample, where the pointer
+was when it crossed, and a leave heard with the pointer already
+outside the corridor is judged and ignored. And a tracker created at
+open-time has no position history, so a fast pointer's first sample —
+mid-flight — became the corridor's trigger end and stranded the
+return transit; the tracker now lives as long as the surface's
+`graceFrom` does. Both are regression tests now.
+
+The ledger, trusted input end to end: park mid-corridor for 900ms —
+three close-timer lifetimes — and the card holds; arrive, hold;
+return all the way to the trigger, hold; wander off the corridor and
+it closes; leave the card downward and it closes; 0 paints/2s
+everywhere after every close. Decisions #31. The floating family's
+hover story is complete.

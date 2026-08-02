@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { useThree } from '@react-three/fiber'
 import type { ThreeElements } from '@react-three/fiber'
+import { Vector3 } from 'three'
 import type { Group, Mesh } from 'three'
 import { Surface } from '../Surface'
 import { useSourceHost } from '../useSourceHost'
 import { useAnimationConductor } from '../useAnimationConductor'
 import { useLatest } from '../useLatest'
 import type { MotionValue } from '../../lib/motionSamples'
+import { createGraceTracker, observeGrace } from '../../lib/hoverGrace'
+import type { Pt } from '../../lib/hoverGrace'
 
 // <FloatingSurface> — the floating family's third pose: its own object.
 //
@@ -61,6 +65,17 @@ export interface FloatingSurfaceProps
    * flight back without racing the render loop.
    */
   onFlight?: (value: MotionValue, done: boolean) => void
+  /**
+   * Hover grace for a hover-driven layer (HoverCard, a detached Tooltip):
+   * return the element whose hover opens this layer, queried lazily. While
+   * the layer is occupied, the pointer may transit the screen-space corridor
+   * between that trigger and this mesh without Radix's close timer winning
+   * the race — the geometric grace a page gets from adjacency, rebuilt in
+   * the only space where "travelling toward that slab" means anything
+   * (lib/hoverGrace.ts). Leave unset for click-driven layers: their
+   * dismissal is containment, which detachment never broke (decisions #22).
+   */
+  graceFrom?: () => Element | null
   /** Extra scene content parented to the surface (SurfaceLayer, UVAnchor…). */
   children?: ReactNode
 }
@@ -91,6 +106,7 @@ export function FloatingSurface({
   label = 'floating',
   px = 200,
   onFlight,
+  graceFrom,
   children,
   ...groupProps
 }: FloatingSurfaceProps) {
@@ -161,7 +177,62 @@ export function FloatingSurface({
   // reads `offsetWidth`, which never saw the transform in the first place —
   // so a mid-flight remeasure (a menu filtering itself down) still lands on
   // the layout box.
+  // Hover grace (opt-in via `graceFrom`). The tracker's mechanism lives in
+  // lib/hoverGrace.ts; what this wiring owns is the projection — turning
+  // this mesh into the screen-space quad the hull is built from, re-read on
+  // every judged move so an orbiting camera can't stale it. The dispatch
+  // target is the layer's Radix content, found by the `data-state="open"`
+  // attribute every Radix content wears while open — the element that owns
+  // the enter/leave handlers, not the popper wrapper around it.
+  const { camera, gl } = useThree()
   const flightGroup = useRef<Group>(null)
+  const whRef = useLatest<[number, number]>([w, h])
+  const graceFromRef = useLatest(graceFrom)
+  const hasGrace = !!graceFrom
+  useEffect(() => {
+    if (!hasGrace) return
+    // One tracker for the surface's whole life, NOT per open: the corridor's
+    // trigger-side anchor is the pointer's position history, and a tracker
+    // built at open-time has none — its first recorded sample is wherever
+    // the pointer happens to be when the open lands, which for a fast
+    // pointer is mid-flight, and a corridor anchored mid-flight strands the
+    // return transit. A closed layer keeps the tracker harmless by
+    // construction: leave() finds no content and move() no quad.
+    const corner = new Vector3()
+    const tracker = createGraceTracker({
+      trigger: () => graceFromRef.current?.() ?? null,
+      content: () => hostRef.current?.querySelector('[data-state="open"]') ?? null,
+      layerQuad: () => {
+        const g = flightGroup.current
+        if (!g || !g.visible) return null
+        const [cw, ch] = whRef.current
+        const rect = gl.domElement.getBoundingClientRect()
+        const quad: Pt[] = []
+        for (const [sx, sy] of [
+          [-1, -1],
+          [1, -1],
+          [1, 1],
+          [-1, 1],
+        ]) {
+          corner.set((sx * cw) / (2 * px), (sy * ch) / (2 * px), 0)
+          g.localToWorld(corner)
+          corner.project(camera)
+          if (corner.z > 1) return null // behind the camera
+          quad.push({
+            x: rect.left + ((corner.x + 1) / 2) * rect.width,
+            y: rect.top + ((1 - corner.y) / 2) * rect.height,
+          })
+        }
+        return quad
+      },
+    })
+    const detach = observeGrace(tracker)
+    return () => {
+      detach()
+      tracker.reset()
+    }
+  }, [hasGrace, camera, gl, px, graceFromRef, whRef])
+
   const onFlightRef = useLatest(onFlight)
   useAnimationConductor(host, (v, done) => {
     const g = flightGroup.current

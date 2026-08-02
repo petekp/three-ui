@@ -2,11 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import type { Group } from 'three'
 import { toast } from 'sonner'
-import { FocusGroup, SurfaceApp, useStyleChannel, ViewerSurface } from 'three-ui'
+import { FloatingSurface, FocusGroup, SurfaceApp, useStyleChannel, ViewerSurface } from 'three-ui'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { Button } from '@/components/ui/button'
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from '@/components/ui/hover-card'
 import {
   Command,
   CommandEmpty,
@@ -113,7 +118,7 @@ function ToolRow({ label }: { label: string }) {
   )
 }
 
-function AgentChat() {
+function AgentChat({ hoverHost }: { hoverHost?: HTMLElement | null }) {
   const [turns, setTurns] = useState<ChatTurn[]>(SEED)
   const [draft, setDraft] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -178,11 +183,48 @@ function AgentChat() {
       style={{ width: CHAT_W, height: CHAT_H }}
     >
       <header className="flex items-center gap-2.5 border-b px-4 py-3">
-        <Avatar className="size-7">
-          <AvatarFallback className="bg-primary text-xs font-semibold text-primary-foreground">
-            F5
-          </AvatarFallback>
-        </Avatar>
+        {/* The hover card off this avatar lives on a FloatingSurface in the
+            ROOM — a detached hover layer, the consumer for the screen-space
+            grace corridor (decisions #31). openDelay trimmed for the demo;
+            closeDelay stays at Radix's default — grace exists so the default
+            is enough. */}
+        <HoverCard openDelay={150}>
+          <HoverCardTrigger asChild>
+            <Avatar className="size-7">
+              <AvatarFallback className="bg-primary text-xs font-semibold text-primary-foreground">
+                F5
+              </AvatarFallback>
+            </Avatar>
+          </HoverCardTrigger>
+          <HoverCardContent container={hoverHost} className="w-72">
+            <div className="flex gap-3">
+              <Avatar className="size-10">
+                <AvatarFallback className="bg-primary text-sm font-semibold text-primary-foreground">
+                  F5
+                </AvatarFallback>
+              </Avatar>
+              <div className="flex flex-col gap-1">
+                <span className="text-sm leading-none font-semibold">fable</span>
+                <span className="text-xs text-muted-foreground">
+                  coding agent · claude-fable-5
+                </span>
+              </div>
+            </div>
+            <Separator className="my-3" />
+            <div className="grid grid-cols-3 gap-2 text-center">
+              {[
+                ['labs', '10'],
+                ['tests', '256'],
+                ['idle', '0 p/s'],
+              ].map(([k, v]) => (
+                <div key={k} className="flex flex-col gap-0.5">
+                  <span className="font-mono text-sm font-semibold">{v}</span>
+                  <span className="text-[10px] text-muted-foreground">{k}</span>
+                </div>
+              ))}
+            </div>
+          </HoverCardContent>
+        </HoverCard>
         <div className="flex flex-col">
           <span className="text-sm leading-none font-semibold">fable</span>
           <span className="text-xs text-muted-foreground">
@@ -493,6 +535,7 @@ declare const window: Lab010Window
 
 export function Lab010() {
   const chatGroup = useRef<Group>(null)
+  const [hoverHost, setHoverHost] = useState<HTMLElement | null>(null)
 
   return (
     <>
@@ -509,7 +552,7 @@ export function Lab010() {
       <group position={[0, 1.62, 0]} rotation={[0, -0.08, 0]} ref={chatGroup}>
         <FocusGroup id="agent-chat" order={0} objectRef={chatGroup}>
           <SurfaceApp
-            content={<AgentChat />}
+            content={<AgentChat hoverHost={hoverHost} />}
             label="lab010-chat"
             width={CHAT_W}
             height={CHAT_H}
@@ -519,6 +562,18 @@ export function Lab010() {
           </SurfaceApp>
         </FocusGroup>
       </group>
+
+      {/* The agent's identity card, detached into the room in front of the
+          panel's upper edge. Hover-driven, so it names its trigger: the
+          grace corridor between the avatar and this mesh keeps Radix's
+          close timer from winning the transit race (decisions #31). */}
+      <FloatingSurface
+        label="lab010-hovercard"
+        position={[0.35, 2.85, 0.7]}
+        rotation={[0, -0.12, 0.015]}
+        graceFrom={() => document.querySelector('[data-slot="hover-card-trigger"]')}
+        onHost={setHoverHost}
+      />
 
       <SessionSidebar position={[-1.72, 1.55, 0.28]} rotation={[0, 0.38, 0]} />
 

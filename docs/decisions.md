@@ -1267,3 +1267,73 @@ the constraint is documented (platform.md) and each dialect answers for
 its own utilities. (c) *Waiting for the platform* — the origin trial may
 well fix mask capture; when it does, delete the neutralization and the
 fades simply start working.
+
+## 31. Hover grace is a screen-space corridor — exit points and the projected quad (2026-08-01, lab 010 / #36)
+
+**Context.** #22 detached click-driven layers and proved their dismissal
+survives (containment asks about the DOM tree, which detaching never
+touched), and named the debt: *geometric* dismissal — the swept region
+between a trigger and its content — asks about the plane, which
+detaching destroys. #36 owed the ray answer for hover-driven detached
+layers. The consumer arrived in lab 010: a HoverCard off the chat
+panel's avatar, its content on a `FloatingSurface` in the room. Radix
+hover-card has no grace polygon at all — just timers (`pointerleave`
+arms a close, default 300ms; `pointerenter` on the content cancels it) —
+which works on a page because trigger and content are pixels apart. A
+detached layer turns that gap into a mouse flight across the screen,
+racing the timer. Radix's page-space reasoning can't be repaired here:
+both slabs' parked DOM stacks at (0,0), so no hull built in that space
+means anything.
+**Decision.** A grace tracker (`lib/hoverGrace.ts`), wired by
+`FloatingSurface`'s opt-in `graceFrom` prop, holding the layer open
+while the trusted pointer is inside the convex hull of: the padded exit
+points (where the pointer left the trigger, and where it left the
+content) plus the floating mesh's **projected screen quad**, re-projected
+on every judged move so orbiting can't stale it. Screen space is the
+load-bearing choice — it is the only space in which "the pointer is
+travelling toward that slab" is even a statement, because it is the
+space the *viewer's* adjacency lives in. The tracker never touches
+Radix: it speaks the forwarder's own synthetic over/enter // out/leave
+protocol at the content root, and Radix's stock timers do the rest —
+dismissal stays exactly `closeDelay` after the corridor is exited, the
+same lag a page hover-card has.
+**The two bugs the browser bought, both now regression tests.**
+(a) *The self-anchored hull*: anchoring a leave's exit point at the
+pointer's current position makes the corridor follow the pointer — its
+own pad is inside its own hull by construction. Measured live as a card
+that never closed: the departure burst's content-leave re-armed the
+tracker at the parked position, and a stopped pointer re-judges
+nothing. The exit anchor must be the *previous* sample — where the
+pointer was when it crossed — and a leave heard with the pointer
+already outside the corridor is judged at arm time and stays silent.
+(b) *The open-scoped tracker*: a tracker created when the layer opens
+has no position history, so its first sample — mid-flight for a fast
+pointer — becomes the corridor's trigger-side anchor, stranding the
+return transit. The tracker lives as long as `graceFrom` does; a closed
+layer keeps it harmless by construction (no content to speak to, no
+quad to project).
+**Listener seats, both asymmetries measured facts of the medium:** the
+arm signal (a leave on trigger or content root) is always *synthetic* —
+parked DOM never hears trusted events (#19) — so the leave listener
+must not filter on `isTrusted`; the position feed must be *only*
+trusted moves — the forwarder's copies carry parked coordinates — and
+document capture hears them even over Surfaces, because #26's silencing
+stops propagation at the canvas, downstream of capture.
+**Verified** (lab 010, trusted CDP input, Chrome 150): card opens off
+the avatar through the texture; pointer parked mid-corridor for 900ms —
+three close-timer lifetimes — card holds; arrival holds; full return
+transit to the trigger holds through a 900ms rest; wander-away from the
+trigger closes; departure from the card off-corridor closes; everything
+idles at 0 paints/2s after every close. 18 unit tests on the hull math
+and the tracker protocol.
+**Rejected.** (a) *A longer `closeDelay`* — tunes a timeout to one
+scene's geometry, delays every legitimate dismissal, and still loses to
+a slow pointer. (b) *Patching Radix or requiring wrapper props* — the
+seam is ours; the tracker speaks a protocol every hover library already
+listens to. (c) *A 3D corridor volume tested against the ray* — the
+corridor's meaning is visual adjacency, which lives on the screen; a
+room-space prism would hold the card open while the pointer visibly
+points at empty sky from another camera angle. (d) *Projecting the
+trigger's quad through UV plumbing* — exit points suffice (Radix's own
+doctrine), and the trigger element's world rect would re-introduce
+exactly the coordinate math the `container` lever exists to avoid.
