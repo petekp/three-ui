@@ -2998,3 +2998,39 @@ aimed at, and the slot's `color-mix()` reads it — so a rigid-body simulation
 running in WebGL is restyling real DOM through an ordinary custom property,
 at the same time as that DOM is being rasterized into the material of the
 thing doing the simulating.
+
+Then Pete dragged a card and said it jittered — *"like something is fighting
+the drag event."* Three suspects, and the two obvious ones died on the
+instruments: frame timing was clean (`dt` p05 7.6 ms, p99 9.3 ms, no drops),
+and a thirty-move drag caused six React renders and one FLIP, so the
+reflow-during-drag feedback loop I was braced for was not happening either.
+With the pointer perfectly still, angular velocity was flat zero for 266
+consecutive frames. Nothing was oscillating.
+
+The projection told the story. Camera at z = 937.8, card held at z = 96,
+cursor at (900, 600) — and the grab point rendering at (929.7, 627.4). The
+drag target was being computed as `(clientX − vw/2, vh/2 − clientY)`, which
+is the identity from the calibration above, and the calibration is true on
+**exactly one plane**. The lift plane is magnified 1.08×, so a hundred pixels
+of hand became a hundred and eight pixels of card: zero error at the screen
+centre, tens of pixels near the edges, reversing sign as you cross the middle,
+and *still ramping* for 0.22 s after the hand stopped while `z` eased 0 → 96.
+You correct, it overshoots, you correct again. Not a fight — a gain.
+
+The galling part is that this repo has had the rule since lab 002: **intersect
+the ray with the drag plane, never take the hit point.** Lab 014 obeyed the
+letter of it and intersected the wrong plane. The fix is a module that owns
+the calibration so `PixelPerfect` and the drag cannot disagree about where the
+camera is, plus `screenToPlane(...)` — the general ray∩plane written as a
+single division, because a calibrated camera looking down −z makes it one.
+Its test quantifies the old error at the centre and at the edge, proves it was
+a pure gain rather than an offset, and checks the shortcut against a real
+`THREE.Raycaster` so the fast path can't quietly become a second answer.
+Measured in the browser afterwards, the grab point lands on the cursor to
+0.0 px at (640, 360), at (200, 150) and at (900, 600).
+
+What I want to remember is the shape of the report. "It jitters" and "something
+is fighting it" are what a *velocity* error feels like from the outside, and my
+first three hypotheses were all about things that oscillate. A constant 8%
+overspeed feels exactly the same from the driver's seat, and the only way to
+tell them apart was to stop watching the motion and project a single point.

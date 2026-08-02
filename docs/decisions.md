@@ -2048,6 +2048,38 @@ same plate in metres has `I ≈ 8.5e-4`, seven orders of magnitude apart. Any
 gain you carry over from a metres-scale intuition will be wrong by that much.
 See #45.
 
+**The trap that actually bit.** The identity is true on **exactly one plane**.
+Lab 014 shipped reading the cursor as `(clientX − vw/2, vh/2 − clientY)` while
+holding the card at `z = 96`, and Pete reported it as *"it jitters as my mouse
+moves — something is fighting the drag"*. He was describing a **gain error**,
+which is why it read as a fight rather than as a bad offset: the lift plane is
+magnified by `camZ / (camZ − z)` = 1.08, so 100 px of hand became 108 px of
+card. The error is zero at the screen centre and grows outward — tens of pixels
+near the edges — so the card slid out from under the pointer on the way out and
+back under it on the way in, and every correction overshot again. It also ramps
+during the 0.22 s lift as `z` goes 0 → 96, so the card is *still moving* after
+the hand stops.
+
+The repo already had the rule — **#4: intersect `e.ray` with the drag plane,
+never take `e.point`** — and lab 014 obeyed the letter of it while intersecting
+the *wrong plane*. The correction is `app/scenes/lab014Camera.ts`: one module
+that owns `cameraDistance` (so `PixelPerfect` and the drag cannot drift apart)
+and `screenToPlane(clientX, clientY, vw, vh, camZ, z)`, which is the general
+ray∩plane in its cheapest form — because the camera is calibrated and looking
+down −z, the intersection is a single division by the magnification.
+`lab014Camera.test.ts` pins the mechanism, quantifies the old error at centre
+and edge, proves it is a pure gain (107.96 px per 100 px of hand), and checks
+the shortcut against a real `THREE.Raycaster` + `Plane.intersectPlane` to six
+decimals so the fast path can't become a second source of truth. Measured in
+the browser afterwards, the grab point projects onto the cursor to 0.0 px at
+the centre, at (200, 150) and at (900, 600) — where the shipped code was ~30 px
+out.
+
+The general statement: **a calibrated camera makes screen space and world space
+equal, not interchangeable.** The equality is a property of one plane, and the
+moment anything leaves that plane — which is the whole point of lifting it —
+every "just subtract half the viewport" needs to become a ray again.
+
 **Cost.** The camera is no longer free to move; anything that orbits gives up
 the identity. Labs that want both need to treat the calibrated pose as a home
 state to return to, not as an invariant.

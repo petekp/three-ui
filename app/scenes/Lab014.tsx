@@ -51,6 +51,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { SurfaceApp, useSurfaceTexture } from 'three-ui'
 import '../lab014.css'
+import { cameraDistance, screenToPlane } from './lab014Camera'
 import {
   atRest,
   corners,
@@ -355,6 +356,7 @@ const _centroid = new THREE.Vector3()
 
 function Driver({ flight, slotRect, scrollTop, onLanded, cardRef, shadowRef, onPainted }: DriverProps) {
   const size = useThree((s) => s.size)
+  const camera = useThree((s) => s.camera)
 
   useFrame((_, rawDt) => {
     const f = flight.current
@@ -369,13 +371,22 @@ function Driver({ flight, slotRect, scrollTop, onLanded, cardRef, shadowRef, onP
 
     const vw = size.width
     const vh = size.height
+    const camZ = camera.position.z
 
     if (f.mode === 'held') {
       f.lift = Math.min(1, f.lift + dt / LIFT_T)
       // easeOutCubic — a hand accelerates the card away from the page and
       // then stops; a linear rise reads as a lift dialog, not a lift.
       const e = 1 - Math.pow(1 - f.lift, 3)
-      _target.set(f.px - vw / 2, vh / 2 - f.py, LIFT_Z * e)
+      // The hand is wherever the cursor's RAY meets the plane the card is
+      // currently on — NOT the z = 0 mapping. One world unit is one CSS pixel
+      // on exactly one plane, and a lifted card is not on it. Reading the
+      // cursor as if it were cost an 8% gain: the card outran the hand,
+      // drifting out from under the pointer toward the edges of the screen
+      // and back toward the middle, which is what "fighting the drag" was.
+      // decisions #4 has always said intersect the ray with the DRAG plane;
+      // this is that rule, on the plane that is actually being dragged on.
+      screenToPlane(f.px, f.py, vw, vh, camZ, LIFT_Z * e, _target)
       stepHeld(f.plate, dt, _target, f.hold, FLAT)
     } else if (f.mode === 'float') {
       // Identical machinery, with the hand replaced by a fixed point in the
@@ -568,7 +579,7 @@ function PixelPerfect() {
     // downstream — rects as poses, texels as pixels, "1 CSS px" as a world
     // unit — is a consequence of it and nothing else has to know.
     camera.fov = FOV
-    camera.position.set(0, 0, size.height / 2 / Math.tan((FOV * Math.PI) / 360))
+    camera.position.set(0, 0, cameraDistance(size.height, FOV))
     camera.near = 1
     camera.far = camera.position.z * 3
     camera.lookAt(0, 0, 0)
