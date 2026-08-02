@@ -2719,3 +2719,53 @@ no character change. Idle: zero live sources at rest (the airborne
 Surface unmounts on landing). 325/325 incl. 15 new chrome tests
 (parser fixtures are verbatim Chrome computed strings), tsc clean,
 boundary tests green on the new barrel exports.
+
+## 56. The quad and the uniforms are one contract — inflate along the axes you claim (2026-08-02, lab 014)
+
+**Decision.** Any shader that reconstructs "where am I relative to the
+content" from UVs — `p = (vUv·2−1)·uQuadHalf` — makes its geometry a
+load-bearing half of that equation: the mesh's true extents must BE the
+claimed extents, in the same axes, or every fragment evaluates the
+content somewhere it isn't. Lab 014's shadow quad now goes through
+`shadowQuadFrame` (lab014Plate.ts): the projected footprint — exactly a
+parallelogram, because a planar rect projected along a fixed direction
+is an affine image — is summarized by its two half-edge vectors, the
+margin is added ALONG EACH AXIS, and the same numbers ship to the GPU
+verbatim. Guarded by three tests whose contract is the sentence "the
+mapping never lies."
+
+**The bug this replaces.** The old construction pushed each projected
+corner *radially* away from the centroid by the margin, while
+`uQuadHalf` claimed the margin in each axis. For a 514×157 card the
+radial direction is 17° off horizontal: the quad grew 0.96·margin
+sideways but only 0.29·margin vertically, and the shader's p-space —
+which trusted the claim — was stretched ~1.26× vertically at rest.
+Every pixel below the card evaluated the measured layers 2–3σ farther
+out than it really was. At altitude the halo was merely squished
+(nobody could tell a soft blob was 36% thinner than intended). At rest
+it was fatal: the dominant layer (`0 6px 18px −12px`) keeps its entire
+visible fringe within ~12 px of the card's edge, the stretch mapped all
+of it to coordinates *underneath the card quad*, and the card came to
+rest shadowless — then the DOM swapped in and its fringe appeared from
+nowhere. Pete's report verbatim: "upon coming to a rest, has no visible
+shadow; all of a sudden a box shadow appears." The mismatch predates
+the measured-chrome work; #55's identity-at-rest contract is what made
+it visible, because identity held in p-space and p-space was lying
+about world space.
+
+**Why the fix is a frame, not a fudge.** `shadowQuadFrame` returns
+vertices AND the two halves from one computation, so the Driver cannot
+ship geometry and uniforms that disagree — the failure mode is gone
+structurally, not patched numerically. At rest the parallelogram is the
+card's own rect and p-space is the CSS pixel grid (what the measured
+layers assume); tilted, the half-edge metric tracks the projection's
+own shear.
+
+**Measured (2026-08-02).** gl.render-wrapped strip probe (per #54's
+instrument rule), sampling 3/6/9/14/22 px below the card's bottom edge
+through a full drop: final GL frames (h 0.3–0.7) read α 15/9/5/2/0 —
+a live Gaussian fringe to the last frame, where the old mapping read
+zero at every tap. Composited over the page those values sit within
+3–5 counts of the DOM's own fringe at the same coordinates (sub-2%
+luminance — at or below the compositing model's own noise). 328/328,
+tsc clean.

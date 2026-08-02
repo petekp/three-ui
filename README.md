@@ -3375,3 +3375,39 @@ element is visual truth. Pixels at matching density, presentation on
 the pixel grid, readiness from the upload, and now chrome by
 measurement. The mesh doesn't imitate the DOM — it inherits it.
 decisions.md #55.
+
+## the shadow that vanished at touchdown
+
+Pete again, after the chrome shipped: better, but the landing still
+pops — the surface card comes to rest with *no shadow at all*, then the
+DOM card appears wearing one. A shadow that exists at altitude and
+evaporates exactly at h = 0 is a strange creature, and the culprit
+turned out to be geometry lying to the shader.
+
+The shadow shader reconstructs world position from UVs: `p =
+(vUv·2−1)·uQuadHalf`. That equation makes the quad's true size a
+load-bearing input — and the quad was built by pushing each corner
+*radially* out from the centroid, which hands a wide card only 29% of
+the margin vertically while `uQuadHalf` claims all of it. The shader's
+coordinate space was stretched 1.26× vertically at rest; every pixel
+below the card asked "how much shadow is here?" about a point 2–3σ
+farther out. The measured rest layer — spread −12, σ 9 — keeps its
+whole visible fringe within a dozen pixels of the edge, so the stretch
+relocated the *entire shadow* to coordinates underneath the card quad,
+where the card promptly drew over it. At altitude the same lie only
+squished the halo, and a soft blob 36% thinner than intended looks
+like a soft blob. The measured layers made the lie fatal precisely
+because they made rest *exact*: identity in a coordinate system that
+wasn't world space.
+
+The fix is a frame, not a nudge: `shadowQuadFrame` treats the projected
+footprint as what it provably is — a parallelogram (a planar rectangle
+projected along a fixed direction is an affine image) — summarizes it
+by two half-edge vectors, adds the margin along each axis, and returns
+the vertices *and* the shader's halves from the same numbers. Geometry
+and uniforms can no longer disagree, structurally. The instrument that
+confirmed it is #54's readPixels-inside-gl.render probe, watching a
+strip below the card's edge through a live drop: the final frames
+before the swap now read a decaying Gaussian fringe (α 15/9/5/2/0 at
+3/6/9/14/22 px) within a few counts of the DOM shadow that replaces
+it — where the old code read zero, every time. decisions.md #56.

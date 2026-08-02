@@ -63,6 +63,8 @@ import {
   atRest,
   corners,
   makePlate,
+  makeShadowFrame,
+  shadowQuadFrame,
   stepFree,
   stepHeld,
   type Plate,
@@ -460,6 +462,13 @@ const _corners: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3] = [
   new THREE.Vector3(),
 ]
 const _centroid = new THREE.Vector3()
+const _proj: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3] = [
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+  new THREE.Vector3(),
+]
+const _frame = makeShadowFrame()
 
 /**
  * One time constant of smoothing on the hand's velocity. Pointer samples do
@@ -664,34 +673,33 @@ function Driver({
     )
     const margin = reach
 
-    // Where the centroid's own shadow lands — the point the footprint is
-    // expanded away from.
-    const ct = -_centroid.z / LIGHT.z
-    const cx = _centroid.x + LIGHT.x * ct
-    const cy = _centroid.y + LIGHT.y * ct
+    // Project the plate's corners onto the page along the light, then let
+    // `shadowQuadFrame` rebuild the quad with the margin added along the
+    // footprint's own axes. The frame's halves go to the shader VERBATIM —
+    // the p-space metric and the world metric are the same numbers, which is
+    // the whole fix: the old radial corner-push under-delivered the margin
+    // vertically (≈0.29× on a wide card) while the uniforms claimed all of
+    // it, so every below-card pixel sampled the shadow 2–3σ too far out and
+    // the at-rest fringe rendered entirely underneath the card.
+    for (let i = 0; i < 4; i++) {
+      const c = _corners[i]
+      const t = -c.z / LIGHT.z
+      _proj[i].set(c.x + LIGHT.x * t, c.y + LIGHT.y * t, 0)
+    }
+    shadowQuadFrame(_proj, margin, _frame)
 
     const pos = sh.geometry.getAttribute('position') as THREE.BufferAttribute
-    // PlaneGeometry's vertex order is TL, TR, BL, BR; `corners` walks the
-    // rectangle TL, TR, BR, BL. Cross the two wrong and the quad comes out
-    // as a bow tie, which is a very memorable way to find out.
-    const order = [0, 1, 3, 2]
+    // The frame's verts are already in PlaneGeometry vertex order (TL, TR,
+    // BL, BR) — `shadowQuadFrame` did the reorder from `corners` order so
+    // the bow-tie mistake has exactly one place to not happen.
     for (let i = 0; i < 4; i++) {
-      const c = _corners[order[i]]
-      const t = -c.z / LIGHT.z
-      const x = c.x + LIGHT.x * t
-      const y = c.y + LIGHT.y * t
-      // Push the footprint out past the silhouette so the blur has somewhere
-      // to live; the SDF inside puts the real edge back.
-      const dx = x - cx
-      const dy = y - cy
-      const len = Math.hypot(dx, dy) || 1
-      pos.setXYZ(i, x + (dx / len) * margin, y + (dy / len) * margin, 0.5)
+      pos.setXYZ(i, _frame.verts[i].x, _frame.verts[i].y, 0.5)
     }
     pos.needsUpdate = true
     sh.geometry.computeBoundingSphere()
 
-    ;(mat.uniforms.uQuadHalf.value as THREE.Vector2).set(f.w / 2 + margin, f.h / 2 + margin)
-    ;(mat.uniforms.uCardHalf.value as THREE.Vector2).set(f.w / 2, f.h / 2)
+    ;(mat.uniforms.uQuadHalf.value as THREE.Vector2).copy(_frame.quadHalf)
+    ;(mat.uniforms.uCardHalf.value as THREE.Vector2).copy(_frame.cardHalf)
   })
 
   return null
