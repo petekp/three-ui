@@ -256,9 +256,13 @@ function swapChainAttr(root: Element, prev: Element | null, next: Element | null
  * Order matters and is the spec's: out, leave, over, enter — leaves outward
  * from the deepest element, enters inward toward it.
  *
- * Known gap: the `mouseout`/`mouseleave`/`mouseover`/`mouseenter` twins are
- * not mirrored. Nothing in the port listens for them (Radix is pointer-event
- * native); add them here if a component ever needs them.
+ * The `mouseout`/`mouseleave`/`mouseover`/`mouseenter` twins ARE mirrored,
+ * one per pointer event — a real browser fires mouse compatibility events
+ * for every pointer boundary crossing, and the first mouse-native consumer
+ * (recharts, lab 010 inc 8) arrived to collect: React synthesizes
+ * `onMouseLeave` from native `mouseout`, so without the twin a chart's
+ * tooltip appears on forwarded moves and then never hides — the departure
+ * burst was speaking a dialect recharts doesn't listen to.
  */
 function crossBoundary(
   root: HTMLElement,
@@ -276,15 +280,24 @@ function crossBoundary(
   prev?.dispatchEvent(
     new PointerEvent('pointerout', { ...init, bubbles: true, relatedTarget: next }),
   )
+  prev?.dispatchEvent(
+    new MouseEvent('mouseout', { ...init, bubbles: true, relatedTarget: next }),
+  )
   for (const el of prevChain) {
     if (entered.has(el)) break // the deepest common ancestor — not left
     el.dispatchEvent(
       new PointerEvent('pointerleave', { ...init, bubbles: false, relatedTarget: next }),
     )
+    el.dispatchEvent(
+      new MouseEvent('mouseleave', { ...init, bubbles: false, relatedTarget: next }),
+    )
   }
 
   next?.dispatchEvent(
     new PointerEvent('pointerover', { ...init, bubbles: true, relatedTarget: prev }),
+  )
+  next?.dispatchEvent(
+    new MouseEvent('mouseover', { ...init, bubbles: true, relatedTarget: prev }),
   )
   const entering: Element[] = []
   for (const el of nextChain) {
@@ -294,6 +307,9 @@ function crossBoundary(
   for (const el of entering.reverse()) {
     el.dispatchEvent(
       new PointerEvent('pointerenter', { ...init, bubbles: false, relatedTarget: prev }),
+    )
+    el.dispatchEvent(
+      new MouseEvent('mouseenter', { ...init, bubbles: false, relatedTarget: prev }),
     )
   }
 }

@@ -526,6 +526,33 @@ describe('moving between elements inside the surface', () => {
     expect(typesAt('root')).toContain('pointerover')
   })
 
+  it('mirrors the mouse compatibility twins on every boundary crossing', () => {
+    // The browser-caught defect (lab 010 inc 8): recharts is mouse-native —
+    // React synthesizes its onMouseLeave from native `mouseout` — so a chart
+    // tooltip appeared on forwarded moves and then never hid: the departure
+    // was speaking pointer events only. A real browser fires the mouse twins
+    // for every pointer boundary crossing; so must the forwarder.
+    const mouseLog: { type: string; at: string }[] = []
+    for (const [el, name] of [
+      [trigger, 'trigger'],
+      [sibling, 'sibling'],
+    ] as const) {
+      for (const type of ['mouseover', 'mouseenter', 'mouseout', 'mouseleave'])
+        el.addEventListener(type, () => mouseLog.push({ type, at: name }))
+    }
+
+    const on = uvOf(...TRIGGER_BOX)
+    forwardPointer(root, on.u, on.v, 'move')
+    const next = uvOf(...SIBLING_BOX)
+    forwardPointer(root, next.u, next.v, 'move')
+
+    const at = (name: string) => mouseLog.filter((l) => l.at === name).map((l) => l.type)
+    expect(at('trigger')).toEqual(
+      expect.arrayContaining(['mouseover', 'mouseenter', 'mouseout', 'mouseleave']),
+    )
+    expect(at('sibling')).toEqual(expect.arrayContaining(['mouseover', 'mouseenter']))
+  })
+
   it('moves hover mirroring to the new element', () => {
     const on = uvOf(...TRIGGER_BOX)
     forwardPointer(root, on.u, on.v, 'move')

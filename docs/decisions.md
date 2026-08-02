@@ -540,6 +540,19 @@ counters flat across 3s. `forwardEvents` now has a DOM test suite
 geometry. This is the same seam as #18: the forwarder is the only place
 that knows the pointer's real story, so anything it declines to say, no
 component downstream can recover.
+**Addendum (2026-08-01, lab 010 inc 8): the mouse twins.** The header
+comment carried a known gap — the `mouseout`/`mouseleave`/`mouseover`/
+`mouseenter` compatibility twins were not mirrored, "add them if a
+component ever needs them." Recharts is the component: it is
+mouse-native (React synthesizes its `onMouseLeave` from native
+`mouseout`), so a chart tooltip appeared on forwarded moves — the move
+twins already existed — and then never hid; the departure spoke a
+dialect it doesn't listen to. `crossBoundary` now dispatches one mouse
+twin after each pointer boundary event, which is what a real browser
+does for every crossing. Radix components are pointer-native and hear
+the twins as the harmless duplicates they'd receive from a real
+pointer anyway. Pinned by a unit test; browser-verified: tooltip hides
+on both surface departure and internal crossings.
 
 ## 20. `pointer-events` is the raycaster's business too (2026-07-31, lab 009)
 

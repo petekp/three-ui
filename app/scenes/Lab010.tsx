@@ -8,6 +8,12 @@ import { Badge } from '@/components/ui/badge'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { Button } from '@/components/ui/button'
 import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from '@/components/ui/chart'
+import type { ChartConfig } from '@/components/ui/chart'
+import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
@@ -51,6 +57,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { Toaster } from '@/components/ui/sonner'
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts'
 
 // Lab 010 — an agentic coding UI in full 3D.
 //
@@ -477,6 +484,22 @@ const DECISIONS = [
   { n: 31, title: 'Hover grace is a screen-space corridor', body: 'Exit points and the projected quad, hulled per judged move. Screen space is the only space where “travelling toward that slab” is a statement.' },
 ]
 
+// The lab's own paint economics, as data. Every number below was measured in
+// a browser session and journaled; the chart is the ledger drawn by recharts
+// — SVG inside a paint record, which rasterizes like any other DOM.
+const COSTS = [
+  { action: 'idle', paints: 0 },
+  { action: 'lift', paints: 0 },
+  { action: 'scroll', paints: 1 },
+  { action: 'flight', paints: 2 },
+  { action: 'tab swap', paints: 25 },
+  { action: 'stream', paints: 147 },
+]
+
+const COSTS_CONFIG = {
+  paints: { label: 'paints', color: 'var(--primary)' },
+} satisfies ChartConfig
+
 function Workbench() {
   return (
     <div
@@ -492,6 +515,7 @@ function Workbench() {
         <TabsList className="mx-3 mt-3">
           <TabsTrigger value="ledger">Ledger</TabsTrigger>
           <TabsTrigger value="decisions">Decisions</TabsTrigger>
+          <TabsTrigger value="costs">Costs</TabsTrigger>
         </TabsList>
         <TabsContent value="ledger" className="min-h-0 flex-1 p-3">
           {/* The scroll region is the Table's OWN wrapper (shadcn renders an
@@ -541,6 +565,32 @@ function Workbench() {
               ))}
             </div>
           </ScrollArea>
+        </TabsContent>
+        <TabsContent value="costs" className="min-h-0 flex-1 p-3">
+          <div className="flex h-full flex-col gap-2 rounded-md border p-3">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-xs font-medium">paints per interaction</span>
+              <span className="text-[10px] text-muted-foreground">
+                measured in the browser — the idle contract is the zero bar
+              </span>
+            </div>
+            <ChartContainer config={COSTS_CONFIG} className="min-h-0 w-full flex-1">
+              <BarChart data={COSTS} layout="vertical" margin={{ left: 8, right: 16 }}>
+                <CartesianGrid horizontal={false} />
+                <XAxis type="number" tickLine={false} axisLine={false} fontSize={10} />
+                <YAxis
+                  type="category"
+                  dataKey="action"
+                  tickLine={false}
+                  axisLine={false}
+                  width={58}
+                  fontSize={10}
+                />
+                <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
+                <Bar dataKey="paints" fill="var(--color-paints)" radius={3} />
+              </BarChart>
+            </ChartContainer>
+          </div>
         </TabsContent>
       </Tabs>
     </div>

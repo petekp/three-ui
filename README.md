@@ -2308,3 +2308,31 @@ linear interpolation from a neighboring landmark missed a 64px-wide
 tab. Every aimed point now goes through the mesh's own
 `localToWorld → project` math, fresh each run. Idle after all of it:
 0 paints/3s across five sources.
+
+## the chart draws the ledger — and collects an old debt
+
+The workbench gains a third tab: a recharts bar chart of the lab's own
+measured paint costs, idle's zero bar included. The seam this
+increment was named for turned out to be no seam at all — SVG is
+ordinary DOM to the rasterizer, and the whole chart (grid, axes,
+bars, the animated mount) came through the texture on the first try.
+The mount costs a bounded ~70-paint burst — the tab transition plus
+recharts growing its bars for a second and a half — and then the
+counters go flat, tooltip open or not.
+
+The real find was waiting in a comment. The tooltip appeared on
+forwarded hover and tracked the pointer perfectly — recharts hears
+`mousemove`, and the forwarder has always sent the move twins — but
+it never hid. `crossBoundary`'s header carried a known gap since lab
+009: the mouse boundary twins (`mouseout`/`mouseleave`/`mouseover`/
+`mouseenter`) were not mirrored, because "nothing in the port listens
+for them (Radix is pointer-event native); add them here if a
+component ever needs them." Recharts is that component — React
+synthesizes its `onMouseLeave` from native `mouseout` — and so the
+departure burst was announcing the exit in a dialect the chart
+doesn't speak. The forwarder now dispatches one mouse twin after each
+pointer boundary event, which is nothing more than what a real
+browser does on every crossing. One unit test pins it; the tooltip
+now hides on surface departure and internal crossings alike, and the
+Radix components hear the twins as the duplicates a real pointer
+always sent them. 259 tests. Decisions #19 addendum.
