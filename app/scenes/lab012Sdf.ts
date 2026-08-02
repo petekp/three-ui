@@ -89,6 +89,18 @@ uniform vec3  uBlobs[MAX_BLOBS];
 uniform int   uBlobCount;
 uniform float uSmooth;       // blend radius: how far out a neck forms
 
+// ripples: expanding wave packets on the panel's surface, emitted where a
+// satellite makes or breaks contact. xy = origin (panel-local), z = age in
+// seconds, w = signed amplitude (negative for a release, so the surface
+// recoils instead of swelling).
+uniform vec4  uRipples[MAX_RIPPLES];
+uniform int   uRippleCount;
+uniform float uRippleK;      // phase constant, 4/(27 sigma/rho) — sets scale
+uniform float uRippleNu;     // viscosity: how fast short waves are eaten
+uniform float uRippleSrc;    // source RADIUS — a contact is not a delta
+uniform float uRippleDecay;  // bulk loss, seconds
+uniform float uRippleInk;    // 0 = the DOM stays flat and crisp (see below)
+
 // glass
 uniform float uBezel;        // width of the lensing rim, world units
 uniform float uThickness;    // height of the bezel bulge, world units
@@ -222,7 +234,83 @@ void main() {
     );
     g = dot(gr, gr) > 1e-12 ? normalize(gr) : vec2(0.0, 1.0);
   }
-  vec3 nLocal = normalize(vec3(-slope * g, 1.0));
+
+  // --- ripples: a capillary impulse, not a scrolled texture -------------
+  // The bezel is already h(d) and the normal is already what h's slope does
+  // to a direction, so a ripple needs no new machinery — it contributes a
+  // second slope, along its own radial direction, and the two add.
+  //
+  // What it does need is to disperse. A rigid packet translated outward at a
+  // fixed speed reads as a decal being scrolled; a real impact ring STRETCHES,
+  // because different wavelengths travel at different speeds. At this scale
+  // the regime is capillary (surface tension, not gravity): w = C k^(3/2), so
+  // the group velocity is (3/2) C sqrt(k) and SHORT waves lead. Feeding the
+  // stationary-phase condition r = v_group * t back into the phase collapses
+  // the whole train to one expression:
+  //
+  //   theta(r,t) = K r^3 / t^2,        K = 4 / (27 C^2)
+  //   k(r,t)     = d(theta)/dr = 3 K r^2 / t^2
+  //
+  // (Those two are consistent by construction — the derivative of the phase
+  // IS the stationary wavenumber. Verified numerically before it was written.)
+  // The pattern therefore gets finer outward and self-similar along
+  // r ~ t^(2/3), which is what a fixed-wavelength packet cannot fake.
+  vec2 tilt = -slope * g;
+  vec2 rippleTilt = vec2(0.0);
+  for (int i = 0; i < MAX_RIPPLES; i++) {
+    if (i >= uRippleCount) break;
+    vec4 rp = uRipples[i];
+    vec2 dv = q - rp.xy;
+    float r = max(length(dv), 1e-4);
+    float t = max(rp.z, 0.02);
+
+    float th = uRippleK * r * r * r / (t * t);
+    float kk = 3.0 * uRippleK * r * r / (t * t);
+
+    // Amplitude, three physical terms and no fudge:
+    //   inversesqrt(r) — a circular front spreads its energy over a growing
+    //     circumference, so the wave MUST weaken as it travels. Its absence
+    //     was the loudest thing wrong with the first version.
+    //   exp(-nu k^2 t) — viscosity eats short waves quadratically. This is
+    //     also what gives the train a soft leading edge instead of the hard
+    //     drawn ring a gaussian window produces.
+    //   exp(-t/decay) — bulk loss, so the sheet eventually goes still.
+    // A finite SOURCE. Modelling the contact as a delta impulse makes the
+    // first frames sixteen times more violent than the last — the wave
+    // arrives as a crack and then behaves. But a bead is not a point: it
+    // cannot radiate wavelengths shorter than itself, and suppressing those
+    // (a gaussian source spectrum) flattens the whole run to a smooth decay
+    // without a single artificial ramp.
+    float src = exp(-0.5 * kk * kk * uRippleSrc * uRippleSrc);
+
+    float amp = rp.w
+      * inversesqrt(1.0 + r / 0.25)
+      * exp(-uRippleNu * kk * kk * t)
+      * src
+      * exp(-t / uRippleDecay);
+
+    // Nothing may oscillate faster than the pixel grid can carry. This is the
+    // antialias, but it is not only cosmetic: those are exactly the waves
+    // viscosity has already taken. aa is the panel's world units per pixel.
+    amp *= 1.0 - smoothstep(1.0, 2.4, kk * aa);
+
+    // h = amp cos(theta)  ->  dh/dr = -amp k sin(theta). The d(amp)/dr term
+    // is dropped as slowly varying next to k.
+    rippleTilt += (-amp * kk * sin(th)) * (dv / r);
+  }
+  // Waves break. Past a certain steepness a real surface stops being a
+  // graph over the plane at all, so a soft saturation is nearer the truth
+  // than letting an early frame fold the lens inside out.
+  float steep = length(rippleTilt);
+  if (steep > 1e-5) rippleTilt *= (1.0 / (1.0 + steep / 1.1));
+  // The rim is a thick edge, not a membrane. Letting the wave die into it
+  // keeps the one hairline that has to stay crisp from wobbling — and a
+  // boundary that absorbs is closer to the truth than one that ignores.
+  // (e is 1 on the flat glass, 0 at the outline.)
+  rippleTilt *= e;
+  tilt += rippleTilt;
+
+  vec3 nLocal = normalize(vec3(tilt, 1.0));
   if (ld.z > 0.0) nLocal = -nLocal;   // seen from behind: the far face
   vec3 n = normalize(uPanelRot * nLocal);
 
@@ -270,7 +358,12 @@ void main() {
     float outside = max(abs(q.x) - uHalf.x, abs(q.y) - uHalf.y);
     float m = 1.0 - smoothstep(-aa, aa, outside);
     if (m > 0.0) {
-      vec2 iuv = q / (2.0 * uHalf) + 0.5;
+      // The ink rides the wave only if asked to. It is laid on unrefracted
+      // BY DESIGN — the world bends through the glass, the DOM sits on it
+      // and stays crisp — so warping its UV trades the thesis for the
+      // effect. Default 0; __lab012.set('rippleInk', 0.4) to see the other
+      // reading. (No backticks in here — they end the template literal.)
+      vec2 iuv = (q + rippleTilt * uRippleInk) / (2.0 * uHalf) + 0.5;
       vec4 ink = texture2D(tInk, iuv) * (uInkOpacity * m);   // premultiplied
       glass = glass * (1.0 - ink.a) + ink.rgb;
     }

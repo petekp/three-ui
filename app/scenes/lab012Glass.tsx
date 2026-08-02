@@ -36,6 +36,20 @@ export interface GlassParams {
   inkOpacity: number
   /** Smooth-min blend radius for coplanar satellites, world units. */
   smooth: number
+  /** Peak wave HEIGHT a unit impulse adds, world units. 0 disables ripples. */
+  rippleAmp: number
+  /** Capillary phase constant K = 4/(27 sigma/rho): sets the wave scale. */
+  rippleK: number
+  /** Viscosity — how fast the short leading waves are eaten. */
+  rippleNu: number
+  /** Source radius: a contact is not a delta impulse. World units. */
+  rippleSource: number
+  /** Bulk loss, seconds. */
+  rippleDecay: number
+  /** Seconds before a ripple is retired from the array. */
+  rippleLife: number
+  /** How far the ripple drags the DOM's UV with it. 0 keeps text crisp. */
+  rippleInk: number
 }
 
 /**
@@ -52,8 +66,52 @@ export interface GlassBlob {
   r: number
 }
 
+/**
+ * A wave packet expanding across the panel's surface from where a satellite
+ * made or broke contact. `t0` is a clock timestamp; the compositor turns it
+ * into an age, so the shader needs no time uniform of its own.
+ */
+export interface GlassRipple {
+  x: number
+  y: number
+  t0: number
+  /** Signed: negative recoils the surface, which is what a release does. */
+  amp: number
+}
+
 /** How many satellites one panel may carry — must match the shader define. */
 export const MAX_BLOBS = 6
+/** Concurrent ripples per panel — must match the shader define. */
+export const MAX_RIPPLES = 4
+
+/**
+ * The panel's rounded-rect distance, in JS. The same function the shader
+ * evaluates per pixel — here it runs three times a frame, to answer "has
+ * this bead touched yet". Contact detection belongs on the CPU: it is a
+ * sign change over time, and a fragment shader has no memory of last frame.
+ */
+export function sdRoundRect(px: number, py: number, bx: number, by: number, r: number) {
+  const dx = Math.abs(px) - bx + r
+  const dy = Math.abs(py) - by + r
+  return (
+    Math.min(Math.max(dx, dy), 0) +
+    Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) -
+    r
+  )
+}
+
+/** Its gradient — the outward direction, for placing the contact point. */
+export function sdRoundRectGrad(px: number, py: number, bx: number, by: number, r: number) {
+  const sx = Math.sign(px) || 1
+  const sy = Math.sign(py) || 1
+  const dx = Math.abs(px) - bx + r
+  const dy = Math.abs(py) - by + r
+  if (dx > 0 && dy > 0) {
+    const l = Math.hypot(dx, dy) || 1
+    return [(sx * dx) / l, (sy * dy) / l] as const
+  }
+  return dx > dy ? ([sx, 0] as const) : ([0, sy] as const)
+}
 
 // Tuned in the browser against the lab's own wall (loud, high-frequency,
 // live DOM) — see the README entry. The two that matter most: `roughness`
@@ -77,6 +135,18 @@ export const GLASS_DEFAULTS: GlassParams = {
   // surface tension rather than a fillet, small enough that a blob still
   // arrives as a distinct object before it dissolves into the card.
   smooth: 0.14,
+  // Ripples. `rippleK` is the only scale knob: the train is self-similar
+  // along r ~ t^(2/3), so raising K makes the whole pattern finer AND slower
+  // together, the way a real change in surface tension would. `rippleNu`
+  // decides how far the fine leading waves get before viscosity eats them —
+  // it is the difference between water and syrup.
+  rippleAmp: 1.1,
+  rippleK: 3.0,
+  rippleNu: 0.0018,
+  rippleSource: 0.04,
+  rippleDecay: 1.2,
+  rippleLife: 1.8,
+  rippleInk: 0,
 }
 
 interface SdfPanel {
@@ -85,6 +155,7 @@ interface SdfPanel {
   half: THREE.Vector2
   params: GlassParams
   blobs: GlassBlob[]
+  ripples: GlassRipple[]
 }
 
 const sdfPanels = new Map<string, SdfPanel>()
@@ -136,6 +207,8 @@ export interface SdfGlassPanelProps {
    * mutate its members per frame — see `BlobDrift` in Lab012.
    */
   blobs?: GlassBlob[]
+  /** Contact ripples, same stable-array-mutated-in-place contract. */
+  ripples?: GlassRipple[]
   content: React.ReactNode
   position: [number, number, number]
   rotation?: [number, number, number]
@@ -148,6 +221,7 @@ export function SdfGlassPanel({
   px,
   params,
   blobs,
+  ripples,
   content,
   position,
   rotation,
@@ -169,11 +243,12 @@ export function SdfGlassPanel({
       half: new THREE.Vector2(width / px / 2, height / px / 2),
       params: live,
       blobs: blobs ?? [],
+      ripples: ripples ?? [],
     })
     return () => {
       sdfPanels.delete(label)
     }
-  }, [label, width, height, px, live, blobs])
+  }, [label, width, height, px, live, blobs, ripples])
 
   return (
     <group ref={group} position={position} rotation={rotation}>
@@ -249,7 +324,7 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
       new THREE.ShaderMaterial({
         vertexShader: QUAD_VERTEX,
         fragmentShader: GLASS_FRAGMENT,
-        defines: { SAMPLES: 8, MAX_BLOBS },
+        defines: { SAMPLES: 8, MAX_BLOBS, MAX_RIPPLES },
         depthTest: false,
         depthWrite: false,
         uniforms: {
@@ -274,6 +349,13 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
           uBlobs: { value: Array.from({ length: MAX_BLOBS }, () => new THREE.Vector3()) },
           uBlobCount: { value: 0 },
           uSmooth: { value: 0.14 },
+          uRipples: { value: Array.from({ length: MAX_RIPPLES }, () => new THREE.Vector4()) },
+          uRippleCount: { value: 0 },
+          uRippleK: { value: 3.0 },
+          uRippleNu: { value: 0.0018 },
+          uRippleSrc: { value: 0.04 },
+          uRippleDecay: { value: 0.9 },
+          uRippleInk: { value: 0 },
           uBezel: { value: 0.13 },
           uThickness: { value: 0.1 },
           uSpread: { value: 0.34 },
@@ -326,8 +408,9 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
     [glass, blit],
   )
 
-  useFrame(({ gl, scene, camera }) => {
+  useFrame(({ gl, scene, camera, clock }) => {
     const panels = [...sdfPanels.values()].filter((p) => p.group.current)
+    const now = clock.elapsedTime
 
     // 1 — the world, once. The panels are hidden even though their material
     // is invisible: the contract is "the compositor owns these pixels", and a
@@ -399,6 +482,26 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
         ;(u.uBlobs.value as THREE.Vector3[])[i].set(blobs[i].x, blobs[i].y, blobs[i].r)
       }
       u.uBlobCount.value = nb
+
+      // Ages, not timestamps: the shader gets `now - t0` so it needs no clock
+      // of its own, and a ripple that has outlived `rippleLife` simply never
+      // reaches the uniform (the emitter prunes it too — this is the guard).
+      u.uRippleK.value = Math.max(q.rippleK, 1e-3)
+      u.uRippleNu.value = Math.max(q.rippleNu, 0)
+      u.uRippleSrc.value = Math.max(q.rippleSource, 0)
+      u.uRippleDecay.value = Math.max(q.rippleDecay, 1e-3)
+      u.uRippleInk.value = q.rippleInk
+      let nr = 0
+      if (q.rippleAmp > 0) {
+        const slots = u.uRipples.value as THREE.Vector4[]
+        for (const rp of p.ripples) {
+          if (nr >= MAX_RIPPLES) break
+          const age = now - rp.t0
+          if (age < 0 || age > q.rippleLife) continue
+          slots[nr++].set(rp.x, rp.y, age, rp.amp * q.rippleAmp)
+        }
+      }
+      u.uRippleCount.value = nr
 
       gl.setRenderTarget(dst)
       gl.render(glassScene, quadCam)

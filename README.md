@@ -2724,3 +2724,67 @@ distances merge, and the merge is an equation. This is the first thing
 in the lab that the mesh path could not have done at any price, rather
 than done more expensively — which is the real reason the glass stopped
 being geometry. Decisions #38.
+
+## lab 012 inc 2c — the ripple had to earn it
+
+First attempt at a contact ripple was a gaussian packet with a fixed
+wavelength, translated outward at a fixed speed. Pete's verdict, and it
+was right: *a bit tacked on*. Worth writing down exactly why, because
+the reasons are all physical and none of them are "needs more polish".
+
+**It didn't weaken as it spread.** A circular wave on a sheet pushes its
+energy through a front of circumference 2πr, so the amplitude must fall
+as 1/√r. Ours only decayed with age, so it arrived at the far edge as
+strong as it left the contact. Nothing on a real surface does that, and
+the eye knows it immediately even when it can't say why.
+
+**It didn't disperse.** A rigid packet translated at constant speed is a
+decal being scrolled. A real impact ring *stretches*, because different
+wavelengths travel at different speeds. At this scale the regime is
+capillary — surface tension, not gravity — so ω = C·k^(3/2), the group
+velocity is (3/2)·C·√k, and SHORT waves lead. Feed the stationary-phase
+condition r = v_group·t back into the phase and the entire train
+collapses to one expression:
+
+    theta(r,t) = K r^3 / t^2,   k(r,t) = d(theta)/dr = 3 K r^2 / t^2
+
+Two lines in the shader. The pattern is then self-similar along
+r ~ t^(2/3): measured across a run, the front travels
+0.16 → 0.48 → 0.88 → 1.54 world units while the wavelength grows
+0.29 → 0.37 → 0.45 → 0.58. The wave slows down and coarsens *together*,
+which is the thing a fixed-wavelength packet cannot fake at any
+amplitude. (The two expressions are consistent by construction — the
+derivative of the phase must equal the stationary wavenumber, which is a
+free correctness check, and it was run before either was typed.)
+
+**It ran over the rim.** The bezel is a thick edge, not a membrane. The
+wave is masked by the bezel coordinate so it dies into the rim instead
+of wobbling the one hairline that has to stay crisp.
+
+Two more things fell out of taking it seriously. A delta impulse makes
+the first frames *sixteen times* more violent than the last — the ring
+arrives as a crack and then behaves. But a bead is not a point and
+cannot radiate wavelengths shorter than itself; a gaussian source
+spectrum keyed to its radius flattens the run to a smooth 0.73 → 0.06
+decay with no hand-drawn ramp anywhere. And waves break: past a certain
+steepness a surface stops being a graph over the plane, so a soft
+saturation replaces the early frames that would otherwise fold the lens
+inside out.
+
+The impulse itself is closing speed × bead radius, sampled at the
+contact frame. That has a nice consequence for authoring: making the
+orbit livelier doesn't make the ripples bigger because a knob was
+turned, it makes them bigger because the beads arrive with more
+momentum. Measured across the change — merge impulses went 0.36–0.73 →
+0.62–0.94 from one edit to an orbit rate. Releases stay smaller than
+merges without being told to, because separation is gradual where
+contact is sudden.
+
+Cost is unchanged and the contract holds: 8.3 ms median, vsync-pinned at
+120 fps, one draw call, two triangles — and across 3.2 seconds of active
+rippling the paint counters did not move (wall 1, card 48, pill 5). The
+whole liquid simulation is uniform traffic. Nothing about it touches the
+DOM, which is also why the ink stays crisp: the wave warps the glass and
+the world behind it, and the text sits on top unbent. There is a knob to
+warp the ink too (`rippleInk`), left at 0 — the thesis is legibility.
+

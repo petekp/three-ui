@@ -7,12 +7,17 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
+  GLASS_DEFAULTS,
   GlassSdfCompositor,
   MAX_BLOBS,
+  MAX_RIPPLES,
   SdfGlassPanel,
+  sdRoundRect,
+  sdRoundRectGrad,
   sdfPanelLabels,
   sdfPanelParams,
   type GlassBlob,
+  type GlassRipple,
 } from './lab012Glass'
 
 // Lab 012 — the glass spike, and then the compositor that replaced it.
@@ -59,6 +64,12 @@ const PILL_W = 220
 const PILL_H = 72
 const CARD_HX = CARD_W / PX / 2
 const CARD_HY = CARD_H / PX / 2
+const CARD_R = GLASS_DEFAULTS.radius
+// Hysteresis on the contact test, borrowed from the smooth-min's own blend
+// radius: inside this band the two surfaces are already fusing, so it is
+// also the honest width of "the moment of contact".
+const RIPPLE_BAND = GLASS_DEFAULTS.smooth * 0.5
+const RIPPLE_LIFE = GLASS_DEFAULTS.rippleLife
 
 // DOM textures ride the default auto LOD. We tried `resolution="max"` here
 // and measured it SOFTER up close: a pinned tier oversupplies at most
@@ -310,20 +321,68 @@ function MtmGlassPanel({
 //
 // Mutated in place, never through state: the array identity is what the
 // compositor registered, and nothing here should cost a React render.
-function BlobDrift({ blobs }: { blobs: GlassBlob[] }) {
-  useFrame(({ clock }) => {
+// Contact is a SIGN CHANGE OVER TIME, and a fragment shader has no memory of
+// last frame — so it is detected here, on the CPU, at three SDF evaluations
+// per frame. The shader gets the conclusion (an origin and an age) rather
+// than the state machine.
+function BlobDrift({ blobs, ripples }: { blobs: GlassBlob[]; ripples: GlassRipple[] }) {
+  const touching = useRef<boolean[]>([])
+  const lastGap = useRef<number[]>([])
+  useFrame(({ clock }, dt) => {
     const t = clock.elapsedTime
     for (let i = 0; i < blobs.length; i++) {
       const b = blobs[i]
       const phase = (i * Math.PI * 2) / blobs.length
-      const a = t * (0.22 + i * 0.045) + phase
-      // 0 = swallowed by the card, 1 = fully detached. Slower than the
-      // orbit and out of phase with it, so no two beads bud at once.
-      const out = 0.5 - 0.5 * Math.cos(t * 0.55 + phase * 1.6)
+      const a = t * (0.3 + i * 0.055) + phase
+      // 0 = swallowed by the card, 1 = fully detached. Out of phase with
+      // the orbit so no two beads bud at once. The rate is a real authoring
+      // choice, not a cosmetic one: it sets the CLOSING SPEED, and the
+      // impulse model turns closing speed into wave height by itself. A
+      // lazier orbit doesn't make smaller ripples because it's tuned to —
+      // it makes them because it arrives with less momentum.
+      const out = 0.5 - 0.5 * Math.cos(t * 0.95 + phase * 1.6)
       b.r = 0.17 + 0.05 * Math.sin(t * 0.8 + phase)
       b.x = Math.cos(a) * (CARD_HX - 0.1 + out * 0.55)
       b.y = Math.sin(a) * (CARD_HY - 0.1 + out * 0.5)
+
+      // The gap between the two SURFACES, not the two centres. Crossing it
+      // is the event; the hysteresis band (the smooth-min's own blend
+      // radius) stops a bead that grazes the boundary from machine-gunning
+      // ripples on consecutive frames.
+      const gap = sdRoundRect(b.x, b.y, CARD_HX, CARD_HY, CARD_R) - b.r
+      const was = touching.current[i] ?? false
+      const isNow = was ? gap < RIPPLE_BAND : gap < -RIPPLE_BAND
+      // Closing speed, in world units per second — a bead that drifts in
+      // slowly must not hit as hard as one that arrives fast. Momentum is
+      // the impulse, so it scales with radius too: the wave a big bead makes
+      // is not the wave a small one makes at the same speed.
+      const closing = Math.abs(gap - (lastGap.current[i] ?? gap)) / Math.max(dt, 1e-4)
+      lastGap.current[i] = gap
+      if (isNow !== was) {
+        touching.current[i] = isNow
+        const impulse = Math.min(closing / 0.5, 2.2) * (b.r / 0.18)
+        // Emit AT the contact point — one bead radius back along the
+        // outward normal — so the wave starts where the surfaces met and
+        // not at the bead's centre, which by then is inside the card.
+        const [gx, gy] = sdRoundRectGrad(b.x, b.y, CARD_HX, CARD_HY, CARD_R)
+        ripples.push({
+          x: b.x - gx * b.r,
+          y: b.y - gy * b.r,
+          t0: t,
+          // A release recoils: surface tension letting go pulls the sheet
+          // back rather than pushing it out. Weaker than the impact, because
+          // separation is gradual where contact is sudden.
+          amp: isNow ? impulse : -0.55 * impulse,
+        })
+        if (ripples.length > MAX_RIPPLES) ripples.shift()
+      }
     }
+    // A ripple pushed from the console (or anywhere without this clock)
+    // arrives with t0 < 0 meaning "stamp me": the array's owner knows the
+    // time base, the emitter shouldn't have to.
+    for (const rp of ripples) if (rp.t0 < 0) rp.t0 = t
+    // Retire the dead, oldest first — the array is chronological.
+    while (ripples.length && t - ripples[0].t0 > RIPPLE_LIFE) ripples.shift()
   })
   return null
 }
@@ -448,6 +507,7 @@ export function Lab012() {
     () => Array.from({ length: 3 }, () => ({ x: 0, y: 0, r: 0 })),
     [],
   )
+  const ripples = useMemo<GlassRipple[]>(() => [], [])
 
   useEffect(() => {
     ;(window as unknown as { __lab012?: object }).__lab012 = {
@@ -498,6 +558,13 @@ export function Lab012() {
         return `${blobs.length} blobs`
       },
       blobs: () => blobs.map((b) => ({ ...b })),
+      // Fire one by hand, in panel-local units, to tune the wave without
+      // waiting for a bead to arrive.
+      ripple: (x = 0, y = 0, amp = 1) => {
+        ripples.push({ x, y, t0: -1, amp })
+        return `ripple at ${x},${y}`
+      },
+      ripples: () => ripples.map((r) => ({ ...r })),
       setResolution: (label: string, px?: number) => {
         setResOverride((s) => ({ ...s, [label]: px ?? 0 }))
         return px
@@ -573,10 +640,11 @@ export function Lab012() {
             height={CARD_H}
             px={PX}
             blobs={blobs}
+            ripples={ripples}
             position={[0, 1.7, 0.9]}
             content={<SignInForm />}
           />
-          <BlobDrift blobs={blobs} />
+          <BlobDrift blobs={blobs} ripples={ripples} />
           <SdfGlassPanel
             label="lab012-pill"
             width={PILL_W}

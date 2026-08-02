@@ -1850,3 +1850,73 @@ fixed. Merging requires one field, so it requires one pass. (c)
 a blob off that plane is a different surface and cannot share a bezel
 with the card. Coplanarity is not a simplification here, it is what the
 word "merge" means.
+
+## 40. The contact ripple is a capillary impulse, not a scrolled packet (2026-08-01, lab 012 inc 2c)
+
+**Decision.** A satellite making or breaking contact with a panel emits a
+`GlassRipple` — an origin in panel-local units, an age, and a signed
+amplitude. The shader adds it to the same height field the bezel already
+is, so the ripple contributes a second slope along its own radial
+direction and refraction bends through it for free. Up to `MAX_RIPPLES`
+(4) per panel.
+
+**Contact detection is CPU-side, and that is not laziness.** It is a
+sign change over time — the gap between the two *surfaces* crossing zero
+— and a fragment shader has no memory of last frame. Three SDF
+evaluations per frame in JS, with a hysteresis band borrowed from the
+smooth-min's own blend radius so a bead grazing the boundary doesn't
+machine-gun ripples on consecutive frames. The shader receives the
+conclusion, never the state machine.
+
+**Why the first version read as tacked on.** Three physical omissions,
+all of which the eye catches without being able to name:
+
+1. **No geometric spreading.** A circular front carries its energy
+   through a circumference 2πr, so amplitude must fall as 1/√r. Decaying
+   only with age means the wave hits the far edge as hard as it left.
+2. **No dispersion.** A fixed-wavelength packet translated at fixed
+   speed is a scrolled decal. The regime here is capillary (surface
+   tension, not gravity): ω = C k^(3/2), v_group = (3/2) C √k, so short
+   waves lead. Substituting the stationary-phase condition r = v_group·t
+   into the phase collapses the whole train to
+   **θ = K r³/t²**, with **k = dθ/dr = 3K r²/t²**. Two lines. The
+   pattern is self-similar along r ~ t^(2/3) — measured front
+   0.16→1.54 while wavelength grows 0.29→0.58 — so it slows and coarsens
+   together, which is the part that cannot be faked by amplitude.
+3. **It ran over the rim.** The bezel is a thick edge, not a membrane;
+   the ripple is masked by the bezel coordinate and dies into it.
+
+**Two consequences of taking it seriously.** (a) A *delta* impulse makes
+the opening frames 16× more violent than the closing ones. A bead is not
+a point and cannot radiate wavelengths shorter than itself, so a gaussian
+source spectrum keyed to its radius flattens the run to a smooth
+0.73→0.06 with no hand-authored ramp. (b) Waves break — past a steepness
+a surface is no longer a graph over the plane — so a soft saturation on
+the accumulated tilt replaces frames that would fold the lens inside out.
+
+**Impulse = closing speed × bead radius**, sampled at the contact frame.
+This makes liveliness an authoring input rather than a cosmetic one:
+raising the orbit rate moved merge impulses 0.36–0.73 → 0.62–0.94 with
+no ripple parameter touched, and releases stay weaker than merges on
+their own because separation is gradual where contact is sudden.
+
+**Measured.** Unchanged: 8.3 ms median, vsync-pinned 120 fps, 1 draw
+call, 2 triangles. Paint counters did not move across 3.2 s of active
+rippling (wall 1, card 48, pill 5) — the simulation is pure uniform
+traffic and never touches the DOM. Verified by browser capture: real
+contacts produce trains that originate at the neck and sweep across the
+panel; the rim hairline stays crisp; text stays crisp.
+
+**Rejected.** (a) *Gaussian packet at constant speed* — the original;
+non-dispersive, and no amount of tuning fixes what it structurally
+cannot do. (b) *Boundary reflection* — a rounded rect needs four image
+sources, so 4× the loop. Absorbing at the rim is cheaper and, for a
+thick edge against a thin sheet, closer to true. Open if a panel ever
+needs to ring. (c) *Warping the ink with the wave* (`rippleInk`, default
+0) — sells the liquid harder and costs the thesis; the world bends
+through the glass, the DOM sits on it. Left as a knob, not a default.
+(d) *Simulating the surface on a state texture* — a real wave equation
+would buy reflection and interference, but needs a per-panel ping-pong
+target and a fixed timestep. The analytic impulse is stateless, exact at
+any frame rate, and resumable — worth revisiting only if panels need to
+interact through the same sheet.
