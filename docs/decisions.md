@@ -1655,3 +1655,57 @@ Migrate when a floating-layer halo is actually measured, with labs
 trilinear+aniso; stats confirm mips on all three sources, premultiply
 + CustomBlending on both ink quads, wall (opaque) correctly straight;
 272 tests, idle contract untouched.
+
+## 37. Sharpness is a density match, not an allocation — the demo returns to auto (2026-08-01, lab 012)
+
+**Decision.** The glass demo's Surfaces ride the default auto LOD; the
+lab-012 pins are gone. `resolution="max"`/number remain in the API for
+what pinning actually buys — deterministic memory and zero mid-shot
+re-rasters — but the docs and the demo now carry the measured price:
+a pinned tier is SOFTER than auto anywhere the view is partially
+minified. And Surface gained the missing half of the pin contract:
+UNPINNING restores the dynamic filter policy from the live tier, so a
+switch back to auto that lands on the same rung doesn't keep trilinear
+mips forever.
+
+**Context.** #36 gave pinned textures mips to fix across-the-room
+aliasing; the same mips tax the close-up. Trilinear at density d on a
+tier t samples mip lod = log2(t/d): the card's pinned 6× at a close
+framing's d≈3.5 sits at lod ≈ 0.8 — most of the sample weight on a
+box-filtered half-res level. Auto never enters that regime: it picks
+the covering tier and, because drawElementImage replays a paint
+record, "picking a tier" is a fresh vector rasterization at the
+density the screen needs. No pinned allocation can beat that — max
+allocation was never max sharpness. Measured at dpr 1, same framing:
+pinned (4/6/6) vs auto (1/2/3) = ~6% edge-energy deficit, max pixel
+diff 74/255, grid lines and glyphs visibly softer under the pin. At
+lod ≈ 0.35 (extreme close-up) the penalty shrinks to near-invisible
+(max diff 4/255) — it scales with the blend fraction, so any
+mid-distance dolly through a pinned Surface crosses the worst of it.
+
+**The bug the A/B caught.** The first comparison came back
+pixel-identical because unpinning was a silent no-op: the pin effect
+had no else-branch, so when auto landed on the same tier (no realloc),
+nothing ever handed the filter policy back — stale trilinear mips for
+the life of the texture, exactly the #35 promise ("a later switch to
+auto finds the texture seated") broken at the filtering layer. Fixed
+in the pin effect; verified live at the same-tier case (auto holding
+6): `generateMipmaps` false, `minFilter` Linear. Corollary documented
+in-code: the reverse edge (same-tier PIN on a texture allocated
+without mips) is inert until the next realloc — texStorage2D fixes the
+level count at first upload, so flipping `generateMipmaps` on
+after the fact cannot add levels.
+
+**Evidence-channel note, for future A/Bs.** agent-browser screenshots
+are CSS-sized; at dpr 2 the capture is a 2× downsample of the render
+buffer and both contested mip levels oversupply it — the difference
+Pete sees on a retina display is INVISIBLE in the capture. Sampler
+comparisons must run at dpr 1 (capture px = device px) or probe the
+texture state directly instead of trusting pixels.
+
+**Rejected.** Sharpening the pin itself (density-driven minFilter
+toggling on a mips-always allocation): solvable, but it rebuilds the
+tier tracker inside the filter policy to save a feature whose remaining
+value — determinism — doesn't want it. If a shot needs no re-rasters,
+it accepts the trilinear tax; that trade is now a documented property
+of pinning, not a bug.

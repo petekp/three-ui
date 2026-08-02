@@ -42,12 +42,15 @@ const CARD_H = 440
 const PILL_W = 220
 const PILL_H = 72
 
-// LOD off for the glass demo: `resolution="max"` pins every DOM texture at
-// the sharpest tier the library's 4096px long-edge guard admits (card/pill
-// land on 6×, the wall on 4×), so distance never softens the ink and no
-// tier swap can re-raster mid-shot. This is TEXEL density of the rasterized
-// DOM; the refraction buffers are a separate, viewport-matched resolution
-// (see GlassPanel).
+// DOM textures ride the default auto LOD. We tried `resolution="max"` here
+// and measured it SOFTER up close: a pinned tier oversupplies at most
+// distances, and its mip chain trilinear-blends toward a box-filtered
+// half-res level whenever the view is even partially minified. Auto's
+// density-matched re-raster samples one sharp level by construction —
+// nothing beats re-running the vector paint record at the density the
+// screen actually needs. (Pin only for memory determinism / no mid-shot
+// re-rasters, and accept the trade.) The refraction buffers are a separate,
+// viewport-matched resolution (see GlassPanel).
 
 // ---- geometry: an extruded rounded rect --------------------------------
 
@@ -243,7 +246,6 @@ function GlassPanel({
         width={width}
         height={height}
         material="none"
-        resolution="max"
         content={content}
       >
         <primitive object={geo} attach="geometry" />
@@ -439,7 +441,6 @@ export function Lab012() {
         label="lab012-wall"
         width={WALL_W}
         height={WALL_H}
-        resolution="max"
         position={[0, 1.7, -0.8]}
         content={<WallArt />}
       >

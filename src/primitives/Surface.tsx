@@ -455,7 +455,17 @@ export function Surface({
       if (source.scale() !== prev) reallocAfterRef.current = source.paintCount()
       // Scale unchanged means no realloc will fire, but the pin itself
       // changes the filter policy (pinned textures carry mips) — apply now.
+      // (Caveat: on a texture first allocated WITHOUT mips this is inert —
+      // texStorage2D fixes the level count at first upload — so a same-tier
+      // pin only gains real mips after the next realloc. Pins that change
+      // the tier, the common case, realloc and get the full pyramid.)
       else if (texture) applyFilterPolicy(texture, pinnedScale, true)
+    } else if (source && texture) {
+      // Unpin: hand filtering back to the dynamic policy. Without this, a
+      // switch to auto that lands on the SAME tier never reallocs, and the
+      // texture keeps trilinear mips — blurring every partial-minification
+      // view that a fresh density-matched raster would render sharp.
+      applyFilterPolicy(texture, source.scale(), false)
     }
   }, [pinnedScale, texture])
 

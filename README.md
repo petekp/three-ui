@@ -2554,3 +2554,33 @@ One/OneMinusSrcAlpha — exact for an unlit passthrough, and under
 verified live-A/B-then-from-code with tight-crop screenshots.
 Decisions #36; library-wide premultiplication deliberately deferred
 until a floating-layer halo is measured.
+
+**Addendum — the pin loses the argument.** Pete, third round: better,
+but the DOM texture still has fuzz close up. The math said why before
+the pixels did: a pinned 6× texture viewed at density ~3.5 sits at mip
+lod ≈ 0.8, and trilinear spends most of its weight on the box-filtered
+half-res level — the mips that fixed the across-the-room aliasing are
+now *taxing the close-up*. Auto never pays this tax: a density-matched
+tier samples one sharp level, and because the source is a paint record,
+"picking the right tier" means *re-rastering the vectors at exactly the
+density the screen needs* — which no amount of allocated texels can
+beat. Max allocation was never max sharpness; sharpness is a density
+MATCH, and matching density is precisely the thing auto LOD does.
+
+The A/B that proved it also caught a bug on the way. First attempt:
+HMR the pin off, compare — pixel-identical (max diff 2/255). Not
+because the theory was wrong, but because unpinning *did nothing*:
+auto landed on the same tier, no realloc fired, and no code path ever
+handed the filter policy back — the texture kept its trilinear mips
+forever. (Also the capture couldn't have seen it anyway: screenshots
+are CSS-sized, so at dpr 2 both mip levels oversupply the evidence
+channel. Redone at dpr 1, where capture px = device px.) The clean
+A/B: pinned 4/6/6 vs auto 1/2/3 at the same close framing — auto
+carries ~6% more edge energy, max diff 74/255, and the crops agree:
+grid lines and glyph edges visibly crisper. Surface grew the missing
+unpin branch (filter policy restored from the live tier), verified in
+the browser at the nastiest case — auto holding the SAME tier 6 the
+pin had, `generateMipmaps` false, `minFilter` back to Linear. The
+demo's Surfaces ride auto again; the pin remains in the API for what
+it actually buys — memory determinism and no mid-shot re-rasters — at
+a price that is now measured and written down. Decisions #37.
