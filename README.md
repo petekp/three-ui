@@ -2269,3 +2269,42 @@ return all the way to the trigger, hold; wander off the corridor and
 it closes; leave the card downward and it closes; 0 paints/2s
 everywhere after every close. Decisions #31. The floating family's
 hover story is complete.
+
+## the workbench — three scroll idioms, one seam
+
+A third panel joins the room, angled in from the right: a workbench
+with a Tabs strip, a Table of the lab ledger, and a Radix ScrollArea
+holding the decisions record. It was built as a stress test of #29's
+claim that the forwarder is a *general* scroll engine, not a
+message-scroller accessory — and the claim held with zero library
+changes. Three idioms now ride the seam: the chat's scroller, a plain
+`overflow-y-auto` region around the table, and Radix ScrollArea, whose
+viewport hides the native scrollbar behind an inline `overflow: hidden
+scroll` (which passes the same computed-style gate as a Tailwind
+class) and paints its own thumb as ordinary DOM. The thumb is the
+part worth watching: Radix moves it from `scroll` events, the
+forwarder's direct mutation fires those natively, so a wheel through
+the texture drags a custom scrollbar the compositor has never heard
+of. Viewport 0→310px, thumb 0→169.6px, camera frozen throughout, and
+the ledger at its bottom refuses the camera three wheels in a row.
+
+Two costs of honesty got measured on the way. A motionless click that
+swaps tabs costs 25 paints — not the subtree swap, which is one, but
+the registry trigger's `transition-all` easing both triggers' colors
+for ~150ms, a bounded burst that ends in silence, same class as the
+palette's caret. And the table's sticky header shipped broken: shadcn
+wraps every table in its own `overflow-x-auto` container, `position:
+sticky` pins to the *nearest* scrolling ancestor, so scrolling a
+wrapper outside it carried the header away with the rows. That one is
+plain CSS that would bite identically on a flat page — the medium
+didn't bend it, which is its own kind of evidence. The scroll region
+is now the table's own container and the header holds at offset 0
+while the rows slide beneath it.
+
+One process lesson, paid for twice: hand-derived screen offsets lie.
+The panel stands rotated away on its far side, so perspective
+foreshortens it to ~0.6 screen px per panel px — a click aimed by
+linear interpolation from a neighboring landmark missed a 64px-wide
+tab. Every aimed point now goes through the mesh's own
+`localToWorld → project` math, fresh each run. Idle after all of it:
+0 paints/3s across five sources.

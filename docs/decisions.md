@@ -1225,6 +1225,20 @@ paint per frame where one was enough. (c) *Toggling
 `controls.enableZoom` from hover state* — a mode flag racing pointer
 moves, and it breaks wheel-over-panel zoom, which is correct whenever
 nothing under the point can scroll.
+**Consumers since** (2026-08-01, lab 010 inc 7): three scroll idioms
+ride the seam with zero library changes. shadcn's message-scroller
+(the original consumer); a Table inside shadcn's own
+`overflow-x-auto` container given `overflow-y-auto` (note: `position:
+sticky` pins to the *nearest* scrolling ancestor, and shadcn tables
+always ship one — scroll that container, not a wrapper around it, or
+the sticky header rides away with the rows; plain CSS, not the
+medium); and Radix ScrollArea, whose viewport's inline `overflow:
+hidden scroll` passes the same computed-style gate as a Tailwind
+class, and whose custom scrollbar thumb is ordinary DOM moved from
+`scroll` events — which the forwarder's direct mutation fires
+natively, so the thumb tracks a forwarded wheel through the texture
+(measured: viewport 0→310px, thumb `translate3d` 0→169.6px, camera
+frozen).
 
 ## 30. No `mask-image` inside a drawn subtree — the mask blacks out the capture (2026-08-01, lab 010)
 

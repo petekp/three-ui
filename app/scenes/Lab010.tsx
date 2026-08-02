@@ -36,9 +36,19 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { Toaster } from '@/components/ui/sonner'
 
@@ -423,6 +433,142 @@ function SessionSidebar({ position, rotation }: {
   )
 }
 
+// ── The workbench ──────────────────────────────────────────────────────────
+//
+// A third panel, and deliberately a third scroll idiom. The chat log scrolls
+// a shadcn message-scroller; this panel's ledger tab scrolls a plain
+// `overflow-y-auto` div wrapped around a Table, and its decisions tab scrolls
+// a Radix ScrollArea — whose viewport hides the native scrollbar and paints
+// its own thumb as ordinary DOM. All three ride the same seam (decisions
+// #29): the forwarder walks up from the hit element for the nearest
+// scrollable ancestor, and Radix's inline `overflow: hidden scroll` passes
+// the same computed-style gate a Tailwind `overflow-y-auto` does. The thumb
+// is the visible proof — it tracks the forwarded scroll through the texture
+// because Radix moves it from `scroll` events, which the forwarder's
+// performed scroll fires natively.
+//
+// Tabs are the cheap half of the increment: a switch is one subtree swap →
+// one paint, and an idle table costs nothing. That claim is the ledger's own
+// last row, so the panel documents itself.
+
+const BENCH_W = 340
+const BENCH_H = 500
+
+const LABS: Array<{ id: string; title: string; banked: string; tests: number }> = [
+  { id: '001', title: 'first light', banked: 'Surface', tests: 4 },
+  { id: '002', title: 'layers', banked: 'SurfaceLayer · UVAnchor', tests: 21 },
+  { id: '003', title: 'physics kit', banked: 'drag plane · spring', tests: 58 },
+  { id: '004', title: 'reading tiers', banked: 'LOD · camera rides', tests: 74 },
+  { id: '005', title: 'live media', banked: 'VideoTexture quad', tests: 89 },
+  { id: '006', title: 'the HUD', banked: 'paint stats · probes', tests: 101 },
+  { id: '007', title: 'focus', banked: 'FocusScene · spatnav', tests: 156 },
+  { id: '008', title: 'orbit rig', banked: 'FocusOrbitRig', tests: 171 },
+  { id: '009', title: 'shadcn port', banked: 'AnchoredSurface', tests: 214 },
+  { id: '010', title: 'agentic UI', banked: 'the floating family', tests: 258 },
+]
+
+const DECISIONS = [
+  { n: 17, title: 'Animate the mesh, not the root', body: 'The drawn root’s own opacity/transform never invalidate its paint record. Descendants rasterize fine but cost a paint per frame — flights belong on the mesh.' },
+  { n: 19, title: 'The departure burst', body: 'A synthetic exit is discrete; consumers arm on leave and need moves after it. Leaving a Surface sends the leave, then frames of outside moves.' },
+  { n: 22, title: 'Detachment severs geometry, not containment', body: 'Click-outside dismissal is a DOM-tree question and survives detaching. A hover layer’s grace polygon is geometric, and does not.' },
+  { n: 26, title: 'Silence the hover move at the canvas', body: 'Stop trusted moves at the canvas target phase, downstream of document capture — listeners at the document still hear everything.' },
+  { n: 29, title: 'The wheel finds its seat', body: 'Synthetic wheels never scroll natively, so the forwarder performs the scroll. A wheel nothing consumes chains to the camera, like scroll chaining to a page.' },
+  { n: 30, title: 'The mask that voided the capture', body: 'A capture mask over the canvas swallowed every pointer. Occlusion must be matter — a mesh in front — not CSS pretending.' },
+  { n: 31, title: 'Hover grace is a screen-space corridor', body: 'Exit points and the projected quad, hulled per judged move. Screen space is the only space where “travelling toward that slab” is a statement.' },
+]
+
+function Workbench() {
+  return (
+    <div
+      className="flex flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm"
+      style={{ width: BENCH_W, height: BENCH_H }}
+    >
+      <header className="flex items-baseline justify-between px-4 py-3">
+        <span className="text-sm font-semibold">Workbench</span>
+        <span className="font-mono text-[10px] text-muted-foreground">every seam, on the record</span>
+      </header>
+      <Separator />
+      <Tabs defaultValue="ledger" className="min-h-0 flex-1 gap-0">
+        <TabsList className="mx-3 mt-3">
+          <TabsTrigger value="ledger">Ledger</TabsTrigger>
+          <TabsTrigger value="decisions">Decisions</TabsTrigger>
+        </TabsList>
+        <TabsContent value="ledger" className="min-h-0 flex-1 p-3">
+          {/* The scroll region is the Table's OWN wrapper (shadcn renders an
+              `overflow-x-auto` container around every table) — sticky pins to
+              the nearest scrolling ancestor, so scrolling anything outside it
+              would carry the header away. overscroll-contain: the ledger at
+              its end refuses to hand the wheel to the camera, same contract
+              as the chat log. */}
+          <div
+            data-testid="lab010-ledger"
+            className="h-full overflow-hidden rounded-md border [&_[data-slot=table-container]]:h-full [&_[data-slot=table-container]]:overflow-y-auto [&_[data-slot=table-container]]:overscroll-contain"
+          >
+            <Table>
+              <TableHeader className="sticky top-0 bg-card">
+                <TableRow>
+                  <TableHead className="w-12">lab</TableHead>
+                  <TableHead>banked</TableHead>
+                  <TableHead className="text-right">tests</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {LABS.map((l) => (
+                  <TableRow key={l.id}>
+                    <TableCell className="font-mono text-xs">{l.id}</TableCell>
+                    <TableCell>
+                      <div className="text-xs font-medium">{l.title}</div>
+                      <div className="text-[10px] text-muted-foreground">{l.banked}</div>
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs">{l.tests}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </TabsContent>
+        <TabsContent value="decisions" className="min-h-0 flex-1 p-3">
+          {/* type="always": the thumb is the point — Radix paints it as DOM,
+              and it tracks the forwarded scroll through the texture. */}
+          <ScrollArea type="always" className="h-full rounded-md border">
+            <div className="flex flex-col gap-3 p-3 pr-4">
+              {DECISIONS.map((d) => (
+                <div key={d.n} className="flex flex-col gap-0.5">
+                  <span className="font-mono text-[10px] text-muted-foreground">#{d.n}</span>
+                  <span className="text-xs font-medium">{d.title}</span>
+                  <span className="text-[11px] leading-snug text-muted-foreground">{d.body}</span>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+function WorkbenchPanel({ position, rotation }: {
+  position: [number, number, number]
+  rotation: [number, number, number]
+}) {
+  const outer = useRef<Group>(null)
+  return (
+    <group position={position} rotation={rotation} ref={outer}>
+      <FocusGroup id="workbench" order={2} objectRef={outer}>
+        <SurfaceApp
+          content={<Workbench />}
+          label="lab010-workbench"
+          width={BENCH_W}
+          height={BENCH_H}
+          castShadow
+        >
+          <planeGeometry args={[BENCH_W / PX, BENCH_H / PX]} />
+        </SurfaceApp>
+      </FocusGroup>
+    </group>
+  )
+}
+
 // ── The viewer chrome ──────────────────────────────────────────────────────
 //
 // The command palette belongs to the eye, not to any panel — it rides the
@@ -576,6 +722,7 @@ export function Lab010() {
       />
 
       <SessionSidebar position={[-1.72, 1.55, 0.28]} rotation={[0, 0.38, 0]} />
+      <WorkbenchPanel position={[1.92, 1.52, 0.3]} rotation={[0, -0.4, 0]} />
 
       <ViewerSurface label="lab010-hud" content={<ViewerHud />} />
     </>
