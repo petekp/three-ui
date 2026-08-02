@@ -147,11 +147,35 @@ function GlassBufferCoordinator() {
 
 function GlassInk({ w, h, depth }: { w: number; h: number; depth: number }) {
   const texture = useSurfaceTexture()
+  // The glass root rasterizes with real alpha, and GPU bilinear filtering
+  // averages RAW rgb across texels — straight-alpha data mixes the white of
+  // near-transparent pixels (bg-white/10 is white rgb at α≈0.1) into every
+  // boundary with opaque content: a light halo around the text-selection
+  // rectangle, measured in lab 012. Premultiplying at upload makes the
+  // filtering average premultiplied values; the blend factors below stop
+  // the already-multiplied rgb from being multiplied by alpha again. Exact
+  // for an unlit passthrough material — and under material="none" the ink
+  // is this texture's only consumer, so the upload flag can't skew anyone
+  // else.
+  useEffect(() => {
+    if (!texture) return
+    texture.premultiplyAlpha = true
+    texture.needsUpdate = true
+  }, [texture])
   if (!texture) return null
   return (
     <mesh position={[0, 0, depth / 2 + BEVEL + INK_LIFT]}>
       <planeGeometry args={[w / PX, h / PX]} />
-      <meshBasicMaterial map={texture} transparent toneMapped={false} depthWrite={false} />
+      <meshBasicMaterial
+        map={texture}
+        transparent
+        toneMapped={false}
+        depthWrite={false}
+        blending={THREE.CustomBlending}
+        blendEquation={THREE.AddEquation}
+        blendSrc={THREE.OneFactor}
+        blendDst={THREE.OneMinusSrcAlphaFactor}
+      />
     </mesh>
   )
 }

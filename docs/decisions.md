@@ -1609,3 +1609,49 @@ authored-size case only; measured Surfaces still can't call it in
 time. (b) *"Freeze at current tier"* recording mode — subsumed by
 'max' for any scene that can afford the memory; build it when a real
 scene can't. (c) *Silent clamp* — see above.
+
+## 36. Filtering happens before the shader — pinned tiers carry mips, transparent ink premultiplies (2026-08-01, lab 012)
+
+**Decision.** Two data-level rules, one theme: the GPU sampler acts on
+raw texel data, so neither fix can live in a material. (a) A Surface
+whose resolution is PINNED ('max'/number) always generates mipmaps and
+samples trilinear; the mips-off policy survives only for ladder-tracked
+tiers (auto/range) above 0.5. (b) A transparent DOM texture consumed by
+an unlit overlay (the glass ink) is uploaded PREMULTIPLIED
+(`texture.premultiplyAlpha = true`) and blended One/OneMinusSrcAlpha —
+app-side for now, on the material-slot consumer.
+
+**Context (a).** The no-mips policy's reasoning — "the tier ladder IS
+the mip chain" — holds only while the tier tracks screen density. A
+pinned tier deliberately oversupplies at range: the card's 6× texture
+(2160×2640) is minified ~4× from across the room, and bilinear
+minification without mips is aliasing by construction — measured as
+shredded fine text and grid moiré the moment lab 012 pinned 'max'. The
+`anisotropy = 8` set on every texture did nothing at all before this:
+anisotropic filtering selects FROM the mip chain, and there wasn't one.
+At near-1:1 the GPU samples the top level anyway, so close-up
+sharpness — the reason for the pin — is untouched.
+
+**Context (b).** Bilinear averages RAW rgb across texels. A glass root
+rasterizes with real alpha, and `bg-white/10` texels are WHITE rgb at
+α≈0.1 — straight-alpha filtering mixes that full-strength white into
+every boundary with opaque content. Measured: a light halo hugging the
+text-selection rectangle. Premultiplied data makes the average correct;
+the custom blend factors stop the already-multiplied rgb from being
+multiplied again. Exact for an unlit passthrough; under
+`material="none"` the ink is the texture's only consumer, so the
+upload flag skews nobody else.
+
+**Open, deliberately.** Library-wide premultiplication is the
+principled endgame — every transparent Surface (floating layers) has
+this artifact class in miniature — but it changes the material-slot
+contract (#33: every custom material must blend premultiplied) and
+touches lit standard materials where the math is not a passthrough.
+Migrate when a floating-layer halo is actually measured, with labs
+009/010 in the browser as the regression net.
+
+**Verified.** Lab 012, Chrome 150: selection-rect halo gone from code
+(tight-crop A/B); wall fine text and grid lines resolve through
+trilinear+aniso; stats confirm mips on all three sources, premultiply
++ CustomBlending on both ink quads, wall (opaque) correctly straight;
+272 tests, idle contract untouched.

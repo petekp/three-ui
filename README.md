@@ -2535,3 +2535,22 @@ guarded — numbers clamp to the exact boundary with a warning, `'max'`
 stays on the ladder rung. The scene deleted its copied constants and
 says `resolution="max"`; the browser resolves the same 4/6/6.
 Decisions #35.
+
+And then the pin exposed what it had broken. Pete: still fuzzy, still
+aliased, white halo on the text selection. Both artifacts lived below
+the material, in the sampler. First: the no-mips filter policy ("the
+tier ladder IS the mip chain") is only true while the tier tracks
+density — a pinned 6× texture minified ~4× from across the room is
+bilinear soup, and the anisotropy=8 on every texture had been doing
+nothing, because anisotropic filtering selects from a mip chain that
+didn't exist. Pinned textures now always carry mips + trilinear; the
+top level is what gets sampled up close, so the pin's whole purpose is
+untouched. Second: the halo was straight-alpha filtering — bilinear
+averages raw rgb, and the glass root's `bg-white/10` texels are
+full-strength WHITE at α≈0.1, bleeding into every boundary with
+opaque content. The ink texture now uploads premultiplied and blends
+One/OneMinusSrcAlpha — exact for an unlit passthrough, and under
+`material="none"` the ink is the texture's only consumer. Both fixes
+verified live-A/B-then-from-code with tight-crop screenshots.
+Decisions #36; library-wide premultiplication deliberately deferred
+until a floating-layer halo is measured.

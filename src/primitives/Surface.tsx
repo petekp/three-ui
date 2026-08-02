@@ -167,8 +167,17 @@ const _surfScale = new THREE.Vector3()
 // tiers. Far tiers (≤0.5) keep them: there a panel is small/oblique, and
 // trilinear + anisotropy tame minification shimmer the ladder can't
 // (anisotropy is directional; the ladder isn't).
-function applyFilterPolicy(tex: THREE.Texture, tier: number) {
-  const mips = tier <= 0.5
+// …but that reasoning only holds while the tier TRACKS density. A PINNED
+// tier ('max'/number) deliberately oversupplies at range — the card's 6×
+// texture is minified ~4× from across the room — and bilinear minification
+// without mips is aliasing by construction (measured in lab 012: shredded
+// fine text, moiré on grid lines, and the `anisotropy = 8` set below does
+// nothing at all without a mip chain to select from). So pinned textures
+// always get mips + trilinear: at near-1:1 the GPU samples the top level
+// anyway (no sharpness lost up close), and everything farther finally has
+// the chain anisotropy needs.
+function applyFilterPolicy(tex: THREE.Texture, tier: number, pinned: boolean) {
+  const mips = pinned || tier <= 0.5
   if (tex.generateMipmaps !== mips) {
     tex.generateMipmaps = mips
     tex.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter
@@ -390,7 +399,7 @@ export function Surface({
     const tex = new THREE.CanvasTexture(source.canvas)
     tex.colorSpace = THREE.SRGBColorSpace
     tex.anisotropy = 8
-    applyFilterPolicy(tex, source.scale())
+    applyFilterPolicy(tex, source.scale(), pinnedScaleRef.current !== null)
     // Set at birth as well as in the effect below: that effect is passive and
     // r3f draws from its own rAF loop, so a mirrored Surface would otherwise
     // get one frame of backwards text before the flip lands.
@@ -444,6 +453,9 @@ export function Surface({
       const prev = source.scale()
       source.setScale(pinnedScale)
       if (source.scale() !== prev) reallocAfterRef.current = source.paintCount()
+      // Scale unchanged means no realloc will fire, but the pin itself
+      // changes the filter policy (pinned textures carry mips) — apply now.
+      else if (texture) applyFilterPolicy(texture, pinnedScale, true)
     }
   }, [pinnedScale, texture])
 
@@ -524,7 +536,7 @@ export function Surface({
     const count = source.paintCount()
     if (reallocAfterRef.current >= 0 && count > reallocAfterRef.current && source.painted()) {
       texture.dispose()
-      applyFilterPolicy(texture, source.scale())
+      applyFilterPolicy(texture, source.scale(), pinnedScaleRef.current !== null)
       reallocAfterRef.current = -1
     }
     if (paint === 'always') {
