@@ -44,6 +44,13 @@
 
 @import 'tailwindcss';
 @import 'tw-animate-css';
+/* The registry's own base CSS imports this since the chat/AI set landed —
+ * it carries the utilities those components wear (`scroll-fade-*` as
+ * @property-registered mask fades, `no-scrollbar`, accordion keyframes).
+ * Same doctrine as tw-animate above: a score. scroll-fade animates
+ * registered custom props consumed by mask-image on DESCENDANTS, which
+ * rasterizes correctly (paint property, record invalidates). */
+@import 'shadcn/tailwind.css';
 
 @custom-variant hover (&:is(:hover, [data-hover]));
 @custom-variant active (&:is(:active, [data-active]));

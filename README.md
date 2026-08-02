@@ -2101,3 +2101,26 @@ camera zooms; at the contained scroller's end, *nothing* moves — scroll
 pinned, camera pinned; over empty canvas, the room takes it. Decisions
 #29. The chat log now has everything it needs; next, the components
 themselves come in byte-verbatim.
+
+## the shipment — sixteen components, two claims checked at the door
+
+The chat set came in the way everything comes in: byte-verbatim from
+the registry (curl into node, never retyped). Sixteen files — the AI
+four (`message`, `message-scroller`, `bubble`, `attachment`), the
+palette (`command`, on cmdk), both scroll idioms (`scroll-area`,
+`table`), and the supporting cast (`avatar`, `kbd`, `spinner`, `empty`,
+`textarea`, `separator`, `hover-card`, `skeleton`, `tabs`). Two new
+packages: `@shadcn/react` (the scroller primitive message-scroller
+stands on) and `cmdk`.
+
+Two things needed judgment. `hover-card` is the only new portal-er, so
+it gained the same one-line `container` passthrough as popover and
+dialog — port deviation #4, third application. And the scroller's
+classes (`scroll-fade-b`, `scrollbar-thin`) come from a stylesheet the
+registry's base CSS now imports: `shadcn/tailwind.css`, shipped in the
+`shadcn` package. It joins `tw-animate-css` in shadcn.css under the
+same doctrine — a score, not a performance: scroll-fade animates
+@property-registered custom props consumed by `mask-image` on
+descendants, which is paint-level and rasterizes honestly. No vh/vw
+anywhere in the set; no component animates a drawn root. 240 tests,
+tsc and build clean, all labs load. Now the scene.
