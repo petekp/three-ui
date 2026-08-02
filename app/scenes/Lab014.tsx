@@ -719,9 +719,18 @@ interface FlyingProps {
   onPainted: () => void
   /** Board's `painted` state, reflected back down: gates the page-copy hide AND the shadow. */
   painted: boolean
+  /**
+   * Board-owned altitude state, reflected back down like `painted`. The
+   * driver's density schedule writes it (via `onAltitude`) and TWO consumers
+   * read it: the texture pin here, and the vacated slot's outline on the
+   * page — which must fade while the card is still in the air, because the
+   * swap instant is exactly when nothing may change (see the slot CSS).
+   */
+  atAltitude: boolean
+  onAltitude: (hi: boolean) => void
 }
 
-function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLanded, onPainted, painted }: FlyingProps) {
+function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLanded, onPainted, painted, atAltitude, onAltitude }: FlyingProps) {
   const f = flight.current!
   const cardRef = useRef<THREE.Group>(null)
   const shadowRef = useRef<THREE.Mesh>(null)
@@ -748,7 +757,6 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
   // the landing swap is a pixel copy too. The driver owns the toggle — it is
   // the only thing that watches z every frame.
   const airborneDensity = dpr * planeScale(cameraDistance(viewH, FOV), LIFT_Z)
-  const [atAltitude, setAtAltitude] = useState(false)
   const density = atAltitude ? airborneDensity : dpr
 
   // Scene hook (the __lab005 convention): the flight ref and the card's
@@ -820,7 +828,7 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
         cardRef={cardRef}
         shadowRef={shadowRef}
         density={density}
-        onAltitude={setAtAltitude}
+        onAltitude={onAltitude}
         chromeRef={chromeRef}
       />
 
@@ -974,6 +982,11 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
   const [board, setBoard] = useState<Record<ColId, string[]>>(() => ({ ...START }))
   const [flyingId, setFlyingId] = useState<string | null>(null)
   const [painted, setPainted] = useState(false)
+  // The density schedule's altitude verdict, lifted here because the vacated
+  // slot's outline keys on it too: the outline may only be lit while the
+  // card is safely away, and must fade on the DESCENT — the swap instant is
+  // exactly when nothing on the page is allowed to change.
+  const [atAltitude, setAtAltitude] = useState(false)
 
   const flight = useRef<Flight | null>(null)
   const slots = useRef(new Map<string, HTMLLIElement>())
@@ -1087,6 +1100,7 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
         done: false,
       }
       setPainted(false)
+      setAtAltitude(false)
       setFlyingId(id)
     },
     [],
@@ -1134,6 +1148,7 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
     flight.current = null
     setFlyingId(null)
     setPainted(false)
+    setAtAltitude(false)
     document.querySelectorAll<HTMLElement>('.l14-slot').forEach((el) => {
       el.style.removeProperty('--l14-near')
     })
@@ -1185,6 +1200,7 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
                     className="l14-slot"
                     key={id}
                     data-empty={flyingId === id && painted}
+                    data-away={flyingId === id && painted && atAltitude}
                     ref={(el) => {
                       if (el) slots.current.set(id, el)
                       else slots.current.delete(id)
@@ -1298,6 +1314,8 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
             onLanded={onLanded}
             onPainted={() => setPainted(true)}
             painted={painted}
+            atAltitude={atAltitude}
+            onAltitude={setAtAltitude}
           />
         )}
       </Canvas>

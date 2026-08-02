@@ -3411,3 +3411,29 @@ strip below the card's edge through a live drop: the final frames
 before the swap now read a decaying Gaussian fringe (α 15/9/5/2/0 at
 3/6/9/14/22 px) within a few counts of the DOM shadow that replaces
 it — where the old code read zero, every time. decisions.md #56.
+
+## the outline that outstayed the card
+
+One seam left, and it wasn't the card at all. The vacated slot's dashed
+outline — bluest exactly when the card is about to land, because the
+proximity glow peaks at zero distance — was keyed to the swap, so it
+vanished the frame the DOM card returned. Through the card's slightly
+translucent border you could watch it happen: dark, then abruptly
+lighter. The page was changing at the one instant the page must not
+change.
+
+The fix keys the outline on the flight's own altitude verdict instead —
+the same signal that already drives the texture density schedule. It
+flips the moment a drop begins, so the 140 ms fade-out spends itself
+under a card that is still falling, and it flips on during the climb,
+so the fade-in plays under a card that is leaving. Both swap instants
+now remove nothing that is visible. The trace agrees: the outline's
+computed color is true transparent for the final eight frames before
+every touchdown.
+
+And one small ghost exorcised on the way: `outline-color`'s initial
+value is currentColor, so an outline declared only in the active state
+transitions *from the text color* the first time it appears — a faint
+outline fading out under every freshly lifted card. The colorless dash
+now exists on every slot from birth; lighting it is a pure color
+change. decisions.md #57.

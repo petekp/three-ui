@@ -90,13 +90,23 @@
 
 /* The slot keeps the card's space in normal flow. When a card lifts off,
  * its slot stays exactly the height it was — which is why the rest of the
- * page does not so much as twitch at the moment of handoff. */
+ * page does not so much as twitch at the moment of handoff.
+ *
+ * The dashes exist (colorlessly) on EVERY slot, not just empty ones:
+ * `outline-color`'s default is currentColor, so declaring the outline only
+ * at data-empty made the transition's from-value the text color — a ghost
+ * outline fading out under the just-lifted card (measured: alpha 0.46 on
+ * the first flight frame). With the transparent dash always present there
+ * is no property flip to transition from. */
 .l14-slot {
   margin: 0 0 14px;
   border-radius: 14px;
+  outline: 1.5px dashed transparent;
+  outline-offset: -1.5px;
+  transition: background 140ms linear, outline-color 140ms linear;
 }
 
-/* …and what an empty slot looks like once the freeze-frame is gone. The
+/* …and what the slot lights up as while its card is away. The
  * `--l14-near` channel is written from the physics: how close the held card
  * is to landing here, 0–1.
  *
@@ -105,12 +115,22 @@
  * marched everything below it 2px down the page at every liftoff, then 2px
  * back up at every landing (measured on the slot under the grabbed card).
  * The outline draws the same dashes without owning a single pixel of
- * layout. An empty slot may repaint; it may never remeasure. */
-.l14-slot[data-empty="true"] {
-  outline: 1.5px dashed color-mix(in oklab, var(--rule), var(--accent) calc(var(--l14-near, 0) * 70%));
-  outline-offset: -1.5px;
+ * layout. An empty slot may repaint; it may never remeasure.
+ *
+ * And it may only be LIT while the card is safely away (`data-away`, the
+ * driver's altitude verdict). The card's own border pixels are slightly
+ * translucent, so whatever the slot paints shows through them whenever the
+ * card covers it — and the two moments a card exactly covers its slot are
+ * the two swap instants, where nothing on the page is allowed to change.
+ * Keyed on the swap, the outline vanished discretely at touchdown, at its
+ * bluest (`--l14-near` ≈ 1), and the resting card's border visibly
+ * lightened one frame later. Keyed on altitude, the fade-out spends the
+ * descent (the signal flips the instant the card starts home, ~400 ms
+ * before rest) and the fade-in spends the climb — both play out under a
+ * card in motion, and the swaps have nothing left to remove. */
+.l14-slot[data-away="true"] {
+  outline-color: color-mix(in oklab, var(--rule), var(--accent) calc(var(--l14-near, 0) * 70%));
   background: color-mix(in oklab, transparent, var(--accent) calc(var(--l14-near, 0) * 9%));
-  transition: background 140ms linear, outline-color 140ms linear;
 }
 
 .l14-card {

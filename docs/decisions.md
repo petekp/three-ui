@@ -2769,3 +2769,37 @@ zero at every tap. Composited over the page those values sit within
 3–5 counts of the DOM's own fringe at the same coordinates (sub-2%
 luminance — at or below the compositing model's own noise). 328/328,
 tsc clean.
+
+## 57. Page-side signage keys on a signal that LEADS the swap — and an outline is born transparent (2026-08-02, lab 014)
+
+**Decision.** Two rules from the last visible seam in the handoff:
+
+1. **Anything the page paints under a card must be gone before the card
+   can rest on it.** The vacated slot's dashed outline was keyed on the
+   swap (`data-empty`), so it vanished discretely at touchdown — at its
+   *bluest*, since the proximity glow `--l14-near` peaks exactly at
+   landing — and the resting card's translucent border pixels visibly
+   lightened one frame later. It now keys on `data-away`, the driver's
+   altitude verdict, which flips the instant a card starts home
+   (~400 ms before rest) and on the climb's threshold crossing: the
+   140 ms outline-color fade spends itself under a card in motion, and
+   both swap instants remove nothing that is still visible. Same
+   family as #54: the two moments a card exactly covers its slot are
+   the two moments the page may not change.
+2. **A transitioned outline must exist — transparently — before its
+   first lighting.** `outline-color`'s initial value is currentColor,
+   so declaring the outline only in the active state made the first
+   transition's from-value the *text color*: a ghost outline at
+   alpha 0.46 fading out under every just-lifted card (measured on the
+   first flight frame). The colorless dash now lives on every slot
+   permanently; lighting it is a pure color change with a true
+   transparent origin.
+
+**Measured (2026-08-02).** Per-frame computed-style trace through a
+full cycle: birth `rgba(0,0,0,0)`; fade-in starts at the h ≈ 62→67
+crossing; fully lit opaque through the held phase; `data-away` false
+within one frame of `mode: home` at h 96; final eight pre-swap frames
+all `rgba(0,0,0,0)`. 328/328, tsc clean. (Instrument note: a computed
+`oklab(L a b)` with no alpha channel is OPAQUE — a regex that grabs
+"the last number before the paren" reads the b-channel and reports a
+phantom near-zero alpha. Parse the slash.)
