@@ -2509,3 +2509,13 @@ full-resolution buffers: **120 fps at dpr 1 and at dpr 2** (2560×1440
 downgrade test showed the architecture's signature: the refracted wall
 went mushy while the ink stayed crisp, because the ink never passes
 through the buffer at all.
+
+Same session, the other half of "max res": the demo's Surfaces now pin
+their DOM textures with a fixed `resolution` — a number disables the
+dynamic LOD entirely (the tier-selection branch only runs for
+auto/range), so distance never softens the ink and no tier swap can
+re-raster mid-shot. Pinned at the library's own ceiling — the highest
+ladder tier under the 4096px long-edge guard: card and pill at 6, the
+wall at 4. Verified with a close-approach → pull-back → return camera
+sweep: zero paints, scales immobile at 4/6/6 — a pinned Surface is
+idle-free exactly like an auto one, it just never renegotiates.
