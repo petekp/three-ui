@@ -34,7 +34,26 @@ export interface GlassParams {
   edgeLight: number
   specular: number
   inkOpacity: number
+  /** Smooth-min blend radius for coplanar satellites, world units. */
+  smooth: number
 }
+
+/**
+ * A circle sharing the panel's plane, unioned into its field.
+ *
+ * Deliberately a plain mutable object, not React state: the scene animates
+ * these every frame and the compositor reads them every frame, so the array
+ * identity is the contract and nothing in between needs to re-render.
+ */
+export interface GlassBlob {
+  /** Centre in panel-local world units — (0,0) is the panel's centre. */
+  x: number
+  y: number
+  r: number
+}
+
+/** How many satellites one panel may carry — must match the shader define. */
+export const MAX_BLOBS = 6
 
 // Tuned in the browser against the lab's own wall (loud, high-frequency,
 // live DOM) — see the README entry. The two that matter most: `roughness`
@@ -54,6 +73,10 @@ export const GLASS_DEFAULTS: GlassParams = {
   edgeLight: 0.35,
   specular: 0.6,
   inkOpacity: 1,
+  // Roughly a third of a satellite's radius: enough that the neck reads as
+  // surface tension rather than a fillet, small enough that a blob still
+  // arrives as a distinct object before it dissolves into the card.
+  smooth: 0.14,
 }
 
 interface SdfPanel {
@@ -61,6 +84,7 @@ interface SdfPanel {
   group: React.RefObject<THREE.Group | null>
   half: THREE.Vector2
   params: GlassParams
+  blobs: GlassBlob[]
 }
 
 const sdfPanels = new Map<string, SdfPanel>()
@@ -107,6 +131,11 @@ export interface SdfGlassPanelProps {
   height: number
   px: number
   params?: Partial<GlassParams>
+  /**
+   * Coplanar circles merged into this panel's glass. Pass a STABLE array and
+   * mutate its members per frame — see `BlobDrift` in Lab012.
+   */
+  blobs?: GlassBlob[]
   content: React.ReactNode
   position: [number, number, number]
   rotation?: [number, number, number]
@@ -118,6 +147,7 @@ export function SdfGlassPanel({
   height,
   px,
   params,
+  blobs,
   content,
   position,
   rotation,
@@ -138,11 +168,12 @@ export function SdfGlassPanel({
       group,
       half: new THREE.Vector2(width / px / 2, height / px / 2),
       params: live,
+      blobs: blobs ?? [],
     })
     return () => {
       sdfPanels.delete(label)
     }
-  }, [label, width, height, px, live])
+  }, [label, width, height, px, live, blobs])
 
   return (
     <group ref={group} position={position} rotation={rotation}>
@@ -218,7 +249,7 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
       new THREE.ShaderMaterial({
         vertexShader: QUAD_VERTEX,
         fragmentShader: GLASS_FRAGMENT,
-        defines: { SAMPLES: 8 },
+        defines: { SAMPLES: 8, MAX_BLOBS },
         depthTest: false,
         depthWrite: false,
         uniforms: {
@@ -237,6 +268,12 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
           uPanelRot: { value: new THREE.Matrix3() },
           uHalf: { value: new THREE.Vector2() },
           uRadius: { value: 0.09 },
+          // Allocated full-length once: three uploads a vec3[] as one
+          // uniform3fv, so the array must keep its size even when the panel
+          // carries fewer blobs — uBlobCount is what bounds the loop.
+          uBlobs: { value: Array.from({ length: MAX_BLOBS }, () => new THREE.Vector3()) },
+          uBlobCount: { value: 0 },
+          uSmooth: { value: 0.14 },
           uBezel: { value: 0.13 },
           uThickness: { value: 0.1 },
           uSpread: { value: 0.34 },
@@ -355,6 +392,13 @@ export function GlassSdfCompositor({ lightDir = [4, 7, 5] }: { lightDir?: [numbe
       u.uEdgeLight.value = q.edgeLight
       u.uSpecular.value = q.specular
       u.uInkOpacity.value = q.inkOpacity
+      u.uSmooth.value = Math.max(q.smooth, 1e-4)   // smin divides by k
+      const blobs = p.blobs
+      const nb = Math.min(blobs.length, MAX_BLOBS)
+      for (let i = 0; i < nb; i++) {
+        ;(u.uBlobs.value as THREE.Vector3[])[i].set(blobs[i].x, blobs[i].y, blobs[i].r)
+      }
+      u.uBlobCount.value = nb
 
       gl.setRenderTarget(dst)
       gl.render(glassScene, quadCam)

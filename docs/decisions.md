@@ -1790,6 +1790,63 @@ for free. (d) *Scissoring each pass to the panel's screen bounds* —
 correct optimisation, wrong increment: full-screen ping-pong is pure
 fill and the ledger above says fill is not what's expensive yet.
 
-**Open.** The *liquid* part: two panels that merge rather than overlap
-is a smooth-min union of two distance fields — cheap in a shader that
-already speaks distance, impossible in the mesh path at any price.
+**Open.** Scissoring, per (d). The *liquid* part is now #39.
+
+## 39. A merged shape needs a merged gradient — the smooth-min union is three decisions, not one (2026-08-01, lab 012 inc 2b)
+
+**Decision.** A panel may carry up to `MAX_BLOBS` (6) circles coplanar
+with it, unioned into its distance field with a polynomial smooth
+minimum. They are `GlassBlob` records — `{x, y, r}` in panel-local
+world units — held in a stable array the scene mutates in place and the
+compositor reads every frame. One coverage, one bezel, one refraction,
+one pass.
+
+**`smin` is the easy part.** The three things that actually make it
+work:
+
+1. **The bezel normal must be the gradient of the UNIONED field.** The
+   analytic `sdRoundRectGrad` only knows the rectangle, so it gives the
+   merged silhouette a rim that still believes it is a rectangle — the
+   neck comes out flat and unlit, exactly where the curvature is
+   interesting. With `uBlobCount > 0` the shader takes a central
+   difference on `fieldAt` instead (`eps = max(fwidth(d), 0.0015)`).
+   Four extra field evaluations, paid only by covered pixels — the
+   coverage and depth early-outs are above it. The analytic path stays
+   for `uBlobCount == 0`.
+2. **The ink clips to the RECT, not to the coverage.** A satellite that
+   has merged in is glass with nothing written on it. Clipped to
+   coverage, the sampler's clamp-to-edge smears the card's border texel
+   row across every bead. The texture belongs to the panel's rectangle;
+   the glass is free to be any shape.
+3. **A bead is not a Surface.** No DOM, so no paint budget, no raycast
+   proxy, no registry entry — three floats in a uniform array, animated
+   by a `useFrame` that costs no React render. Measured across the full
+   animation: wall and pill paint counters frozen, card at 1/s and that
+   is the caret. The liquid is outside the upload-on-paint contract by
+   construction.
+
+**Measured.** 0 / 3 / 6 beads: 8.3 ms median in all three, vsync-pinned
+at 120 fps, 1 draw call, 2 triangles. That is *no regression*, not
+headroom — the scene is nowhere near fill-bound. The load-bearing claim
+is the shape of the cost, not the number: a bead is ALU inside a pass
+that was already running, allocates nothing, and adds no draw call.
+
+**Why it belongs in the record.** Everything else the compositor bought
+over #34's mesh path was cheaper-not-different. This is the first thing
+the mesh path could not do at any price: two meshes in a plane can only
+overlap, and you would see two rims cross. Two distances merge, and the
+neck is arithmetic. That asymmetry is the actual argument for the glass
+having stopped being geometry.
+
+**Rejected.** (a) *Analytic smin gradient* (blending the two shapes'
+gradients by the smin weight) — exact and cheaper, but it has to be
+re-derived per primitive pair and the union is already N-ary; the
+central difference is one expression that stays correct as primitives
+are added. Revisit if a profile ever says the four taps matter. (b)
+*Blobs as their own registered panels* — they would each get a
+full-screen pass and could then only overlap, which is the thing being
+fixed. Merging requires one field, so it requires one pass. (c)
+*Non-coplanar blobs* — the pass intersects the eye ray with one plane;
+a blob off that plane is a different surface and cannot share a bezel
+with the card. Coplanarity is not a simplification here, it is what the
+word "merge" means.

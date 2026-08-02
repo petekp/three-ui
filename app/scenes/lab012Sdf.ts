@@ -50,6 +50,12 @@ void main() {
  * indexes an ior between ior±chroma) and frost (it also jitters the sample
  * point). Weighting the taps by a spectral response and normalising means
  * chroma=0 degrades to a plain blur instead of a tinted one.
+ *
+ * `MAX_BLOBS` is the other define: the panel may carry up to that many
+ * coplanar circles, smooth-min-unioned into its field. That union is the
+ * reason the shape had to stop being a mesh — two meshes can only overlap,
+ * but two distances can merge, and the neck between them is three lines of
+ * arithmetic rather than a remesh.
  */
 export const GLASS_FRAGMENT = /* glsl */ `
 precision highp float;
@@ -75,6 +81,13 @@ uniform mat4  uPanelInv;     // world -> panel local
 uniform mat3  uPanelRot;     // panel local -> world (rotation)
 uniform vec2  uHalf;         // half extents, world units
 uniform float uRadius;       // corner radius, world units
+
+// satellites: circles COPLANAR with the panel (same local z = 0), unioned
+// into its field with a smooth minimum. xy = centre in panel-local units,
+// z = radius. They carry no DOM of their own — they are shape, not surface.
+uniform vec3  uBlobs[MAX_BLOBS];
+uniform int   uBlobCount;
+uniform float uSmooth;       // blend radius: how far out a neck forms
 
 // glass
 uniform float uBezel;        // width of the lensing rim, world units
@@ -106,6 +119,28 @@ vec2 sdRoundRectGrad(vec2 p, vec2 b, float r) {
   vec2 d = abs(p) - b + r;
   if (d.x > 0.0 && d.y > 0.0) return s * normalize(d);
   return (d.x > d.y) ? vec2(s.x, 0.0) : vec2(0.0, s.y);
+}
+
+// Polynomial smooth minimum (iq). A plain min() unions two shapes with a
+// crease; this one trades a band of width k around the seam for a tangent
+// join — which is the entire liquid effect. Nothing about it is a special
+// case: the union of a card and a circle IS one shape, so it gets one
+// coverage, one bezel, one refraction, and a rim that flows around the neck.
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+// The panel's whole field. A circle needs no new primitive — but it does
+// need its own cheap one, because sdRoundRect with b = vec2(r) would be an
+// exact circle and three times the arithmetic.
+float fieldAt(vec2 p) {
+  float d = sdRoundRect(p, uHalf, uRadius);
+  for (int i = 0; i < MAX_BLOBS; i++) {
+    if (i >= uBlobCount) break;
+    d = smin(d, length(p - uBlobs[i].xy) - uBlobs[i].z, uSmooth);
+  }
+  return d;
 }
 
 float viewZFromDepth(float depth, float near, float far) {
@@ -149,7 +184,7 @@ void main() {
   vec2 q = (lo + ld * t).xy;
 
   // --- coverage: the shape IS the distance ------------------------------
-  float d = sdRoundRect(q, uHalf, uRadius);
+  float d = fieldAt(q);
   float aa = max(fwidth(d), 1e-6);
   float cov = 1.0 - smoothstep(-aa, aa, d);
   if (cov <= 0.002) { gl_FragColor = vec4(base, 1.0); return; }
@@ -170,7 +205,23 @@ void main() {
   float k = 1.0 - e;
   float prof = sqrt(max(1.0 - k * k, 0.0));
   float slope = (e >= 1.0) ? 0.0 : -uThickness * (k / max(prof, 0.02)) / uBezel;
-  vec2 g = sdRoundRectGrad(q, uHalf, uRadius);
+  // With satellites in the field the analytic gradient is wrong — it only
+  // knows the rect. A central difference on the UNIONED field is what makes
+  // the rim follow the merged outline: through the neck the normal turns
+  // continuously from card to blob, so the lens does too, and the two read as
+  // one body of glass rather than two overlapping ones. Four extra field
+  // evaluations, and only on covered pixels (the early-outs are above).
+  vec2 g;
+  if (uBlobCount == 0) {
+    g = sdRoundRectGrad(q, uHalf, uRadius);
+  } else {
+    float eps = max(aa, 0.0015);
+    vec2 gr = vec2(
+      fieldAt(q + vec2(eps, 0.0)) - fieldAt(q - vec2(eps, 0.0)),
+      fieldAt(q + vec2(0.0, eps)) - fieldAt(q - vec2(0.0, eps))
+    );
+    g = dot(gr, gr) > 1e-12 ? normalize(gr) : vec2(0.0, 1.0);
+  }
   vec3 nLocal = normalize(vec3(-slope * g, 1.0));
   if (ld.z > 0.0) nLocal = -nLocal;   // seen from behind: the far face
   vec3 n = normalize(uPanelRot * nLocal);
@@ -211,10 +262,18 @@ void main() {
   glass += spec + rim + fres * 0.12;
 
   // --- the ink, on top, in the panel's own UV ---------------------------
+  // Clipped to the RECT, not to the coverage: the DOM is a property of the
+  // panel, and a satellite that has merged into it is glass with nothing
+  // written on it. Without the clip the sampler's clamp-to-edge would smear
+  // the card's border row out across every blob.
   if (uHasInk) {
-    vec2 iuv = q / (2.0 * uHalf) + 0.5;
-    vec4 ink = texture2D(tInk, iuv) * uInkOpacity;   // premultiplied
-    glass = glass * (1.0 - ink.a) + ink.rgb;
+    float outside = max(abs(q.x) - uHalf.x, abs(q.y) - uHalf.y);
+    float m = 1.0 - smoothstep(-aa, aa, outside);
+    if (m > 0.0) {
+      vec2 iuv = q / (2.0 * uHalf) + 0.5;
+      vec4 ink = texture2D(tInk, iuv) * (uInkOpacity * m);   // premultiplied
+      glass = glass * (1.0 - ink.a) + ink.rgb;
+    }
   }
 
   gl_FragColor = vec4(mix(base, glass, cov), 1.0);

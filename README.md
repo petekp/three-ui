@@ -2671,3 +2671,56 @@ Still open, and now cheap: the *liquid* part. Two panels that merge
 instead of overlap is a smooth-min union of two distance fields — a
 handful of lines in a shader that already speaks distance, and
 impossible in the mesh path at any price.
+
+## lab 012 inc 2b — the glass learns to merge
+
+The last paragraph was a promise, so: three circles sharing the sign-in
+card's plane, unioned into its field with a smooth minimum, orbiting on
+an ellipse whose radii breathe. Each bead cycles the whole range —
+swallowed by the card, grazing it with a neck stretched between them,
+free and refracting the wall on its own.
+
+`smin` is six lines and everyone has seen it. What the lab wanted to
+know is what it costs to make it *the card* rather than a decoration
+next to it, and the answer turned out to be three things, none of them
+the union itself.
+
+**The gradient has to come from the merged field.** The bezel is a
+height profile over the distance, and its normal is the SDF's gradient
+tilted by the profile's slope — so an analytic `sdRoundRectGrad` that
+only knows the rectangle gives the merged shape a rim that goes on
+believing it is a rectangle: the neck stretches out with no lens in it,
+a flat smear where the interesting curvature is. A central difference
+on the *unioned* field is four extra evaluations and it is what makes
+the two read as one body of glass — through the neck the normal turns
+continuously from card to bead, so the refraction does too. Only
+covered pixels pay it; the coverage and occlusion early-outs are above.
+
+**The ink is clipped to the rect, not to the coverage.** A satellite
+that has merged into the card is glass with nothing written on it. Left
+clipped to coverage, the sampler's clamp-to-edge smears the card's
+border row of texels out across every bead — the DOM would flow into
+the merge, which is exactly backwards. The panel's texture belongs to
+the panel's rectangle; the glass is free to be any shape it likes.
+
+**And it is not a Surface.** A bead has no DOM, so it never enters the
+paint budget, the raycast proxy, or the registry — it is three floats
+in a uniform array, mutated in place by a `useFrame` that costs no
+React render. Paint counters across the whole animation: wall frozen at
+23, pill at 54, card at 1/s and that is the caret. The liquid is free
+of the upload-on-paint contract by construction, because it is shape,
+not surface.
+
+Cost, measured 0 / 3 / 6 beads: 8.3 ms median all three, pinned to
+vsync at 120 fps, one draw call and two triangles. That proves no
+regression rather than headroom — this scene is nowhere near
+fill-bound — but the shape of the cost is the point: a bead is a few
+ALU ops inside a pass that was already running, and adding one changes
+no draw call, allocates nothing, and touches no geometry.
+
+The two meshes could only ever have overlapped. You would have seen two
+rims crossing, and the fix would have been a remesh per frame. Two
+distances merge, and the merge is an equation. This is the first thing
+in the lab that the mesh path could not have done at any price, rather
+than done more expensively — which is the real reason the glass stopped
+being geometry. Decisions #38.

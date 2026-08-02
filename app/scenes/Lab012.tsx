@@ -8,9 +8,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   GlassSdfCompositor,
+  MAX_BLOBS,
   SdfGlassPanel,
   sdfPanelLabels,
   sdfPanelParams,
+  type GlassBlob,
 } from './lab012Glass'
 
 // Lab 012 — the glass spike, and then the compositor that replaced it.
@@ -55,6 +57,8 @@ const CARD_W = 360
 const CARD_H = 440
 const PILL_W = 220
 const PILL_H = 72
+const CARD_HX = CARD_W / PX / 2
+const CARD_HY = CARD_H / PX / 2
 
 // DOM textures ride the default auto LOD. We tried `resolution="max"` here
 // and measured it SOFTER up close: a pinned tier oversupplies at most
@@ -288,6 +292,42 @@ function MtmGlassPanel({
   )
 }
 
+// ---- the liquid part ----------------------------------------------------
+//
+// Three circles sharing the sign-in card's plane, smooth-min-unioned into
+// its distance field (lab012Sdf.ts). They orbit on an ellipse whose radii
+// BREATHE, so each bead cycles through the whole interesting range: tucked
+// inside the card (the union is just the card, with a faint swell where the
+// bead pushes the rim out), grazing it (a neck forms and stretches), and
+// free (a lone glass bead refracting the wall on its own).
+//
+// The merge is the point. Two meshes in the same plane can only overlap —
+// you would see two rims crossing. Two distances MERGE: one coverage, one
+// bezel, one refraction, and a rim that flows continuously around the neck,
+// because the bezel normal is the gradient of the unioned field rather than
+// of either shape. That is not an effect layered on the glass; it is what
+// the glass being an equation instead of a mesh buys.
+//
+// Mutated in place, never through state: the array identity is what the
+// compositor registered, and nothing here should cost a React render.
+function BlobDrift({ blobs }: { blobs: GlassBlob[] }) {
+  useFrame(({ clock }) => {
+    const t = clock.elapsedTime
+    for (let i = 0; i < blobs.length; i++) {
+      const b = blobs[i]
+      const phase = (i * Math.PI * 2) / blobs.length
+      const a = t * (0.22 + i * 0.045) + phase
+      // 0 = swallowed by the card, 1 = fully detached. Slower than the
+      // orbit and out of phase with it, so no two beads bud at once.
+      const out = 0.5 - 0.5 * Math.cos(t * 0.55 + phase * 1.6)
+      b.r = 0.17 + 0.05 * Math.sin(t * 0.8 + phase)
+      b.x = Math.cos(a) * (CARD_HX - 0.1 + out * 0.55)
+      b.y = Math.sin(a) * (CARD_HY - 0.1 + out * 0.5)
+    }
+  })
+  return null
+}
+
 // ---- DOM content --------------------------------------------------------
 
 function SignInForm() {
@@ -404,6 +444,10 @@ export function Lab012() {
   const [mode, setMode] = useState<GlassMode>(() =>
     new URLSearchParams(window.location.search).get('glass') === 'mtm' ? 'mtm' : 'sdf',
   )
+  const blobs = useMemo<GlassBlob[]>(
+    () => Array.from({ length: 3 }, () => ({ x: 0, y: 0, r: 0 })),
+    [],
+  )
 
   useEffect(() => {
     ;(window as unknown as { __lab012?: object }).__lab012 = {
@@ -444,6 +488,16 @@ export function Lab012() {
         ;(m as unknown as GlassKnobs)[key] = value
         return `set ${key}=${value} on ${label}`
       },
+      // Resized in place — the compositor holds this exact array, and reads
+      // its length every frame. 0 turns the merge off entirely (and with it
+      // the numeric-gradient branch in the shader), which is the A/B.
+      setBlobs: (n: number) => {
+        const next = Math.max(0, Math.min(MAX_BLOBS, Math.round(n)))
+        while (blobs.length > next) blobs.pop()
+        while (blobs.length < next) blobs.push({ x: 0, y: 0, r: 0 })
+        return `${blobs.length} blobs`
+      },
+      blobs: () => blobs.map((b) => ({ ...b })),
       setResolution: (label: string, px?: number) => {
         setResOverride((s) => ({ ...s, [label]: px ?? 0 }))
         return px
@@ -468,7 +522,7 @@ export function Lab012() {
         }
       },
     }
-  }, [mode])
+  }, [mode, blobs])
 
   return (
     <>
@@ -518,9 +572,11 @@ export function Lab012() {
             width={CARD_W}
             height={CARD_H}
             px={PX}
+            blobs={blobs}
             position={[0, 1.7, 0.9]}
             content={<SignInForm />}
           />
+          <BlobDrift blobs={blobs} />
           <SdfGlassPanel
             label="lab012-pill"
             width={PILL_W}
