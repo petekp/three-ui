@@ -2484,3 +2484,28 @@ panel samples it) is the documented fallback at scale, and the
 screen-space SDF compositor — one render + one full-screen pass, true
 multi-level by construction, native squircle-bezel lensing — is the
 increment-2 direction for the actual liquid look. Decisions #34.
+
+**Addendum — the fuzzy-edge autopsy.** Pete called the refraction
+edges fuzzy, and the fuzz turned out to be three separate things, only
+one of them a choice. The spike's buffers were square (768² card, 512²
+pill) but MTM samples them with *screen-space* UVs — so a square
+target stretched across a widescreen viewport delivers barely half the
+screen's horizontal detail to every refracted edge, and it delivered
+zero MSAA on top, so geometry edges inside the buffer aliased and the
+frost blur smeared the jaggies into mush. Both are undersampling, not
+material. The fix answers the question the fuzz raised: **refraction
+sharpness is a per-panel budget, not a scene setting** — each panel
+owns its FBO, so one mesh can be sharpened (or cheapened) alone. New
+default: every buffer matches the drawing buffer, `size × dpr`,
+aspect-correct, with 4× MSAA; `__lab012.setResolution(label, px)`
+drops any single panel back to a square target live (useFBO resizes
+the same render target in place, so the MTM binding and the
+coordinator's registration both survive). With frost zeroed
+(`anisotropicBlur` 0, `roughness` 0) the refraction resolves
+single-pixel grid lines through the glass — the remaining softness in
+the default look is entirely the frost knobs, which are taste. Cost of
+full-resolution buffers: **120 fps at dpr 1 and at dpr 2** (2560×1440
+×2 panels + main render) — the budget doesn't notice. And the 256px
+downgrade test showed the architecture's signature: the refracted wall
+went mushy while the ink stayed crisp, because the ink never passes
+through the buffer at all.

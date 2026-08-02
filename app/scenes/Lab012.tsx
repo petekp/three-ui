@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { MeshTransmissionMaterial, useFBO } from '@react-three/drei'
 import { SurfaceApp, useSurfaceTexture } from 'three-ui'
@@ -30,7 +30,9 @@ import { Label } from '@/components/ui/label'
 // behind both — that's the multi-level verdict.
 //
 // Tuning: every transmission parameter is live on `window.__lab012`
-// (`set('ior', 1.4)` hits every panel; `setFor('lab012-pill', ...)` one).
+// (`set('ior', 1.4)` hits every panel; `setFor('lab012-pill', ...)` one;
+// `setResolution('lab012-card', 512)` forces a square refraction buffer,
+// no arg returns it to viewport-matched).
 
 const PX = 200
 const WALL_W = 880
@@ -153,6 +155,7 @@ interface GlassPanelProps {
   height: number
   radius?: number
   depth?: number
+  /** Square buffer override in px; omit for viewport×dpr-matched (sharpest). */
   resolution?: number
   content: React.ReactNode
   position: [number, number, number]
@@ -165,7 +168,7 @@ function GlassPanel({
   height,
   radius = 0.09,
   depth = 0.12,
-  resolution = 768,
+  resolution,
   content,
   position,
   rotation,
@@ -177,7 +180,24 @@ function GlassPanel({
   useEffect(() => () => geo.dispose(), [geo])
 
   const group = useRef<THREE.Group | null>(null)
-  const fbo = useFBO(resolution)
+  // The refraction buffer is PER PANEL — sharpness is an individual budget,
+  // not a scene setting. Default: match the drawing buffer (CSS size × dpr),
+  // so a refracted edge carries the same pixel density as the direct view.
+  // The spike's square 768/512 targets were stretched across a widescreen
+  // viewport (MTM samples them with screen-space UVs), which halved the
+  // horizontal detail — that was most of the "fuzzy edges". 4× MSAA on top,
+  // because geometry edges inside the buffer otherwise alias and the frost
+  // blur smears the jaggies into mush. `resolution` overrides with a square
+  // target for cost experiments (`__lab012.setResolution`); useFBO re-sizes
+  // the same render target in place, so the registered pass and the MTM
+  // `buffer` binding both survive the change.
+  const size = useThree((s) => s.size)
+  const dpr = useThree((s) => s.viewport.dpr)
+  const fbo = useFBO(
+    resolution || Math.round(size.width * dpr),
+    resolution || Math.round(size.height * dpr),
+    { samples: 4 },
+  )
   useEffect(() => {
     glassPasses.set(label, { group, fbo })
     return () => {
@@ -209,7 +229,10 @@ function GlassPanel({
           anisotropicBlur={0.2}
           distortion={0}
           samples={6}
-          resolution={resolution}
+          // MTM still allocates its internal fboMain/fboBack even though the
+          // `buffer` prop short-circuits its render pass; keep them tiny so
+          // the only real buffer is ours.
+          resolution={32}
         />
         <GlassInk w={width} h={height} depth={depth} />
       </SurfaceApp>
@@ -325,6 +348,10 @@ function WallArt() {
 // ---- the scene ----------------------------------------------------------
 
 export function Lab012() {
+  // Per-panel square-buffer overrides (0/absent = viewport-matched). State,
+  // not a ref: a change must re-render the panel so useFBO can resize.
+  const [resOverride, setResOverride] = useState<Record<string, number>>({})
+
   useEffect(() => {
     ;(window as unknown as { __lab012?: object }).__lab012 = {
       set: (key: string, value: GlassKnobs[string]) => {
@@ -338,6 +365,12 @@ export function Lab012() {
         if (!m) return `no material: ${label}`
         ;(m as unknown as GlassKnobs)[key] = value
         return `set ${key}=${value} on ${label}`
+      },
+      setResolution: (label: string, px?: number) => {
+        setResOverride((s) => ({ ...s, [label]: px ?? 0 }))
+        return px
+          ? `square ${px}px buffer for ${label}`
+          : `viewport-matched buffer for ${label}`
       },
       labels: () => [...glassMaterials.keys()],
       params: (label?: string) => {
@@ -395,6 +428,7 @@ export function Lab012() {
         label="lab012-card"
         width={CARD_W}
         height={CARD_H}
+        resolution={resOverride['lab012-card'] || undefined}
         position={[0, 1.7, 0.9]}
         content={<SignInForm />}
       />
@@ -406,7 +440,7 @@ export function Lab012() {
         height={PILL_H}
         radius={0.18}
         depth={0.1}
-        resolution={512}
+        resolution={resOverride['lab012-pill'] || undefined}
         position={[0.42, 1.62, 1.5]}
         content={<PillChip />}
       />
