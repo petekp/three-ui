@@ -72,6 +72,7 @@ import {
   shadowQuadFrame,
   stepFree,
   stepHeld,
+  wadOffscreen,
   wadShrink,
   type Plate,
 } from './lab014Plate'
@@ -176,15 +177,31 @@ interface Flight {
    * `crumple` is the exception to every rule the other modes obey. They all
    * exist to end in a swap back to resting DOM; this one ends in the board
    * forgetting the slot. It is irreversible from the moment it starts (esc
-   * and pointerup are guarded in the gestures), and it is the only mode
-   * allowed to break the "indistinguishable from DOM" contract — on purpose,
-   * because a sheet of paper crushing into a wad is the one thing a document
-   * element could never do.
+   * is guarded in the gestures, and pointerup only opens the hand — it never
+   * puts the card back), and it is the only mode allowed to break the
+   * "indistinguishable from DOM" contract — on purpose, because a sheet of
+   * paper crushing into a wad is the one thing a document element could
+   * never do.
    */
   mode: 'held' | 'float' | 'home' | 'crumple'
-  /** The crumple's one clock, seconds. Everything else is a function of it. */
+  /** The crumple's one clock, seconds. The CRUSH is a function of it. */
   crumpleT: number
-  /** The wad's tumble: axis × rate (rad/s), seeded when the crumple starts. */
+  /**
+   * The ✕ is a press, not a click: while its button is down the forming
+   * ball is IN the hand — tracked by the same spring as a grabbed card, no
+   * gravity — and the release is a THROW that inherits the hand's velocity.
+   * A plain click is the same release with ~zero speed: the wad drops.
+   */
+  crumpleHeld: boolean
+  /**
+   * The hand has thrown it (set by the gesture's release, never cleared).
+   * A released ball is BALLISTIC from the instant the hand opens — even
+   * mid-rise. Only the never-held keyboard delete spring-rises: routing a
+   * released flick through that steer let its damping eat the throw
+   * (measured: 9148 px/s in, ~450 px of travel out).
+   */
+  tossed: boolean
+  /** The wad's tumble: axis × rate (rad/s), written when the hand lets go. */
   spin: THREE.Vector3
   /** Where a floating card hangs: the grab point's world position when let go. */
   anchor: THREE.Vector3
@@ -242,7 +259,7 @@ interface CardBodyProps {
   /** Only the page copy starts drags; the airborne one is grabbed in 3D. */
   onGrab?: (e: React.PointerEvent<HTMLDivElement>) => void
   /** The ✕. Both copies get it: a card is deletable wherever it is. */
-  onDelete?: () => void
+  onDelete?: (e?: React.PointerEvent<HTMLButtonElement>) => void
   hidden?: boolean
 }
 
@@ -263,7 +280,13 @@ function CardBody({ card, onChange, onGrab, onDelete, hidden }: CardBodyProps) {
             className="l14-del"
             data-nodrag
             aria-label="delete card"
-            onClick={onDelete}
+            // A PRESS, so the crumple starts with the button still down and
+            // the forming ball is holdable — drag and let go to toss it.
+            // The click stays as the KEYBOARD path (Enter/Space on a button
+            // fires click with no pointerdown); after a pointer press it
+            // finds the crumple already running and does nothing.
+            onPointerDown={(e) => onDelete(e)}
+            onClick={() => onDelete()}
           >
             ×
           </button>
@@ -310,7 +333,7 @@ const CARD_VERT = /* glsl */ `
   // instead of staying painted on.
   uniform vec4 uAero;
   uniform vec2 uAeroGrab;
-  uniform vec4 uWad;
+  uniform vec3 uWad;
   varying vec2 vUv;
   varying vec3 vN;
   varying vec3 vNl;
@@ -325,8 +348,12 @@ const CARD_VERT = /* glsl */ `
   void main() {
     vUv = uv;
     vec3 p = position;
+    float crush = uWad.x;
     vec2 dir = uAero.xy;
-    float amt = uAero.z;
+    // The bend cedes the sheet to the crush: a held, crushing ball is still
+    // being waved around at bend-worthy speeds, and a wad has no sheet left
+    // to catch the air with.
+    float amt = uAero.z * (1.0 - crush);
     float L = max(uAero.w, 1.0);
     float s = dot(p.xy - uAeroGrab, dir);
     float t = clamp(s / L, -1.0, 1.0);
@@ -347,20 +374,24 @@ const CARD_VERT = /* glsl */ `
 
     // ── the crumple: the sheet converges on a wad ──
     //
-    // uWad = (crush 0→1, fade, seed, wad radius px). Each vertex has its own
-    // noise target — the sheet's footprint contracted to 13% plus a random
-    // radial offset inside the wad's ball — and its own PHASE: the hash
-    // staggers when each vertex commits, because a real crush is chaotic,
-    // not a uniform lerp. The sin(π·lt) term overshoots mid-travel (the
-    // sheet bulges and wrinkles before it packs), and dies at both ends so
-    // the endpoints are exact: crush 0 is the untouched card (the handoff
-    // theorem again), crush 1 is the settled wad. Analytic normals are
-    // hopeless on this field — the fragment shader switches to screen-space
-    // derivative facets as the crush takes over.
-    float crush = uWad.x;
+    // uWad = (crush 0→1, seed, wad radius px). Each vertex has its own
+    // noise target — the sheet's footprint contracted to 13% AROUND THE
+    // GRAB POINT plus a random radial offset inside the wad's ball — and
+    // its own PHASE: the hash staggers when each vertex commits, because a
+    // real crush is chaotic, not a uniform lerp. Contracting toward
+    // uAeroGrab rather than the centre is what "crushed in the hand" means:
+    // the ball forms under the fingers that pressed the ✕ (the driver pins
+    // that same point to the pointer), not half a card away from them. For
+    // a keyboard delete the grab is the centre and this is the old formula.
+    // The sin(π·lt) term overshoots mid-travel (the sheet bulges and
+    // wrinkles before it packs), and dies at both ends so the endpoints are
+    // exact: crush 0 is the untouched card (the handoff theorem again),
+    // crush 1 is the settled wad. Analytic normals are hopeless on this
+    // field — the fragment shader switches to screen-space derivative
+    // facets as the crush takes over.
     if (crush > 0.0) {
-      float seed = uWad.z;
-      float wadR = uWad.w;
+      float seed = uWad.y;
+      float wadR = uWad.z;
       float j = l14hash(uv + seed);
       float lt = smoothstep(0.42 * j, 1.0, crush);
       // Fold coherence: the target field samples the hash on a COARSE uv
@@ -382,7 +413,7 @@ const CARD_VERT = /* glsl */ `
         l14hash(uv + seed + 11.4) - 0.5);
       vec3 dirn = normalize(mix(cellDir, vertDir, 0.35) + vec3(1e-4));
       float rr = (0.35 + 0.65 * l14hash(cell + seed + 6.9)) * wadR;
-      vec3 wadP = vec3(p.xy * 0.13, 0.0) + dirn * rr;
+      vec3 wadP = vec3(uAeroGrab + (p.xy - uAeroGrab) * 0.13, 0.0) + dirn * rr;
       wadP += dirn * (sin(lt * 3.14159265) * 0.35 * wadR);
       p = mix(p, wadP, lt);
     }
@@ -399,7 +430,7 @@ const CARD_FRAG = /* glsl */ `
   uniform sampler2D tMap;
   uniform float uGloss;
   uniform float uFlex;
-  uniform vec4 uWad;
+  uniform vec3 uWad;
   varying vec2 vUv;
   varying vec3 vN;
   varying vec3 vNl;
@@ -439,9 +470,11 @@ const CARD_FRAG = /* glsl */ `
     // is under the fragment — free, and automatically faceted because the
     // interpolated position is piecewise planar. The band is a broad pow-2
     // (a wad shades everywhere, not just at grazing), multiplicative and
-    // floored so the deepest folds go dark grey, never black. And the fade:
-    // rgb AND a together, because the texture is premultiplied — fading
-    // only alpha would brighten the edges as they go.
+    // floored so the deepest folds go dark grey, never black. And no fade,
+    // anywhere: the wad stays fully opaque for its whole life, because it
+    // is not allowed to be gone while it can still be seen — the exit is a
+    // place, not a time (the driver's wadOffscreen verdict), and a wad that
+    // has left the viewport needs no dimming to disappear.
     float crush = uWad.x;
     if (crush > 0.003) {
       vec3 fn = normalize(cross(dFdx(vWp), dFdy(vWp)));
@@ -451,7 +484,6 @@ const CARD_FRAG = /* glsl */ `
       float k = clamp(crush * 1.6, 0.0, 1.0);
       c.rgb *= clamp(1.0 + 1.1 * k * facetBand, 0.35, 1.0);
     }
-    c *= uWad.y;
     // The element's corners, not the quad's. The texture can't say where the
     // card ends — the .ui-root background paints its corners opaque white —
     // so the measured border-radius is enforced analytically (crisp at any
@@ -476,14 +508,16 @@ const CARD_FRAG = /* glsl */ `
  * The sheet's shared state: the driver writes these objects every frame and
  * the material's uniforms hold the SAME objects, so there is no per-frame
  * plumbing and no React in the loop. pack = (dir.x, dir.y, amplitude px,
- * reach px); grab = the held point, card-local px; wad = (crush 0→1,
- * fade 1→0, hash seed, wad radius px) — crush 0 / fade 1 is the identity,
- * and a card that is not being deleted never leaves it.
+ * reach px); grab = the held point, card-local px — the bend's pin AND the
+ * point the crush contracts toward; wad = (crush 0→1, hash seed, wad radius
+ * px) — crush 0 is the identity, and a card that is not being deleted never
+ * leaves it. There is no fade channel: a wad is opaque until it has left
+ * the viewport, and then it is simply gone.
  */
 export interface AeroState {
   pack: THREE.Vector4
   grab: THREE.Vector2
-  wad: THREE.Vector4
+  wad: THREE.Vector3
 }
 
 function CardMaterial({ gloss = 0.5, aero }: { gloss?: number; aero: AeroState }) {
@@ -659,6 +693,8 @@ const _proj: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3] = [
 const _frame = makeShadowFrame()
 const _spinQ = new THREE.Quaternion()
 const _spinAxis = new THREE.Vector3()
+const _pressWorld = new THREE.Vector3()
+const _wadOff = new THREE.Vector3()
 
 /**
  * One time constant of smoothing on the hand's velocity. Pointer samples do
@@ -719,10 +755,9 @@ function Driver({
     const vh = size.height
     const camZ = camera.position.z
 
-    // The crumple's live scalars — identity for every other mode, so the
+    // The crumple's live scalar — identity for every other mode, so the
     // shader and the shadow below never need to know which mode this is.
     let crush = 0
-    let wadFade = 1
 
     if (f.mode === 'held') {
       f.lift = Math.min(1, f.lift + dt / LIFT_T)
@@ -751,28 +786,50 @@ function Driver({
       trackHand(f, dt, _target)
       stepHeld(f.plate, dt, _target, f.hold, FLAT, f.handVel)
     } else if (f.mode === 'crumple') {
-      // The delete has one clock; everything — when the sheet crushes, when
-      // gravity arrives, when the wad fades — is crumplePhase(t) of it.
+      // The delete's CRUSH has one clock — crumplePhase(t) of it. Its EXIT
+      // deliberately has none: the wad is done when it has fully left the
+      // viewport (below), because a wad that dimmed on a timer was fading
+      // in plain sight whenever the fall was slow.
       f.crumpleT += dt
-      const ph = crumplePhase(f.crumpleT)
+      const ph = crumplePhase(f.crumpleT, f.crumpleHeld)
       crush = ph.crush
-      wadFade = ph.fade
-      if (f.crumpleT <= CRUMPLE_RISE_T) {
-        // Phase one is the HANDOFF window wearing a gesture's clothes: the
-        // plate springs gently off the page (the same free solver as a
-        // throw home, aimed up instead of down) while the page copy hides
-        // on first upload. The crush may not begin until the sheet is fully
-        // matter — crumplePhase holds crush at exactly 0 through this
-        // window, so the swap keeps its pixel-copy guarantee.
+      if (f.crumpleHeld) {
+        // The ✕ is still pressed: the forming ball is IN the hand. Same
+        // machinery as a held card — ray→plane hand, tracked velocity, the
+        // pressed point pinned to the pointer — so the sheet lifts into
+        // the grip like any grab, crushes there (the shader contracts the
+        // sheet toward this same pin), and the eventual release inherits
+        // an honest throw velocity from the damper. The altitude eases in
+        // exactly like a lift; no gravity while held (crumplePhase says
+        // `falling: false` for a held wad — you are holding it).
+        f.lift = Math.min(1, f.lift + dt / LIFT_T)
+        const e = 1 - Math.pow(1 - f.lift, 3)
+        screenToPlane(f.px, f.py, vw, vh, camZ, CRUMPLE_Z * e, _target)
+        trackHand(f, dt, _target)
+        stepHeld(f.plate, dt, _target, f.hold, FLAT, f.handVel)
+      } else if (!f.tossed && f.crumpleT <= CRUMPLE_RISE_T) {
+        // The KEYBOARD delete's rise — the HANDOFF window wearing a
+        // gesture's clothes. The plate springs gently off the page (the
+        // same free solver as a throw home, aimed up instead of down)
+        // while the page copy hides on first upload. The crush may not
+        // begin until the sheet is fully matter — crumplePhase holds crush
+        // at exactly 0 through this window, so the swap keeps its
+        // pixel-copy guarantee. Never for a released press (`tossed`):
+        // this solver's damping is sized to STOP a card, and it was
+        // measured bleeding a 9148 px/s flick to a ~450 px drift when a
+        // mid-rise release fell back in here.
         _target.set(f.plate.p.x, f.plate.p.y, CRUMPLE_Z)
         stepFree(f.plate, dt, _target, FLAT)
       } else {
-        // Ballistic. The wad keeps whatever momentum the flight had, drag
-        // bleeds it, gravity takes over only once the sheet IS a wad (a
-        // flat card dropping like a stone reads as a glitch, so
-        // crumplePhase withholds `falling` until the crush completes), and
-        // the tumble is the seeded axis — no aerodynamics, just enough
-        // spin that the wad reads as a thing and not a sprite.
+        // Ballistic — the toss in flight, from the instant the hand opens.
+        // The wad keeps whatever momentum the hand imparted, drag bleeds
+        // it, gravity takes over only once the sheet IS a wad (a flat card
+        // dropping like a stone reads as a glitch, so crumplePhase
+        // withholds `falling` until the crush completes — a hard flick
+        // therefore flies flat-out first, balls up mid-air, and only then
+        // starts to drop), and the tumble is the release's own topspin —
+        // no aerodynamics, just enough spin that the wad reads as a thing
+        // and not a sprite.
         const drag = Math.exp(-dt / 0.9)
         f.plate.v.multiplyScalar(drag)
         if (ph.falling) f.plate.v.y -= 3400 * dt
@@ -784,9 +841,20 @@ function Driver({
           f.plate.q.premultiply(_spinQ)
         }
       }
-      if (ph.done && !f.done) {
-        f.done = true
-        onCrumpled()
+      // The exit is a PLACE, not a time: the flight ends when the wad —
+      // inflated by the shadow's worst-case reach, projected to screen
+      // scale at its own plane — has fully left the viewport. Never during
+      // the rise (the handoff window must complete) and never in the hand
+      // (a ball dragged off-screen and back must not be torn from the
+      // grip). Gravity guarantees this terminates: once falling, terminal
+      // velocity is ~3060 px/s straight down.
+      if (!f.done && !f.crumpleHeld && f.crumpleT > CRUMPLE_RISE_T) {
+        const wm = planeScale(camZ, f.plate.p.z)
+        const wr = (Math.hypot(f.w, f.h) / 2 + 240) * wm
+        if (wadOffscreen(f.plate.p.x * wm, f.plate.p.y * wm, wr, vw, vh)) {
+          f.done = true
+          onCrumpled()
+        }
       }
     } else {
       const r = slotRect(f.id)
@@ -902,10 +970,9 @@ function Driver({
       // (measured: 0.45 px still aboard at touchdown without this).
       aero.pack.set(sm.dir.x, sm.dir.y, sm.amt * aeroGate(speed), reach)
       aero.grab.set(f.hold.x, f.hold.y)
-      // The crumple's channels. x/y are the driver's per-frame verdict;
-      // z (seed) and w (wad radius) belong to Flying and are written once.
+      // The crumple's channel. x is the driver's per-frame verdict; y
+      // (seed) and z (wad radius) belong to Flying and are written once.
       aero.wad.x = crush
-      aero.wad.y = wadFade
     }
 
     // ── the shadow, from the plate's own corners ──
@@ -913,11 +980,28 @@ function Driver({
     // A crumpling sheet no longer spans the plate, so the corners are
     // computed from SHRUNKEN dimensions (wadShrink: identity at crush 0,
     // a sixth at full crush) — the shadow contracts with the thing that
-    // casts it, then rides `wadFade` out with the falling wad.
+    // casts it, and leaves the screen with it (the shadow sits at the wad's
+    // own x/y, so the offscreen verdict that ends the flight covers both;
+    // its reach is why that verdict inflates the radius).
     const sh = shadowRef.current
     if (!sh) return
     const shrink = wadShrink(crush)
     corners(f.plate, f.w * shrink, f.h * shrink, _corners)
+    if (crush > 0) {
+      // The wad contracts toward the GRAB point (the shader's 13%-around-
+      // uAeroGrab formula), so the shadow must follow its caster: at full
+      // crush the ball's centroid sits at grab·0.87 body-local, and the
+      // offset rides the same crush that drives the contraction — exactly 0
+      // at liftoff (the handoff still draws the DOM's own shadow), under
+      // the ball once it is a ball. A keyboard delete's grab is the centre,
+      // offset 0 throughout: the old shadow. Without this the blob stayed
+      // at the plate's centre while the ball formed at the pressed corner —
+      // a shadow half a card away from the thing casting it.
+      _wadOff
+        .set(f.hold.x * 0.87 * crush, f.hold.y * 0.87 * crush, 0)
+        .applyQuaternion(f.plate.q)
+      for (const c of _corners) c.add(_wadOff)
+    }
     _centroid.set(0, 0, 0)
     for (const c of _corners) _centroid.add(c)
     _centroid.multiplyScalar(0.25)
@@ -950,7 +1034,7 @@ function Driver({
       uOff[i].set(l.x, -l.y) // CSS y is down, world y is up
       uSigma[i] = sigma
       uSpread[i] = spread
-      uColor[i].set(l.color[0], l.color[1], l.color[2], l.color[3] * fade * wadFade)
+      uColor[i].set(l.color[0], l.color[1], l.color[2], l.color[3] * fade)
       reach = Math.max(reach, Math.hypot(l.x, l.y) + 3 * sigma + Math.max(spread, 0))
     }
     mat.uniforms.uCount.value = n
@@ -1027,8 +1111,8 @@ interface FlyingProps {
   atAltitude: boolean
   onAltitude: (hi: boolean) => void
   /** The airborne card's ✕ — a card is deletable mid-flight. */
-  onDelete: () => void
-  /** The wad faded out: commit the delete. */
+  onDelete: (e?: React.PointerEvent<HTMLButtonElement>) => void
+  /** The wad left the viewport: commit the delete. */
   onCrumpled: () => void
 }
 
@@ -1123,14 +1207,14 @@ function Flying({ card, flight, onChange, onRegrab, slotRect, scrollTop, onLande
   // The sheet field's shared objects: Driver mutates them in place, the
   // material's uniforms hold the very same references. Amplitude starts at
   // 0 — a card is born flat — and the wad channel is born at its identity
-  // (crush 0, fade 1) with a per-flight hash seed, so every delete crushes
-  // along different creases, and a wad radius from the card's own smaller
+  // (crush 0) with a per-flight hash seed, so every delete crushes along
+  // different creases, and a wad radius from the card's own smaller
   // dimension.
   const aero = useMemo<AeroState>(
     () => ({
       pack: new THREE.Vector4(1, 0, 0, 1),
       grab: new THREE.Vector2(),
-      wad: new THREE.Vector4(0, 1, Math.random() * 10, Math.min(f.w, f.h) * 0.3),
+      wad: new THREE.Vector3(0, Math.random() * 10, Math.min(f.w, f.h) * 0.3),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -1419,6 +1503,8 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
         plate,
         mode: 'held',
         crumpleT: 0,
+        crumpleHeld: false,
+        tossed: false,
         spin: new THREE.Vector3(),
         anchor: new THREE.Vector3(),
         anchorScroll: 0,
@@ -1444,13 +1530,18 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
 
   // ── the delete ──
   //
-  // One entry for both worlds. A card already in flight crumples from its
-  // current pose — momentum and all, so a held card deleted mid-gesture
-  // tumbles away with the hand's own velocity. A card at rest on the page
-  // becomes matter first: the same flight machinery as a grab (page copy
-  // hides on first upload, plate springs off the page), except the mode is
-  // `crumple` from birth and there is no hand to follow.
-  const deleteCard = useCallback((id: string) => {
+  // One entry for both worlds, and one entry for both GESTURES. With a
+  // pointer event the ✕ was PRESSED: the crumple starts held — the sheet
+  // lifts into the grip pinned at the pressed point, balls up in the hand,
+  // and the release (lab014Gestures) is a throw. Without one (keyboard
+  // activation of the button, or the click that trails a press and finds
+  // the crumple already running) it is the hands-free delete: rise, crush,
+  // drop. A card already in flight crumples from its current pose —
+  // momentum and all; a card at rest on the page becomes matter first, the
+  // same flight machinery as a grab (page copy hides on first upload, plate
+  // springs off the page), except the mode is `crumple` from birth.
+  const deleteCard = useCallback((id: string, e?: React.PointerEvent<HTMLButtonElement>) => {
+    const cardEl = e ? (e.target as Element).closest<HTMLElement>('.l14-card') : null
     const f = flight.current
     if (f) {
       // One flight at a time — and a crumple, once started, is not restarted.
@@ -1458,16 +1549,45 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
       f.mode = 'crumple'
       f.crumpleT = 0
       f.done = false
-      f.spin.set(
-        (Math.random() - 0.5) * 2.0,
-        (Math.random() - 0.5) * 2.0,
-        (Math.random() - 0.5) * 5.0,
-      )
+      f.lift = 1
+      f.tossed = false
+      if (e && cardEl) {
+        e.preventDefault()
+        // The pressed point, body-local. The event's coordinates are
+        // PARKED-LOCAL for an airborne copy (the host is fixed at page
+        // (0,0), decisions #16), so "relative to the card element's own
+        // rect" is the body-local point in both worlds — the same formula
+        // as beginDrag and onHost.
+        const r = cardEl.getBoundingClientRect()
+        f.hold.set(e.clientX - (r.left + r.width / 2), r.top + r.height / 2 - e.clientY, 0)
+        f.crumpleHeld = true
+        f.spin.set(0, 0, 0)
+        // The held solver's target jumps to the pointer ray; differentiating
+        // across that jump would read as a flick nobody performed.
+        f.handSeeded = false
+        // px/py must be the REAL pointer's page position, and the forged
+        // event's coordinates are parked-local — but the pressed point's
+        // world position is exactly under the real pointer at this instant:
+        // project it back to the screen.
+        _pressWorld.copy(f.hold).applyQuaternion(f.plate.q).add(f.plate.p)
+        const m = planeScale(cameraDistance(window.innerHeight, FOV), _pressWorld.z)
+        f.px = window.innerWidth / 2 + _pressWorld.x * m
+        f.py = window.innerHeight / 2 - _pressWorld.y * m
+      } else {
+        f.crumpleHeld = false
+        f.spin.set(
+          (Math.random() - 0.5) * 2.0,
+          (Math.random() - 0.5) * 2.0,
+          (Math.random() - 0.5) * 5.0,
+        )
+      }
       return
     }
     const el = slots.current.get(id)?.querySelector<HTMLElement>('.l14-card')
     if (!el) return
     const r = el.getBoundingClientRect()
+    if (e) e.preventDefault()
+    const held = !!e
     const plate = makePlate(r.width, r.height)
     plate.p.set(
       r.left + r.width / 2 - window.innerWidth / 2,
@@ -1478,24 +1598,39 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
       id,
       w: r.width,
       h: r.height,
-      hold: new THREE.Vector3(),
+      // Held: the pinch point, so the sheet lifts pinned at the fingers —
+      // exactly like a grab — and the crush contracts the ball into them.
+      // Keyboard: the centre, the old formula.
+      hold: e
+        ? new THREE.Vector3(
+            e.clientX - (r.left + r.width / 2),
+            r.top + r.height / 2 - e.clientY,
+            0,
+          )
+        : new THREE.Vector3(),
       plate,
       mode: 'crumple',
       crumpleT: 0,
-      spin: new THREE.Vector3(
-        (Math.random() - 0.5) * 2.0,
-        (Math.random() - 0.5) * 2.0,
-        (Math.random() - 0.5) * 5.0,
-      ),
+      crumpleHeld: held,
+      tossed: false,
+      // A held ball spins only when thrown — the release writes it; the
+      // hands-free path tumbles lazily from birth, as before.
+      spin: held
+        ? new THREE.Vector3()
+        : new THREE.Vector3(
+            (Math.random() - 0.5) * 2.0,
+            (Math.random() - 0.5) * 2.0,
+            (Math.random() - 0.5) * 5.0,
+          ),
       anchor: new THREE.Vector3(),
       anchorScroll: 0,
       downAt: performance.now(),
-      downX: 0,
-      downY: 0,
+      downX: e ? e.clientX : 0,
+      downY: e ? e.clientY : 0,
       floated: false,
       hiDensity: false,
-      px: 0,
-      py: 0,
+      px: e ? e.clientX : 0,
+      py: e ? e.clientY : 0,
       handVel: new THREE.Vector3(),
       prevTarget: new THREE.Vector3(),
       handSeeded: false,
@@ -1594,12 +1729,18 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
         const r = slotRect(f.id)
         const el = slots.current.get(f.id)
         if (r && el) {
-          const d = Math.hypot(
-            f.plate.p.x - (r.left + r.width / 2 - window.innerWidth / 2),
-            f.plate.p.y - (window.innerHeight / 2 - (r.top + r.height / 2)),
-            f.plate.p.z,
-          )
-          el.style.setProperty('--l14-near', String(Math.max(0, 1 - d / 260).toFixed(3)))
+          if (f.mode === 'crumple') {
+            // A crumpling card is never coming home — a held ball carried
+            // near its old slot must not make the slot glow with welcome.
+            el.style.removeProperty('--l14-near')
+          } else {
+            const d = Math.hypot(
+              f.plate.p.x - (r.left + r.width / 2 - window.innerWidth / 2),
+              f.plate.p.y - (window.innerHeight / 2 - (r.top + r.height / 2)),
+              f.plate.p.z,
+            )
+            el.style.setProperty('--l14-near', String(Math.max(0, 1 - d / 260).toFixed(3)))
+          }
         }
       }
       raf = requestAnimationFrame(tick)
@@ -1639,7 +1780,7 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
                       card={cards[id]}
                       onChange={(p) => patch(id, p)}
                       onGrab={(e) => beginDrag(id, e)}
-                      onDelete={() => deleteCard(id)}
+                      onDelete={(e) => deleteCard(id, e)}
                       hidden={flyingId === id && painted}
                     />
                   </li>
@@ -1746,7 +1887,7 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
             painted={painted}
             atAltitude={atAltitude}
             onAltitude={setAtAltitude}
-            onDelete={() => deleteCard(flyingCard.id)}
+            onDelete={(e) => deleteCard(flyingCard.id, e)}
             onCrumpled={onCrumpled}
           />
         )}
@@ -1756,8 +1897,8 @@ export function Lab014App({ chips }: { chips?: React.ReactNode }) {
         {chips}
         <span>
           press a card and pull · throw it into the other column · tap one to
-          leave it hanging, then type in its note · esc puts it back · ✕
-          crumples it away
+          leave it hanging, then type in its note · esc puts it back · hold ✕
+          to crumple, then toss the ball
         </span>
       </div>
     </div>

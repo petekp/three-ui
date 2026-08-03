@@ -34,6 +34,9 @@ function makeFlight(over: Partial<GestureFlight> = {}): GestureFlight {
     downX: 369,
     downY: 284,
     floated: false,
+    crumpleHeld: false,
+    tossed: false,
+    spin: new THREE.Vector3(),
     anchor: new THREE.Vector3(),
     anchorScroll: 0,
     hold: new THREE.Vector3(-40, 20, 0),
@@ -176,10 +179,10 @@ describe('a crumpling card is beyond rescue', () => {
     expect(flight.current.mode).toBe('crumple')
   })
 
-  it('a trusted pointerup neither throws nor floats it', () => {
-    // Deleting a HELD card happens with the button still down; the release
-    // that follows must find nothing to do — not hand the wad a throw
-    // velocity, not park it as a float.
+  it('a trusted pointerup on an already-released wad finds nothing to do', () => {
+    // The ball has left the hand (a keyboard delete, or a release already
+    // handled); a stray up afterwards must not hand it a second throw
+    // velocity or park it as a float.
     const flight = { current: makeFlight({ mode: 'crumple' }) }
     attach(flight)
     window.dispatchEvent(pointer('pointermove', 700, 400, true))
@@ -187,5 +190,85 @@ describe('a crumpling card is beyond rescue', () => {
     expect(flight.current.mode).toBe('crumple')
     expect(flight.current.plate.v.length()).toBe(0)
     expect(flight.current.floated).toBe(false)
+    // And it must not mark the flight as tossed — a keyboard delete's rise
+    // is the spring steer, and a stray up may not switch it to ballistic.
+    expect(flight.current.tossed).toBe(false)
+  })
+
+  it('escape does not shake the ball out of the hand either', () => {
+    // Irreversible by EVERY input includes the hand that is still holding
+    // it: escape neither resurrects the card nor forces the release.
+    const flight = { current: makeFlight({ mode: 'crumple', crumpleHeld: true }) }
+    attach(flight)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(flight.current.mode).toBe('crumple')
+    expect(flight.current.crumpleHeld).toBe(true)
+  })
+})
+
+describe('the ✕ is a toss, not a timer', () => {
+  it('releasing a held crumple hands the wad the throw: velocity and topspin', () => {
+    const flight = {
+      current: makeFlight({
+        mode: 'crumple',
+        crumpleHeld: true,
+        handVel: new THREE.Vector3(300, 0, 0),
+        plate: {
+          p: new THREE.Vector3(300, -80, 55),
+          v: new THREE.Vector3(900, 0, 0),
+          q: new THREE.Quaternion(),
+        },
+      }),
+    }
+    attach(flight)
+    window.dispatchEvent(pointer('pointerup', 700, 400, true))
+
+    const f = flight.current
+    // Still a crumple — the release is the hand letting go, not a mode
+    // change; the flight stays owned by the delete until the wad exits.
+    expect(f.mode).toBe('crumple')
+    expect(f.crumpleHeld).toBe(false)
+    expect(f.floated).toBe(false)
+    // Released = ballistic, IMMEDIATELY. Without this flag a release during
+    // the rise window fell back into the rise's stepFree steer, whose
+    // damping ate the throw — measured: a 9148 px/s flick travelled ~450 px
+    // before the spring bled it dead. The keyboard delete (never held,
+    // never tossed) is the only crumple that spring-rises.
+    expect(f.tossed).toBe(true)
+    // The velocity handoff is the same one a throw home gets: the damper's
+    // own hand vector on top of the plate's.
+    expect(f.plate.v.x).toBe(1200)
+    // Topspin about ẑ × d̂ for a +x throw is +y; the random wobble is
+    // z-only, so x and y are exactly the pure function's verdict.
+    expect(f.spin.x).toBeCloseTo(0, 10)
+    expect(f.spin.y).toBeCloseTo(Math.min(1200 / 220, 7), 10)
+  })
+
+  it('a dead drop still tumbles — lazily, randomly', () => {
+    // A plain click: press, no travel, release. The wad gets no throw, but
+    // a wad that falls with zero rotation reads as a sprite, so the release
+    // rolls the same lazy tumble the keyboard delete gets.
+    const flight = {
+      current: makeFlight({
+        mode: 'crumple',
+        crumpleHeld: true,
+        handVel: new THREE.Vector3(),
+      }),
+    }
+    attach(flight)
+    window.dispatchEvent(pointer('pointerup', 369, 284, true))
+
+    expect(flight.current.crumpleHeld).toBe(false)
+    expect(flight.current.spin.length()).toBeGreaterThan(0)
+  })
+
+  it('a forged pointerup does not release the ball', () => {
+    // The departure burst fires pointer events while the real button is
+    // still down; only the hand may open the hand.
+    const flight = { current: makeFlight({ mode: 'crumple', crumpleHeld: true }) }
+    attach(flight)
+    window.dispatchEvent(pointer('pointerup', -16, -16, false))
+    expect(flight.current.crumpleHeld).toBe(true)
+    expect(flight.current.spin.length()).toBe(0)
   })
 })

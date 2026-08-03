@@ -3526,3 +3526,42 @@ Traced: crush 0.000 across the whole rise, wad off the bottom of the
 viewport at fade exactly 0, five cards then four then three, and
 `stats()` returns [] when it is over — nothing left painting, nothing
 left at all. decisions.md #60.
+
+## the ball leaves the hand
+
+"omg the balled up paper is so, so good" — and two asks in the next
+breath: don't fade while anyone can still see it, and let the ✕ be a
+PRESS, so the ball can be thrown instead of merely dropped.
+
+The fade turned out not to need moving — it needed deleting. A wad that
+is off-screen needs no dimming, so the flight now simply ends at a
+PLACE: when the wad, inflated by its shadow's worst-case reach and
+projected at its own plane, has fully left the viewport. The fade
+channel is gone from the shader (`uWad` packs crush, seed, radius —
+there is nothing left to misuse), and the edge capture shows the ball
+crossing the boundary at full ink. The commit still waits out the rise
+window even when a violent flick has already carried the sheet
+off-stage: the handoff completes whether or not anyone is watching.
+
+The press is the same held machinery as a grab — the pressed point pins
+to the pointer, the sheet lifts into the grip, and the shader's
+contraction target is that same pin, so the ball forms UNDER YOUR
+FINGERS while you hold the button. No gravity in the hand; the crush is
+pure time. Let go and it is the throw-home velocity handoff plus
+topspin proportional to the throw (axis ⊥ velocity — the facing side
+rolls with it), and a plain click is nothing at all: a release at ~zero
+speed, rise–hover–crush–drop, the old delete as the degenerate toss
+rather than a code path.
+
+Browser evidence earned its keep twice. The shadow blob stayed at the
+plate's centre while the ball formed at the pressed corner — a shadow
+half a card from its caster — until the corner offset rides the same
+crush that drives the contraction (928 px of shading under the ball
+after, zero at the old centre). And the first cut routed a mid-rise
+release back through the rise's spring steer, whose damping is sized to
+stop a card: a measured 9148 px/s flick travelled ~450 px. A released
+ball is ballistic the instant the hand opens (`tossed` — the spring
+rise belongs to the keyboard delete alone); re-measured, the same flick
+crossed the screen in 149 ms and left through the corner, flat,
+spinning, still crushing. Esc cannot shake the ball out of your hand,
+and a forged pointerup cannot open it. decisions.md #61.

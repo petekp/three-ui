@@ -489,24 +489,25 @@ export function aeroReach(
 //
 // Deleting a card is the one gesture that gets to break the "indistinguishable
 // from DOM" contract on purpose — the card stops being a document element and
-// dies as matter. The timeline is pure so the tests can hold it still: the
-// driver advances one clock (crumpleT, seconds) and everything else — when
-// the sheet crushes, when gravity takes over, when the wad fades — is a
-// function of that clock. The phases exist because each one covers a
-// different mechanism: the rise is the HANDOFF window (page copy hides on
-// first upload while the plate springs gently off the page, exactly like a
-// grab); the crush is the vertex morph; the fall is ballistics; the fade is
-// the exit. Nothing may overlap the rise, because the swap's pixel-copy
-// guarantee holds only while the sheet is still a flat, untouched card.
+// dies as matter. The CRUSH is pure time, so the tests can hold it still: the
+// driver advances one clock (crumpleT, seconds) and the morph is a function of
+// that clock. The EXIT is deliberately not on the clock at all — it is a
+// place. The wad is gone when it has fully left the viewport, and it may not
+// fade before that, because the user can see it; a wad that dimmed on a timer
+// was measured fading in plain view whenever the fall was slow. Between the
+// two sits the HAND: the ✕ is a press, not a click, and while the button is
+// down the forming ball is held — tracked by the same spring as a grabbed
+// card — so releasing it with speed is a THROW. A plain click is nothing
+// special: it is the same release with ~zero velocity, and the wad simply
+// drops. The rise remains the HANDOFF window (page copy hides on first
+// upload while the plate springs off the page); nothing may overlap it,
+// because the swap's pixel-copy guarantee holds only while the sheet is
+// still a flat, untouched card.
 
 /** Seconds: crush begins only after the handoff window has fully passed. */
 export const CRUMPLE_RISE_T = 0.18
-/** Seconds: the sheet is a wad. Gravity switches on here. */
+/** Seconds: the sheet is a wad. Gravity MAY switch on from here — see held. */
 export const CRUMPLE_CRUSH_T = 0.62
-/** Seconds: the falling wad starts to fade… */
-export const CRUMPLE_FADE_T = 0.82
-/** …and is gone. The driver reports the flight done. */
-export const CRUMPLE_END_T = 1.12
 
 const sstep = (x: number) => {
   const t = Math.min(1, Math.max(0, x))
@@ -516,22 +517,57 @@ const sstep = (x: number) => {
 export interface CrumplePhase {
   /** 0 → 1 vertex-morph progress. EXACTLY 0 through the whole rise. */
   crush: number
-  /** 1 → 0 late-fall opacity. EXACTLY 1 until the fade begins. */
-  fade: number
-  /** Gravity on? (The wad falls only once it IS a wad.) */
+  /** Gravity on? Only once the sheet IS a wad — and never while it is held. */
   falling: boolean
-  /** The flight is over; commit the delete. */
-  done: boolean
 }
 
-/** The whole delete, as a function of one clock. */
-export function crumplePhase(t: number): CrumplePhase {
+/**
+ * The crush, as a function of one clock — plus the one thing that can veto
+ * gravity: a hand. A held wad never falls (you are holding it), and a
+ * released sheet still waits for the crush to finish (a flat card dropping
+ * like a stone reads as a glitch). Both suppressions compose: release a
+ * half-crushed sheet with a flick and it flies on its own momentum, finishes
+ * balling up mid-air, and only then starts to drop.
+ */
+export function crumplePhase(t: number, held = false): CrumplePhase {
   return {
     crush: sstep((t - CRUMPLE_RISE_T) / (CRUMPLE_CRUSH_T - CRUMPLE_RISE_T)),
-    fade: 1 - sstep((t - CRUMPLE_FADE_T) / (CRUMPLE_END_T - CRUMPLE_FADE_T)),
-    falling: t >= CRUMPLE_CRUSH_T,
-    done: t >= CRUMPLE_END_T,
+    falling: !held && t >= CRUMPLE_CRUSH_T,
   }
+}
+
+/**
+ * Has the wad fully left the viewport? Coordinates are viewport-centred
+ * (the lab's world x/y), `r` is the object's bounding radius — the caller
+ * inflates it with the shadow's reach and projects everything to screen
+ * scale, so this stays a pure rectangle test. Per-axis, because a viewport
+ * is a rectangle: outside means outside the left/right band OR the
+ * top/bottom band by more than the whole extent.
+ */
+export function wadOffscreen(x: number, y: number, r: number, vw: number, vh: number): boolean {
+  return Math.abs(x) - r > vw / 2 || Math.abs(y) - r > vh / 2
+}
+
+/** px/s of throw per rad/s of tumble — how much spin a toss picks up. */
+export const TOSS_SPIN_V0 = 220
+/** rad/s cap — a wad is paper, not a fastball. */
+export const TOSS_SPIN_MAX = 7
+
+/**
+ * The tumble a thrown wad leaves the hand with: TOPSPIN — the camera-facing
+ * side rolls in the throw direction, the way a ball tossed underhand rolls
+ * off the fingers. For throw direction d̂ in the screen plane that axis is
+ * ẑ × d̂ (check: ω × r_top = (ẑ×d̂)·rate × Rẑ = rate·R·d̂ — the top surface
+ * moves WITH the throw). Rate scales with speed and saturates. A dead drop
+ * (speed ≈ 0) gets exactly zero — the caller supplies the lazy random
+ * tumble for that case, because randomness has no business in a pure
+ * function the tests need to hold still.
+ */
+export function tossSpin(vx: number, vy: number, out: THREE.Vector3): THREE.Vector3 {
+  const speed = Math.hypot(vx, vy)
+  if (speed < 1e-6) return out.set(0, 0, 0)
+  const rate = Math.min(speed / TOSS_SPIN_V0, TOSS_SPIN_MAX)
+  return out.set((-vy / speed) * rate, (vx / speed) * rate, 0)
 }
 
 /**

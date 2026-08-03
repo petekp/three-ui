@@ -10,6 +10,7 @@
 // This one lives on the page side: it is the hand, and only the hand.
 
 import * as THREE from 'three'
+import { tossSpin } from './lab014Plate'
 
 /** The slice of `Flight` the window gesture actually touches. */
 export interface GestureFlight {
@@ -21,6 +22,18 @@ export interface GestureFlight {
   downX: number
   downY: number
   floated: boolean
+  /** The ✕ is still pressed: the forming ball is in the hand. */
+  crumpleHeld: boolean
+  /**
+   * The hand has thrown it. Set at release, never cleared: the driver's
+   * rise steer is for the never-held keyboard delete only — a released
+   * ball is ballistic from the instant the hand opens, even mid-rise
+   * (the rise spring's damping was measured eating a 9148 px/s flick
+   * down to a ~450 px drift).
+   */
+  tossed: boolean
+  /** The wad's tumble — written here at release, read by the driver. */
+  spin: THREE.Vector3
   anchor: THREE.Vector3
   anchorScroll: number
   hold: THREE.Vector3
@@ -87,7 +100,34 @@ export function attachLab014Gestures<Col>({
   const onUp = (e: PointerEvent) => {
     if (!e.isTrusted) return
     const f = flight.current
-    if (!f || f.mode !== 'held') return
+    if (!f) return
+
+    if (f.mode === 'crumple') {
+      // The hand opens; the ball leaves it. NOT a mode change — the crumple
+      // owns the flight until the wad exits the viewport — just the same
+      // velocity handoff a throw home gets, plus the spin a thrown ball
+      // picks up from its own speed (topspin, axis ⊥ throw). A plain click
+      // arrives here too, with ~zero velocity: the "auto-fall" is nothing
+      // but the degenerate toss, so it is not a code path. Zero speed also
+      // means zero lawful topspin, and a wad falling without any rotation
+      // reads as a sprite — that one case rolls a lazy random tumble.
+      if (!f.crumpleHeld) return
+      f.crumpleHeld = false
+      f.tossed = true
+      f.plate.v.add(f.handVel)
+      tossSpin(f.plate.v.x, f.plate.v.y, f.spin)
+      f.spin.z += (Math.random() - 0.5) * 3
+      if (f.spin.length() < 0.6) {
+        f.spin.set(
+          (Math.random() - 0.5) * 2.0,
+          (Math.random() - 0.5) * 2.0,
+          (Math.random() - 0.5) * 5.0,
+        )
+      }
+      return
+    }
+
+    if (f.mode !== 'held') return
 
     // A tap is a gesture, a drag is a different gesture, and the only thing
     // that separates them is that a tap did not go anywhere. 6 px is the

@@ -6,8 +6,6 @@ import {
   aeroReach,
   atRest,
   CRUMPLE_CRUSH_T,
-  CRUMPLE_END_T,
-  CRUMPLE_FADE_T,
   CRUMPLE_RISE_T,
   crumplePhase,
   HAND,
@@ -16,6 +14,10 @@ import {
   shadowQuadFrame,
   stepFree,
   stepHeld,
+  TOSS_SPIN_MAX,
+  TOSS_SPIN_V0,
+  tossSpin,
+  wadOffscreen,
   wadShrink,
 } from './lab014Plate'
 
@@ -399,16 +401,17 @@ describe('aero gate — the rendered bend is zero at the swap by construction', 
 })
 
 describe('crumple — the phases may not overlap the handoff', () => {
-  it('the rise window is an untouched sheet: crush exactly 0, fade exactly 1', () => {
+  it('the rise window is an untouched sheet: crush exactly 0, held or not', () => {
     // The page copy hides on first upload somewhere inside this window, and
     // the swap's pixel-copy guarantee holds only while the sheet is still a
-    // flat card. Not "small" — zero.
+    // flat card. Not "small" — zero. The hand does not get a say: a ✕
+    // pressed and dragged immediately still lifts a flat sheet.
     for (const t of [0, CRUMPLE_RISE_T * 0.5, CRUMPLE_RISE_T * 0.999, CRUMPLE_RISE_T]) {
-      const ph = crumplePhase(t)
-      expect(ph.crush).toBe(0)
-      expect(ph.fade).toBe(1)
-      expect(ph.falling).toBe(false)
-      expect(ph.done).toBe(false)
+      for (const held of [false, true]) {
+        const ph = crumplePhase(t, held)
+        expect(ph.crush).toBe(0)
+        expect(ph.falling).toBe(false)
+      }
     }
   })
 
@@ -421,44 +424,88 @@ describe('crumple — the phases may not overlap the handoff', () => {
       prev = c
     }
     expect(crumplePhase(CRUMPLE_CRUSH_T).crush).toBe(1)
-    expect(crumplePhase(CRUMPLE_END_T).crush).toBe(1)
+    expect(crumplePhase(CRUMPLE_CRUSH_T + 10).crush).toBe(1)
   })
 
-  it('gravity waits for the wad; the fade waits for the fall', () => {
+  it('gravity waits for the wad', () => {
     // A flat sheet dropping like a stone reads as a glitch — the thing that
-    // falls must already be a wad. And the wad must be SEEN falling before
-    // it starts to go: fade stays exactly 1 until its own window.
+    // falls must already be a wad.
     expect(crumplePhase(CRUMPLE_CRUSH_T - 0.001).falling).toBe(false)
     expect(crumplePhase(CRUMPLE_CRUSH_T).falling).toBe(true)
-    for (const t of [CRUMPLE_CRUSH_T, CRUMPLE_FADE_T - 0.001, CRUMPLE_FADE_T]) {
-      expect(crumplePhase(t).fade).toBe(1)
-    }
-    let prev = 1
-    for (let i = 0; i <= 40; i++) {
-      const t = CRUMPLE_FADE_T + (i / 40) * (CRUMPLE_END_T - CRUMPLE_FADE_T)
-      const f = crumplePhase(t).fade
-      expect(f).toBeLessThanOrEqual(prev)
-      prev = f
-    }
-    expect(crumplePhase(CRUMPLE_END_T).fade).toBe(0)
   })
 
-  it('done exactly at the end, gone at exactly zero opacity', () => {
-    expect(crumplePhase(CRUMPLE_END_T - 0.001).done).toBe(false)
-    const end = crumplePhase(CRUMPLE_END_T)
-    expect(end.done).toBe(true)
-    expect(end.fade).toBe(0)
+  it('a held wad never falls, no matter how long it is held', () => {
+    // The button is down: the ball is IN the hand. Gravity resumes only at
+    // release — this is what makes the ✕ a toss and not a timer.
+    for (const t of [CRUMPLE_CRUSH_T, CRUMPLE_CRUSH_T + 1, CRUMPLE_CRUSH_T + 60]) {
+      const ph = crumplePhase(t, true)
+      expect(ph.falling).toBe(false)
+      expect(ph.crush).toBe(1) // it still crushes in the grip — only the fall waits
+    }
   })
 
   it('the phase clocks are ordered', () => {
     expect(CRUMPLE_RISE_T).toBeLessThan(CRUMPLE_CRUSH_T)
-    expect(CRUMPLE_CRUSH_T).toBeLessThan(CRUMPLE_FADE_T)
-    expect(CRUMPLE_FADE_T).toBeLessThan(CRUMPLE_END_T)
   })
 
   it('wadShrink is identity at crush 0 and a sixth at full crush', () => {
     expect(wadShrink(0)).toBe(1)
     expect(wadShrink(1)).toBeCloseTo(0.16, 10)
     expect(wadShrink(0.5)).toBeGreaterThan(wadShrink(1))
+  })
+})
+
+describe('crumple — the exit is a place, not a time', () => {
+  // 1280×720 viewport, r = 100: the wad may not be reported gone while any
+  // part of it (or its shadow — the caller inflates r) could still be seen.
+  const vw = 1280
+  const vh = 720
+
+  it('on screen anywhere inside the rectangle: not gone', () => {
+    expect(wadOffscreen(0, 0, 100, vw, vh)).toBe(false)
+    expect(wadOffscreen(600, 300, 100, vw, vh)).toBe(false)
+    // Straddling an edge: centre outside, extent still reaches in.
+    expect(wadOffscreen(vw / 2 + 99, 0, 100, vw, vh)).toBe(false)
+    expect(wadOffscreen(0, -(vh / 2 + 99), 100, vw, vh)).toBe(false)
+  })
+
+  it('gone only once the whole extent has crossed', () => {
+    expect(wadOffscreen(vw / 2 + 101, 0, 100, vw, vh)).toBe(true)
+    expect(wadOffscreen(-(vw / 2 + 101), 0, 100, vw, vh)).toBe(true)
+    expect(wadOffscreen(0, vh / 2 + 101, 100, vw, vh)).toBe(true)
+    expect(wadOffscreen(0, -(vh / 2 + 101), 100, vw, vh)).toBe(true)
+  })
+
+  it('a corner exit needs only ONE axis fully out', () => {
+    // Off the bottom-right diagonally: the y band was crossed, x was not.
+    // Outside the y band is outside the viewport, full stop.
+    expect(wadOffscreen(vw / 2 - 50, -(vh / 2 + 101), 100, vw, vh)).toBe(true)
+  })
+})
+
+describe('crumple — the toss reads the throw', () => {
+  it('a dead drop spins not at all (the caller randomizes that case)', () => {
+    const out = new THREE.Vector3(9, 9, 9)
+    tossSpin(0, 0, out)
+    expect(out.length()).toBe(0)
+  })
+
+  it('topspin: the axis is ẑ × d̂, rate ∝ speed, saturating', () => {
+    const out = new THREE.Vector3()
+    // Throw along +x: axis must be +y (camera-facing side rolls with the throw).
+    tossSpin(TOSS_SPIN_V0, 0, out)
+    expect(out.x).toBeCloseTo(0, 10)
+    expect(out.y).toBeCloseTo(1, 10)
+    expect(out.z).toBe(0)
+    // Throw along −y (down-screen): axis must be +x.
+    tossSpin(0, -TOSS_SPIN_V0 * 2, out)
+    expect(out.x).toBeCloseTo(2, 10)
+    expect(out.y).toBeCloseTo(0, 10)
+    // The axis is perpendicular to the throw for any direction.
+    tossSpin(371, -842, out)
+    expect(out.dot(new THREE.Vector3(371, -842, 0))).toBeCloseTo(0, 8)
+    // And the rate saturates at the cap, however hard the fling.
+    tossSpin(1e6, 0, out)
+    expect(out.length()).toBeCloseTo(TOSS_SPIN_MAX, 10)
   })
 })

@@ -2963,3 +2963,88 @@ viewport) with fade monotone to exactly 0, flight torn down, page cards
 h 96, the forwarded ✕ through the canvas flips float → crumple, commits
 at 3 cards. `__threeUI.stats()` = [] afterwards — no sources, no paints:
 the idle contract in its strongest form.
+
+**Superseded in part (2026-08-02, same day):** the fade and the timer
+exit are gone, and pointerup is no longer guarded — it is the release of
+a throw. See #61.
+
+## 61. The toss: the ✕ is a press, the exit is a place, and a released ball is ballistic (2026-08-02, lab 014)
+
+**Decision.** Two changes to #60, requested in one breath ("make sure it
+doesn't fade out until it's past the viewport boundaries" / "start the
+crumple on mousedown on the X so that the user can TOSS the paper
+ball"). The fade is not moved past the boundary — it is DELETED. A wad
+off-screen needs no dimming, so the flight simply ends when the wad has
+fully left the viewport: `wadOffscreen(p·m, r·m)` with the position AND
+the radius projected to screen scale at the wad's own plane (`planeScale`
+— the rectangle test is exact at any altitude), the radius inflated to
+the half-diagonal (a mid-crush sheet is not a ball yet) plus the
+shadow's worst-case reach (240 px — the shadow sits at the wad's x/y, so
+one verdict retires both). Never during the rise (the handoff window
+must complete even if the sheet is already gone — a cannon flick exits
+at crush 0 and the commit still waits for `CRUMPLE_RISE_T`), and never
+while held (a ball dragged off-screen and back must not be torn from the
+grip). Gravity guarantees termination: drag τ 0.9 s against 3400 px/s²
+is a terminal velocity of ~3060 px/s, straight down.
+
+**The ✕ is a press, and the auto-fall is not a code path.** `onPointerDown`
+starts the crumple HELD: the same machinery as a grabbed card — lift ramp
+to `CRUMPLE_Z`, ray→plane hand, `trackHand`, `stepHeld` with the pressed
+point as the pin — so the sheet lifts into the grip, the ball forms under
+the fingers (the shader's contraction target is `uAeroGrab`, the same
+pin), gravity never touches it (`crumplePhase(t, held)` returns
+`falling: false` while held — you are holding it), and the crush is still
+pure time: hold the button and the ball forms in your hand. The release
+is the same velocity handoff a throw home gets — `v.add(handVel)`, the
+damper's own vector — plus topspin from the throw's own speed:
+`tossSpin` = (ẑ × d̂) · min(speed/220, 7), axis perpendicular to the
+throw so the camera-facing side rolls with it, zero at zero speed (the
+pure function stays deterministic; the caller rolls a lazy random tumble
+below 0.6 rad/s, because a wad falling without rotation reads as a
+sprite). A plain click arrives at the same release with ~zero velocity:
+rise, hover, crush, drop — the old behavior as the degenerate toss, no
+branch anywhere. `onClick` stays wired as the KEYBOARD path (Enter/Space
+on a button fires click with no pointerdown); after a pointer press the
+trailing click finds the crumple already running and does nothing.
+
+**A released ball is ballistic IMMEDIATELY — the `tossed` flag.** The
+first cut routed a mid-rise release back through the rise's `stepFree`
+steer "to finish the climb", and the browser caught what the unit tests
+could not: that solver's damping is sized to STOP a card, and it bled a
+measured 9148 px/s flick down to ~450 px of drift — the cannon threw a
+feather. A released press and a keyboard delete are otherwise the same
+state (`crumpleHeld: false`), so the release sets `tossed` and the
+spring rise belongs to the never-held keyboard delete alone. Re-measured:
+release at 9148 px/s crossed x −28 → 2689 in 149 ms and left through the
+corner, flat and spinning, crushing off-stage.
+
+**The shadow follows its caster.** The wad contracts toward the grab
+point, so at full crush its centroid sits at grab·0.87 body-local
+(`wadP = grab + (p − grab)·0.13`) — and the shadow's corners must ride
+the same offset, blended by the same crush, or the blob stays at the
+plate's centre while the ball forms at the pressed corner: a shadow half
+a card away from the thing casting it (first capture: the wad top-right,
+the blob bottom-centre). Offset exactly 0 at crush 0 — the liftoff frame
+still draws the DOM's own shadow — and the keyboard delete's grab is the
+centre, offset 0 forever, the old shadow. Measured after: 928 px of soft
+shading under the ball, 0 at the old centre.
+
+**Irreversible still means irreversible — but the hand is the hand.**
+Esc while the ball is in the grip neither resurrects the card nor shakes
+the ball loose (browser-verified: mode `crumple`, still held, still
+tracking after Escape); a forged pointerup cannot open the hand
+(`isTrusted`, decisions #50); the airborne regrab still declines
+`[data-nodrag]`, so pressing the ✕ of a floating card starts a held
+crumple instead of a drag.
+
+**Measured (2026-08-02, dpr 1, in-loop captures).** Plain click: 17 held
+frames (the CLI's own down→up gap), release mid-rise, spring finishes
+the climb, crush 0.000 through the window, lob to h 188 (the rise
+spring's residual v.z coasting through the ballistic branch — the click
+reads as a gentle toss-up), bottom exit at sy 1343, commit exactly one
+frame after the last on-screen record, cards 5 → 4. Held: 386 frames
+tracking the pointer across the screen with crush at 1 and zero gravity.
+Cannon (CDP drag, 2-frame press): exit past right AND bottom in 149 ms.
+The edge crop shows the wad crossing the boundary at full ink — no
+dimming anywhere in its life. `uWad` repacked (crush, seed, wadR) — the
+fade channel does not exist to misuse. `stats()` = [] after every path.
