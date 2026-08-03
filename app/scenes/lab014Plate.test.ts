@@ -349,7 +349,23 @@ describe('aero bend — flat at rest is a theorem, not a tuning', () => {
       prev = a
     }
     // A hand can always move faster; the sheet cannot bend more than paper.
-    expect(aeroAmplitude(1e6)).toBeLessThanOrEqual(24)
+    expect(aeroAmplitude(1e6)).toBeLessThanOrEqual(55)
+  })
+
+  it('a real drag is VISIBLE — the curve reaches readable amplitude at hand speeds', () => {
+    // Pete's report, verbatim: "i don't see any bend when picking up and
+    // moving the card around, even swiftly." The pipeline was healthy end to
+    // end — the browser bisect showed the driver delivering 8–15 px at real
+    // drag speeds and the shader bending beautifully when forced to 60 —
+    // so the defect was the CURVE: a 22 px cap with half-saturation at
+    // 900 px/s puts every human drag in the single-digit-swell regime,
+    // and a head-on z-bow that size is a sub-2% perspective change.
+    // Invisible is a bug even when every wire is live. These floors pin
+    // "readable": a comfortable drag clears 25 px, a brisk one clears 40.
+    expect(aeroAmplitude(600)).toBeGreaterThan(25)
+    expect(aeroAmplitude(1200)).toBeGreaterThan(40)
+    // …while a slow, deliberate reposition stays a whisper.
+    expect(aeroAmplitude(300)).toBeLessThan(12)
   })
 
   it('reach is the exact corner support along the motion direction', () => {
@@ -394,7 +410,7 @@ describe('aero gate — the rendered bend is zero at the swap by construction', 
 
   it('aeroAmplitude is the gated curve — the two cannot disagree', () => {
     for (const s of [0, 20, 45, 100, 800, 3000]) {
-      const raw = s * s === 0 ? 0 : 22 * ((s * s) / (s * s + 900 * 900))
+      const raw = s * s === 0 ? 0 : 55 * ((s * s) / (s * s + 650 * 650))
       expect(aeroAmplitude(s)).toBeCloseTo(raw * aeroGate(s), 10)
     }
   })

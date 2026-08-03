@@ -2903,6 +2903,28 @@ burst. Paint contract untouched: the bend is uniforms + vertex work on
 the already-uploaded texture — zero additional paints at any phase, 32×12
 segments only so the bow has vertices to spend.
 
+**Addendum (2026-08-02, later the same day): "tuned by eye" shipped
+invisible — amplitude is now set by measurement.** Pete: "did you know
+that the aero effect doesn't work? i don't see any bend when picking up
+and moving the card around, even swiftly." Every wire was live. The
+bisect that proved it: force `uAero.value.set(1, 0, 60, 240)` inside a
+`gl.render` wrapper (last writer beats the driver) — the parked card
+bowed instantly, swollen middle, warped glyphs, sweeping shade; then
+trace the real path during a drag — the driver was delivering 8–15 px at
+genuine hand speeds. Both ends healthy; the CURVE was the bug. A 22 px
+cap with half-saturation at 900 px/s puts every human drag in the
+single-digit regime, and because the bow points at the camera, its
+head-on cues — perspective swell and the curvature shade — both scale
+with amplitude: 15 px is a sub-2% swell, which is nothing. Retuned
+AMP 55 / V0 650 (a comfortable 600 px/s drag reaches ~25 px, a brisk one
+~43, measured live: peak 42.65 with 98 frames over 25 in one sweep, and
+the settle tail still EXACTLY 0 — the gate is untouched). The lesson is
+a species of #53's: a live pipeline can still ship an invisible effect,
+and "tuned by eye" is worthless unless the eye doing the tuning is
+looking at the real thing at real speeds. The visibility floor is now a
+TEST (`aeroAmplitude(600) > 25`, `(1200) > 40`, `(300) < 12`) so the
+next retune cannot quietly sink it either.
+
 ## 60. The crumple delete: a card dies as matter, and no phase may overlap the handoff (2026-08-02, lab 014)
 
 **Decision.** Deleting a card is the one gesture that gets to break the

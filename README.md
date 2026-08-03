@@ -3565,3 +3565,25 @@ rise belongs to the keyboard delete alone); re-measured, the same flick
 crossed the screen in 149 ms and left through the corner, flat,
 spinning, still crushing. Esc cannot shake the ball out of your hand,
 and a forged pointerup cannot open it. decisions.md #61.
+
+## the bend nobody could see
+
+"did you know that the aero effect doesn't work?" It did work — every
+wire of it. That is the interesting part. The bisect: force the
+amplitude uniform to 60 inside a render wrapper and the parked card
+bows instantly, warped glyphs and all; trace the real path during a
+drag and the driver is faithfully delivering 8 to 15. Both ends alive,
+and the effect invisible anyway, because the bow points at the camera
+and its head-on cues — perspective swell, curvature shade — scale with
+amplitude. Fifteen pixels of toward-you bow is a sub-2% swell. Nothing.
+
+The curve said "tuned by eye against real card stock," and the eye in
+question had never watched a real drag at real speed. Retuned by
+measurement: cap 55 (a forced 60 was instantly legible paper),
+half-saturation 650 px/s (a comfortable drag reaches ~25, a brisk one
+~43 — measured live, peak 42.65). The settle tail still lands at
+exactly zero; the gate never changed. And the floor is a test now —
+`aeroAmplitude(600) > 25` — because an invisible effect passed every
+theorem this lab had: flat-at-rest held, the swap was clean, the trace
+showed seventeen proud pixels. None of those asked whether anyone could
+see it. decisions.md #59 addendum.

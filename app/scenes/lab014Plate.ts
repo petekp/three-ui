@@ -440,10 +440,19 @@ export function shadowQuadFrame(
  * happen at rest, and "flat at rest" must be a property of the curve, not
  * of how quickly some smoothing happened to decay. Between 30 and 90 px/s
  * the gate ramps in so the first pixel of bend cannot pop.
+ *
+ * The numbers are set by MEASUREMENT, not eye (the first pair — 22 px cap,
+ * V0 900 — was "tuned by eye" and nobody could see it: every wire was
+ * live, the driver delivered 8–15 px at real drag speeds, and a head-on
+ * z-bow that size is a sub-2% perspective swell. Forcing the uniform to
+ * 60 px in the browser was instantly legible paper). The bow is TOWARD
+ * the camera, so head-on visibility comes from perspective swell plus the
+ * curvature shade, and both scale with amplitude: the cap must live where
+ * a brisk drag actually reaches it.
  */
 export function aeroAmplitude(speed: number): number {
-  const AMP = 22 // px, the cap — tuned by eye against real card stock
-  const V0 = 900 // px/s, half-saturation speed
+  const AMP = 55 // px, the cap — a browser-forced 60 reads as paper; 22 read as nothing
+  const V0 = 650 // px/s, half-saturation — a comfortable drag reaches ~25 px
   const gate = aeroGate(speed)
   if (gate === 0) return 0
   const s2 = speed * speed
