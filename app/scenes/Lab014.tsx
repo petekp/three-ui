@@ -60,8 +60,7 @@ import '../lab014.css'
 import { cameraDistance, carryToPlane, planeScale, screenToPlane } from './lab014Camera'
 import { attachLab014Gestures } from './lab014Gestures'
 import {
-  aeroAmplitude,
-  aeroGate,
+  aeroFollowStep,
   aeroReach,
   atRest,
   corners,
@@ -741,7 +740,7 @@ function Driver({
   const dpr = useThree((s) => s.viewport.dpr)
   // The bend's smoothed state. A ref, not module scratch: it must start at
   // zero for EVERY flight, and Driver mounts once per flight.
-  const aeroSm = useRef({ amt: 0, dir: new THREE.Vector2(1, 0) })
+  const aeroSm = useRef({ amt: 0, dirX: 1, dirY: 0 })
 
   useFrame((_, rawDt) => {
     const f = flight.current
@@ -941,34 +940,28 @@ function Driver({
 
     // ── the aero bend: the sheet reads the plate's own velocity ──
     //
-    // Direction smooths with a fast time constant and only updates while
-    // there is real motion (a near-zero velocity has no direction worth
-    // following); amplitude chases aeroAmplitude's saturating curve, rising
-    // faster than it falls — paper snaps against the air and relaxes out of
-    // it. The curve's hard zero below 30 px/s makes "flat at rest" a
-    // property of the field, not of how far some decay happened to get:
-    // by the time the settle blend can engage (speed < ~30), the target is
-    // exactly 0 and the residue is milli-pixels on its way down.
+    // The law lives in aeroFollowStep (lab014Plate.ts), under test:
+    // direction only follows real motion, amplitude chases the gated curve
+    // with a time constant per phase of the paper, and the returned value
+    // IS the rendered amplitude — nothing instantaneous touches it on the
+    // way to the shader. (The old rendered = smoothed · gate multiply here
+    // was both reported symptoms at once: −25.75 px in one frame at a
+    // mid-drag pause, and the settle relax compressed into a snap. The
+    // follower's gated release + sub-half-pixel snap now owns swap-frame
+    // exactness — flat at rest is still EXACTLY 0.)
     {
+      // held = any mode but 'home': the swap can only fire at the end of a
+      // free flight home, so only there does the relax race a deadline.
       const sm = aeroSm.current
-      const vx = f.plate.v.x
-      const vy = f.plate.v.y
-      const speed = Math.hypot(vx, vy)
-      if (speed > 40) {
-        const k = 1 - Math.exp(-dt / 0.05)
-        sm.dir.x += (vx / speed - sm.dir.x) * k
-        sm.dir.y += (vy / speed - sm.dir.y) * k
-        sm.dir.normalize()
-      }
-      const target = aeroAmplitude(speed)
-      const tau = target > sm.amt ? 0.06 : 0.12
-      sm.amt += (target - sm.amt) * (1 - Math.exp(-dt / tau))
-      const reach = aeroReach(sm.dir.x, sm.dir.y, f.w, f.h, f.hold.x, f.hold.y)
-      // Rendered amplitude = smoothed · gate. The smoother gives continuity;
-      // the gate gives the theorem — exactly 0 through the settle band, so
-      // the swap frame is flat even when the descent outruns the decay
-      // (measured: 0.45 px still aboard at touchdown without this).
-      aero.pack.set(sm.dir.x, sm.dir.y, sm.amt * aeroGate(speed), reach)
+      const amp = aeroFollowStep(
+        sm,
+        f.plate.v.x,
+        f.plate.v.y,
+        dt,
+        f.mode !== 'home',
+      )
+      const reach = aeroReach(sm.dirX, sm.dirY, f.w, f.h, f.hold.x, f.hold.y)
+      aero.pack.set(sm.dirX, sm.dirY, amp, reach)
       aero.grab.set(f.hold.x, f.hold.y)
       // The crumple's channel. x is the driver's per-frame verdict; y
       // (seed) and z (wad radius) belong to Flying and are written once.

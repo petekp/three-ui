@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import {
   aeroAmplitude,
+  type AeroFollow,
+  aeroFollowStep,
   aeroGate,
   aeroReach,
   atRest,
@@ -390,12 +392,11 @@ describe('aero bend — flat at rest is a theorem, not a tuning', () => {
 })
 
 describe('aero gate — the rendered bend is zero at the swap by construction', () => {
-  it('gates to exactly 0 below 30 px/s no matter what the smoother holds', () => {
-    // The smoothed amplitude decays with a time constant; the descent can
-    // outrun it (measured: 0.45 px still aboard at the swap). The RENDERED
-    // amplitude is smoothed · gate(speed), and the gate is exactly 0 through
-    // the whole settle band — so the swap frame is flat even if the
-    // smoother is mid-decay.
+  it('gates the TARGET to exactly 0 below 30 px/s', () => {
+    // The gate lives inside aeroAmplitude alone. (It was once also
+    // multiplied onto the rendered value — that multiply was the flicker
+    // and the settle hitch, and the follower's gated release + snap now
+    // owns swap-frame exactness instead. See the follower suite below.)
     expect(aeroGate(0)).toBe(0)
     expect(aeroGate(29.9)).toBe(0)
     expect(aeroGate(30)).toBe(0)
@@ -413,6 +414,108 @@ describe('aero gate — the rendered bend is zero at the swap by construction', 
       const raw = s * s === 0 ? 0 : 55 * ((s * s) / (s * s + 650 * 650))
       expect(aeroAmplitude(s)).toBeCloseTo(raw * aeroGate(s), 10)
     }
+  })
+})
+
+describe('aero follower — the bend is continuous; flat-at-rest stays exact', () => {
+  // Speed profiles measured in the browser (2026-08-02). A hesitation-rich
+  // hand drag rings speed through the 30–90 gate band at every pause; a
+  // release-to-settle descends through it once, fast, then creeps sub-30
+  // until the swap. Both are along +x — the bow axis is not under test here.
+  const RAMP = Array.from({ length: 30 }, (_, i) => (900 * (i + 1)) / 30)
+  const HOLD = Array.from({ length: 20 }, () => 900)
+  const CRASH = [400, 150, 47, 20, 10]
+  const REST = Array.from({ length: 40 }, () => 0)
+
+  function follower(): AeroFollow {
+    return { amt: 0, dirX: 1, dirY: 0 }
+  }
+
+  function drive(sm: AeroFollow, speeds: number[], held: boolean): number[] {
+    return speeds.map((s) => aeroFollowStep(sm, s, 0, DT, held))
+  }
+
+  it('a held hesitation cannot strobe the bend: bounded per-frame drop, no teleport to 0', () => {
+    // Measured before the law changed: −25.75 px in ONE frame as a pause
+    // crossed the gate band (35 px of bend → 9 in 8 ms), and every pause in
+    // a drag ran a full appear-vanish-appear cycle. The eye reads that as
+    // flicker, and the curvature shade amplifies it — the darkening scales
+    // with amplitude, so the shade strobed with it. A hand that is DOWN has
+    // no swap deadline, so the pause's relax gets the lazy time constant.
+    const sm = follower()
+    const out = drive(sm, [...RAMP, ...HOLD, ...CRASH, ...REST], true)
+    let worst = 0
+    for (let i = 1; i < out.length; i++) {
+      worst = Math.max(worst, out[i - 1] - out[i])
+      // a visible bend may never be exactly 0 one frame later
+      if (out[i - 1] > 1) expect(out[i]).toBeGreaterThan(0)
+    }
+    expect(worst).toBeLessThanOrEqual(4)
+  })
+
+  it('the free settle relax is exponential butter that BEATS the swap: shrinking steps, exactly 0 within 150 ms of gate-close', () => {
+    // The measured settle (trace B): band entry at ~144 px/s with ~23 px
+    // aboard, gate-zero at ~30 px/s. The old law multiplied the smoothed
+    // amplitude by the instantaneous gate, compressing the whole relax into
+    // ~75 ms of 3–4 px steps that ended in a visible snap — the hitch. But
+    // the cliff was also hiding a deadline: gate-close to the DOM swap is
+    // only ~116 ms (measured — the trace stops when the mesh unmounts), and
+    // a first fix with one 70 ms gated constant swapped with 2.75 px still
+    // aboard. Free flight gets the brisk constant; exactness must arrive
+    // from convergence before the swap can plausibly fire.
+    const sm = follower()
+    const FLIGHT = Array.from({ length: 40 }, () => 900)
+    const DECEL = [700, 500, 300, 220, 180]
+    const BAND = [144, 127, 112, 97, 86, 76, 65, 57, 50, 43, 36, 30]
+    const TAIL = [
+      25, 20, 16, 13, 10, 8, 6, 5, 4, 3, 2, 2, 1, 1,
+      ...Array.from({ length: 30 }, () => 0),
+    ]
+    const out = drive(sm, [...FLIGHT, ...DECEL, ...BAND, ...TAIL], false)
+    const bandStart = FLIGHT.length + DECEL.length
+    let worst = 0
+    for (let i = bandStart + 1; i < out.length; i++) {
+      worst = Math.max(worst, out[i - 1] - out[i])
+      if (out[i - 1] > 1) expect(out[i]).toBeGreaterThan(0)
+    }
+    expect(worst).toBeLessThanOrEqual(4)
+    // Exactness is still the theorem: EXACTLY 0, before the swap deadline.
+    expect(out[out.length - 1]).toBe(0)
+    const gateClose = bandStart + BAND.length
+    const zeroAt = out.findIndex((v, i) => i >= gateClose && v === 0)
+    expect(zeroAt).toBeGreaterThan(-1)
+    expect((zeroAt - gateClose) * DT).toBeLessThanOrEqual(0.15)
+  })
+
+  it('the attack still snaps: a step to 900 px/s reaches 80% of the curve within 150 ms', () => {
+    const sm = follower()
+    const out = drive(sm, Array.from({ length: 18 }, () => 900), true)
+    expect(out[17]).toBeGreaterThanOrEqual(0.8 * aeroAmplitude(900))
+  })
+
+  it('free rest is EXACTLY zero after any history — the swap contract survives the law', () => {
+    const sm = follower()
+    drive(sm, [...RAMP, ...HOLD, ...CRASH], false)
+    const out = drive(sm, Array.from({ length: 42 }, () => 0), false) // 350 ms
+    expect(out[out.length - 1]).toBe(0)
+  })
+
+  it('a held pause still drains to EXACTLY zero, just lazily', () => {
+    // No deadline while the hand is down — but a parked bend may not
+    // linger forever either; the lazy constant reaches the snap too.
+    const sm = follower()
+    drive(sm, [...RAMP, ...HOLD, ...CRASH], true)
+    const out = drive(sm, Array.from({ length: 72 }, () => 0), true) // 600 ms
+    expect(out[out.length - 1]).toBe(0)
+  })
+
+  it('a near-still hand cannot steer the bow axis', () => {
+    const sm = follower()
+    sm.dirX = 0.6
+    sm.dirY = 0.8
+    aeroFollowStep(sm, 5, 15, DT, true) // speed ~15.8 — below the 40 px/s floor
+    expect(sm.dirX).toBeCloseTo(0.6, 10)
+    expect(sm.dirY).toBeCloseTo(0.8, 10)
   })
 })
 

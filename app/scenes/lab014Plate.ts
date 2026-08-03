@@ -460,12 +460,13 @@ export function aeroAmplitude(speed: number): number {
 }
 
 /**
- * The hard-zero gate, exported on its own because the driver needs it
- * twice: once inside `aeroAmplitude` (the target), and once on the
- * RENDERED amplitude — smoothed · gate — so the settle can never carry a
- * decay tail into the swap frame (measured: 0.45 px still aboard at
- * touchdown when only the target was gated; the descent outruns a 120 ms
- * time constant). One formula, one place.
+ * The hard-zero gate. It lives inside `aeroAmplitude` — the TARGET — and
+ * nowhere else. It was once also multiplied onto the rendered amplitude
+ * (to keep a decaying tail out of the swap frame; measured 0.45 px aboard
+ * at touchdown without it), but an instantaneous multiply on the OUTPUT
+ * turns every wiggle of speed through the 30–90 band into a visible strobe
+ * and every settle into a snap. `aeroFollowStep` now owns exactness
+ * instead: a fast gated release plus a sub-visible snap-to-zero.
  */
 export function aeroGate(speed: number): number {
   return Math.min(1, Math.max(0, (speed - 30) / 60))
@@ -492,6 +493,69 @@ export function aeroReach(
     (Math.abs(dirY) * h) / 2 +
     Math.abs(dirX * grabX + dirY * grabY)
   )
+}
+
+/**
+ * Smoothed state of the bend field between frames — one per flight. `amt`
+ * is the amplitude the shader is actually shown; `dirX/dirY` the unit bow
+ * axis. Plain fields, no vector class: the whole point of extracting this
+ * from the driver is that the tests can drive it dry.
+ */
+export interface AeroFollow {
+  amt: number
+  dirX: number
+  dirY: number
+}
+
+/**
+ * One driver frame of the bend follower: advance the smoothed bow axis and
+ * amplitude toward what `aeroAmplitude` wants for this speed, and return
+ * the amplitude to render — which is the smoothed value itself, nothing
+ * else. The first law multiplied it by the instantaneous gate on the way
+ * out, and that multiply was both reported symptoms: speed's frame-scale
+ * noise went straight to the screen (measured −25.75 px in ONE frame as a
+ * mid-drag pause crossed the gate band — the shade strobing Pete saw), and
+ * a settle's descent through the band compressed the whole relax into
+ * ~75 ms ending in a snap (the hitch). The gate now lives only inside the
+ * target; continuity is the smoother's alone.
+ *
+ * Time constants, one per phase of the paper: 60 ms attack (the sheet
+ * snaps against the air), 120 ms release while still moving (it relaxes
+ * out of it), and once the target is hard-zero, a fork on `held`: 90 ms
+ * under a hand (a pause mid-drag has no deadline — the swap cannot fire
+ * while the hand is down, so the relax gets to be butter) and 25 ms in
+ * free flight, because the settle DOES have a deadline: gate-close to the
+ * DOM swap was measured at ~116 ms, and the first gated law (one 70 ms
+ * constant) was measured swapping with 2.75 px of bend still aboard — a
+ * pop the old output-gate cliff had been hiding. 25 ms drains a measured
+ * ~12 px gate-close residue to the snap in ~92 ms, inside the deadline
+ * with margin, in exponentially shrinking steps.
+ * Exactness is a snap-to-zero below half a pixel — sub-visible, so the
+ * swap-frame theorem ("flat at rest is EXACTLY 0") survives without the
+ * cliff that used to enforce it.
+ */
+export function aeroFollowStep(
+  sm: AeroFollow,
+  vx: number,
+  vy: number,
+  dt: number,
+  held: boolean,
+): number {
+  const speed = Math.hypot(vx, vy)
+  if (speed > 40) {
+    const k = 1 - Math.exp(-dt / 0.05)
+    const dx = sm.dirX + (vx / speed - sm.dirX) * k
+    const dy = sm.dirY + (vy / speed - sm.dirY) * k
+    const n = Math.hypot(dx, dy) || 1
+    sm.dirX = dx / n
+    sm.dirY = dy / n
+  }
+  const target = aeroAmplitude(speed)
+  const tau =
+    target > sm.amt ? 0.06 : target > 0 ? 0.12 : held ? 0.09 : 0.025
+  sm.amt += (target - sm.amt) * (1 - Math.exp(-dt / tau))
+  if (target === 0 && sm.amt < 0.5) sm.amt = 0
+  return sm.amt
 }
 
 // ── the crumple ──────────────────────────────────────────────────────────

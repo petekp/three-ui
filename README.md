@@ -3587,3 +3587,30 @@ exactly zero; the gate never changed. And the floor is a test now —
 theorem this lab had: flat-at-rest held, the swap was clean, the trace
 showed seventeen proud pixels. None of those asked whether anyone could
 see it. decisions.md #59 addendum.
+
+## continuity belongs to the smoother
+
+Making the bend visible surfaced two complaints within the hour: the
+shade flickers, and the settle back to flat hitches. One bug. The
+rendered amplitude was `smoothed · gate(speed)` — the hard gate
+multiplied onto the OUTPUT, which was how #59 guaranteed a flat swap
+frame, and also a wire from speed's frame-scale noise straight to the
+screen. A pause mid-drag crossed the gate band at −25.75 px in one
+frame; every hesitation ran an appear-vanish-appear cycle; the settle
+relax was compressed into 75 ms and ended in a snap. The shade was
+innocent — it scales with amplitude, so it strobed with amplitude. The
+amplitude retune didn't create the cliff, it made it tall enough to
+finally see.
+
+The law moved into a pure follower the tests can drive dry: the gate
+lives only inside the target, and the rendered value is the smoothed
+one, full stop. Then the twist — the first fix relaxed with one time
+constant and the browser caught it swapping with 2.75 px of bend still
+aboard, because gate-close to swap is only ~116 ms. The cliff had been
+hiding a real deadline. But the deadline only exists in free flight —
+a swap cannot fire while your hand is down — so the gated release
+forks: 90 ms of butter under a hand, 25 ms of business on the way
+home. Witnessed at the swap: `0.876 → 0.59 → 0 → 0 → gone`. Two
+exactly-zero frames of margin, shrinking exponential steps the whole
+way down, and a hesitation now drains 6.7 → 4.2 in sub-pixel steps
+instead of strobing. decisions.md #62.

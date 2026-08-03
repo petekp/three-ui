@@ -3070,3 +3070,60 @@ Cannon (CDP drag, 2-frame press): exit past right AND bottom in 149 ms.
 The edge crop shows the wad crossing the boundary at full ink — no
 dimming anywhere in its life. `uWad` repacked (crush, seed, wadR) — the
 fade channel does not exist to misuse. `stats()` = [] after every path.
+
+## 62. The bend follower: continuity belongs to the smoother alone — and free flight races a deadline (2026-08-02, lab 014)
+
+Two reports, same day the bend became visible: the curvature shade
+"looks a bit too flickery and unintentional" in some cases, and the
+settle back to flat "seems to hitch or jump a bit; it's not buttery
+smooth." Both were one line of driver: `rendered = smoothed ·
+aeroGate(speed)`. The multiply was #59's exactness mechanism — the hard
+gate on the OUTPUT guaranteed a flat swap frame no matter what the
+smoother held — but an instantaneous factor on the output is a wire
+from speed's frame-scale noise straight to the screen. Measured: a
+mid-drag pause crossed the gate band at −25.75 px in ONE frame (35 px of
+bend → 9 in 8 ms), every pause ran a full appear-vanish-appear cycle,
+and a settle compressed its whole relax into ~75 ms of 3–4 px steps
+ending in a snap-to-zero from 1.5 px. The amplitude retune (#59
+addendum) did not create the cliff — it made it 2.5× taller and finally
+visible. The shade was innocent: it scales with amplitude, so it
+strobed with it. Direction was innocent too (zero axis jumps > 15° in
+both traces — the 40 px/s freeze works). Convicted: the multiply.
+
+**The law, now pure and under test (`aeroFollowStep`).** The gate lives
+only inside the TARGET (`aeroAmplitude`); the rendered amplitude is the
+smoothed value itself, nothing instantaneous touching it. One time
+constant per phase of the paper: 60 ms attack, 120 ms release while
+still moving, and once the target is hard-zero a fork on `held` — 90 ms
+under a hand, 25 ms in free flight. Exactness is a snap-to-zero below
+half a pixel, sub-visible by construction.
+
+**The fork is the finding.** The first fix used one gated constant
+(70 ms) and the browser caught it swapping with 2.75 px of bend still
+aboard: gate-close to the DOM swap is only ~116 ms of sub-30 creep
+(measured on a short drag), and 70 ms cannot drain ~6 px in that
+window. The old cliff had been HIDING a real deadline, and deleting it
+meant honoring the deadline honestly. The analysis that resolves it: a
+swap can only fire at the end of a free flight home (`mode === 'home'`),
+so only free flight needs the brisk constant — a hand that is down has
+no deadline, and a hesitation's relax gets to be butter. Verified live:
+`…1.221 → 0.876 → 0.59 → 0 → 0 → [mesh unmounts]` — two exactly-zero
+frames before the swap where the one-τ law still carried 2.75 px.
+
+**After.** Hesitation-rich drag: worst one-frame drop 2.23 px (was
+25.75), teleports-to-zero 0 (was one per pause), the pause relaxing
+6.7 → 4.2 in shrinking sub-pixel steps. Fast settle: band descent in
+≤ 1.4 px steps (was 3–4 ending in the snap). Tests now hold the whole
+contract: bounded per-frame drop on the measured profiles, no
+visible-to-exactly-0 frame pair ever, free settle EXACTLY 0 within
+150 ms of gate-close, held pause drains to 0 lazily, attack unchanged.
+
+**Probe lesson.** A drag flight's ref is never nulled at settle — only
+crumple commits null it — so polling `flight.current === null` says
+nothing about a settle. The trace STOPPING (the mesh unmounts, the
+render-wrapper's traverse finds nothing) IS the swap instant, and the
+last row before silence is the swap frame's bend. Kin to #53 and the
+#59 addendum: the third entry in the lesson that theorems and
+perception are separate budgets — here the exactness MECHANISM was
+itself the perceptual bug, and the fix had to keep the theorem while
+deleting the mechanism.
